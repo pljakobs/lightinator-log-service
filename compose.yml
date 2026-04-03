@@ -1,0 +1,20 @@
+services:
+  lightinator-log-service:
+    image: lightinator-log-service:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      - LLS_HTTP_HOST=0.0.0.0
+      - LLS_HTTP_PORT=4821
+      - LLS_UDP_HOST=0.0.0.0
+      - LLS_UDP_PORT=5514
+      - LLS_DATA_DIR=/app/data/logs
+      - LLS_MAX_BYTES_PER_IP=20971520
+      - LLS_RETENTION_DAYS=7
+      - LLS_SERVICE_NAME=LightinatorLogService
+      - LLS_MDNS_HOST=lightinator-logservice.local
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

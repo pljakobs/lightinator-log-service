@@ -1,0 +1,173 @@
+const dgram = require("dgram");
+const express = require("express");
+const cors = require("cors");
+const os = require("os");
+
+const { config } = require("./config");
+const { parseSyslogLine } = require("./syslogParser");
+const { LogStorage } = require("./storage");
+const { advertiseMdns } = require("./mdns");
+
+async function main() {
+  const storage = new LogStorage({
+    dataDir: config.dataDir,
+    maxBytesPerIp: config.maxBytesPerIp,
+  });
+  await storage.init();
+
+  const app = express();
+  app.use(cors({ origin: config.corsOrigin }));
+  app.use(express.json({ limit: "1mb" }));
+
+  app.get("/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      service: config.serviceName,
+      uptimeSec: Math.floor(process.uptime()),
+    });
+  });
+
+  app.get("/api/v1/health", (_req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  app.get("/api/v1/service-info", (_req, res) => {
+    res.json({
+      serviceName: config.serviceName,
+      host: os.hostname(),
+      http: {
+        host: config.host,
+        port: config.httpPort,
+      },
+      udp: {
+        host: config.udpHost,
+        port: config.udpPort,
+      },
+      storage: {
+        dataDir: config.dataDir,
+        maxBytesPerIp: config.maxBytesPerIp,
+        retentionDays: config.retentionDays,
+      },
+      capabilities: {
+        mdns: true,
+        perIpLogs: true,
+        paging: true,
+      },
+      mdns: {
+        host: config.mdnsHost,
+        services: [
+          {
+            name: config.serviceName,
+            type: "_lightinator-log._tcp.local",
+            port: config.httpPort,
+          },
+          {
+            name: `${config.serviceName} Syslog`,
+            type: "_lightinator-syslog._udp.local",
+            port: config.udpPort,
+          },
+        ],
+      },
+    });
+  });
+
+  app.get("/api/v1/sources", (_req, res) => {
+    res.json({ items: storage.listSources() });
+  });
+
+  app.get("/api/v1/logs", async (req, res, next) => {
+    try {
+      const ip = String(req.query.ip || "").trim();
+      if (!ip) {
+        res.status(400).json({ error: "Missing required query parameter: ip" });
+        return;
+      }
+
+      const limit = req.query.limit;
+      const before = req.query.before;
+      const result = await storage.getLogs({ ip, limit, before });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.delete("/api/v1/logs", async (req, res, next) => {
+    try {
+      const ip = String(req.query.ip || "").trim();
+      if (ip) {
+        await storage.purgeIp(ip);
+        res.json({ ok: true, purged: "ip", ip });
+        return;
+      }
+
+      const all = String(req.query.all || "").toLowerCase() === "true";
+      if (!all) {
+        res.status(400).json({ error: "Provide ip=<address> or all=true" });
+        return;
+      }
+
+      await storage.purgeAll();
+      res.json({ ok: true, purged: "all" });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.use((err, _req, res, _next) => {
+    console.error("Unhandled error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  });
+
+  const server = app.listen(config.httpPort, config.host, () => {
+    console.log(
+      `HTTP API listening on http://${config.host}:${config.httpPort}`,
+    );
+  });
+
+  const udpServer = dgram.createSocket("udp4");
+  udpServer.on("error", (err) => {
+    console.error("UDP server error:", err);
+  });
+
+  udpServer.on("message", async (msg, rinfo) => {
+    try {
+      const raw = msg.toString("utf8");
+      const record = parseSyslogLine(raw, rinfo.address);
+      await storage.append(rinfo.address, record);
+    } catch (err) {
+      console.error("Failed processing UDP packet:", err);
+    }
+  });
+
+  udpServer.bind(config.udpPort, config.udpHost, () => {
+    console.log(`UDP syslog listening on ${config.udpHost}:${config.udpPort}`);
+  });
+
+  const mdns = advertiseMdns({
+    serviceName: config.serviceName,
+    httpPort: config.httpPort,
+    udpPort: config.udpPort,
+    mdnsHost: config.mdnsHost,
+  });
+
+  console.log(`mDNS host announced as ${mdns.info.host}`);
+  for (const svc of mdns.info.services) {
+    console.log(`mDNS service ${svc.type} name=\"${svc.name}\" port=${svc.port}`);
+  }
+
+  const shutdown = () => {
+    console.log("Shutting down...");
+    mdns.stop();
+    udpServer.close();
+    server.close(() => process.exit(0));
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+main().catch((err) => {
+  console.error("Fatal startup error:", err);
+  process.exit(1);
+});
