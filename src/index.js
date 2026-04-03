@@ -8,6 +8,22 @@ const { parseSyslogLine } = require("./syslogParser");
 const { LogStorage } = require("./storage");
 const { advertiseMdns } = require("./mdns");
 
+function listCollectorIpv4Addresses() {
+  const interfaces = os.networkInterfaces();
+  const ips = [];
+
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries || []) {
+      if (entry.family !== "IPv4" || entry.internal) {
+        continue;
+      }
+      ips.push(entry.address);
+    }
+  }
+
+  return [...new Set(ips)];
+}
+
 async function main() {
   const storage = new LogStorage({
     dataDir: config.dataDir,
@@ -31,7 +47,7 @@ async function main() {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/v1/service-info", (_req, res) => {
+  app.get("/api/v1/service-info", (req, res) => {
     res.json({
       serviceName: config.serviceName,
       host: os.hostname(),
@@ -47,6 +63,12 @@ async function main() {
         dataDir: config.dataDir,
         maxBytesPerIp: config.maxBytesPerIp,
         retentionDays: config.retentionDays,
+      },
+      network: {
+        ipv4: listCollectorIpv4Addresses(),
+      },
+      request: {
+        localAddress: req.socket.localAddress || null,
       },
       capabilities: {
         mdns: true,
