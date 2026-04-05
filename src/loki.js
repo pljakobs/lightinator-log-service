@@ -117,6 +117,7 @@ class LokiForwarder {
     for (const r of records) {
       const streamKey = {
         ...this._resolveLabels(r.sourceIp || "unknown"),
+        host: r.tag || r.sourceIp || "unknown",
         source_ip: r.sourceIp || "unknown",
         tag: r.tag || "unknown",
       };
