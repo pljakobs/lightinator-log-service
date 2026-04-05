@@ -54,6 +54,25 @@
     .tag-row .remove-btn:hover { color: #f48771; }
     button.add-btn { background: none; color: #4ec9b0; border: 1px dashed #4ec9b0; border-radius: 4px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
     button.add-btn:hover { background: #1e3a3a; }
+    .tab-bar { display: flex; gap: 0; border-bottom: 1px solid #3c3c3c; background: #252526; }
+    .tab { padding: 7px 16px; font-size: 12px; cursor: pointer; color: #888; border-bottom: 2px solid transparent; }
+    .tab.active { color: #ccc; border-bottom-color: #0e639c; }
+    .tab:hover:not(.active) { color: #bbb; background: #2d2d2d; }
+    #controllers-panel { flex: 1; overflow-y: auto; padding: 12px; display: none; }
+    #controllers-panel.visible { display: block; }
+    .ctrl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+    .ctrl-card { background: #252526; border: 1px solid #3c3c3c; border-radius: 5px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+    .ctrl-card.logging-off { opacity: 0.5; }
+    .ctrl-name { color: #9cdcfe; font-size: 13px; font-weight: 600; }
+    .ctrl-ip { color: #888; font-size: 11px; }
+    .ctrl-groups { font-size: 11px; color: #4ec9b0; }
+    .ctrl-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+    .toggle-btn { font-size: 11px; padding: 3px 8px; border-radius: 3px; border: none; cursor: pointer; }
+    .toggle-btn.on { background: #0e639c; color: #fff; }
+    .toggle-btn.off { background: #555; color: #ccc; }
+    .ctrl-status { font-size: 10px; }
+    .ctrl-status.ok { color: #4ec9b0; }
+    .ctrl-status.unreachable { color: #666; }
   </style>
 </head>
 <body>
@@ -69,7 +88,12 @@
     <h2>Sources</h2>
     <div id="sources-list"></div>
   </div>
-  <div id="log-panel">
+  <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+    <div class="tab-bar">
+      <div class="tab active" data-tab="logs">Logs</div>
+      <div class="tab" data-tab="controllers">Controllers</div>
+    </div>
+    <div id="log-panel" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
     <div id="log-toolbar">
       <span id="log-title" style="color:#9cdcfe">Select a source</span>
       <button id="load-older-btn" style="display:none">Load older</button>
@@ -80,6 +104,15 @@
     <div id="pager">
       <span id="pager-info"></span>
       <label id="auto-scroll-label"><input type="checkbox" id="auto-scroll" checked /> Stick to bottom</label>
+    </div>
+    </div>
+    <div id="controllers-panel">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span style="color:#ccc;font-size:13px;font-weight:600">Discovered Controllers</span>
+        <button id="refresh-ctrl-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">&#8635; Refresh</button>
+        <span id="ctrl-status" style="font-size:11px;color:#888"></span>
+      </div>
+      <div id="ctrl-grid" class="ctrl-grid"></div>
     </div>
   </div>
 </main>
@@ -239,6 +272,79 @@
   // Init
   loadSources();
   refreshTimer = setInterval(async () => { await loadSources(); if (currentIp) await fetchLogs(); }, 5000);
+
+  // ── Tab switching
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const name = tab.dataset.tab;
+      document.getElementById('log-panel').style.display = name === 'logs' ? 'flex' : 'none';
+      const cp = document.getElementById('controllers-panel');
+      cp.classList.toggle('visible', name === 'controllers');
+      if (name === 'controllers') loadControllers();
+    });
+  });
+
+  // ── Controllers dashboard
+  async function loadControllers() {
+    const st = document.getElementById('ctrl-status');
+    st.textContent = 'Loading…';
+    try {
+      const data = await fetchJson(`${BASE}/api/v1/controllers`);
+      renderControllerCards(data.items || []);
+      st.textContent = `${(data.items||[]).length} controller(s)`;
+    } catch (e) {
+      st.textContent = 'Error: ' + e.message;
+    }
+  }
+
+  function renderControllerCards(items) {
+    const grid = document.getElementById('ctrl-grid');
+    if (!items.length) {
+      grid.innerHTML = '<div style="color:#666">No controllers discovered yet. Make sure a controller is reachable and click Refresh.</div>';
+      return;
+    }
+    grid.innerHTML = items.map(c => {
+      const groups = (c.groups||[]).map(g => g.name).join(', ') || '—';
+      const reachable = c.reachable !== false;
+      const logOn = c.loggingEnabled !== false;
+      return `<div class="ctrl-card${logOn ? '' : ' logging-off'}" data-ip="${escHtml(c.ip)}">
+        <div class="ctrl-name">${escHtml(c.name || c.hostname || c.ip)}</div>
+        <div class="ctrl-ip">${escHtml(c.ip)} · ${escHtml(c.hostname||'')} · id:${escHtml(String(c.deviceId||''))}</div>
+        <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>
+        <div class="ctrl-actions">
+          <button class="toggle-btn ${logOn?'on':'off'}" onclick="toggleLogging('${escHtml(c.ip)}',${!logOn})">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
+          <span class="ctrl-status ${reachable?'ok':'unreachable'}">${reachable ? '● online' : '● last seen ' + (c.lastSeen ? new Date(c.lastSeen).toLocaleDateString() : 'unknown')}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  async function toggleLogging(ip, enabled) {
+    try {
+      await fetch(`${BASE}/api/v1/controllers/${encodeURIComponent(ip)}/logging`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      await loadControllers();
+    } catch (e) {
+      document.getElementById('ctrl-status').textContent = 'Error: ' + e.message;
+    }
+  }
+
+  document.getElementById('refresh-ctrl-btn').addEventListener('click', async () => {
+    const st = document.getElementById('ctrl-status');
+    st.textContent = 'Refreshing…';
+    try {
+      const data = await fetch(`${BASE}/api/v1/controllers/refresh`, { method: 'POST' }).then(r => r.json());
+      renderControllerCards(data.items || []);
+      st.textContent = `${(data.items||[]).length} controller(s) — refreshed`;
+    } catch (e) {
+      st.textContent = 'Error: ' + e.message;
+    }
+  });
 
   // ── Settings panel ──────────────────────────────────────────────
   const settingsOverlay = document.getElementById('settings-overlay');

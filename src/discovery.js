@@ -1,0 +1,214 @@
+/**
+ * discovery.js
+ *
+ * Discovers Lightinator controllers and their group memberships by querying
+ * the controller REST API:
+ *
+ *   GET /hosts  → { hosts: [{ hostname, ip_address, id, ttl }] }
+ *   GET /data   → { controllers: [{id, name, "ip-address"}],
+ *                   groups: [{id, name, controller_ids:[]}] }
+ *
+ * Cross-join strategy:
+ *   - /hosts gives us all known IPs + numeric device IDs
+ *   - /data.groups[].controller_ids[] contains the string IDs from /data.controllers[].id
+ *   - /data.controllers[]."ip-address" matches /hosts[].ip_address
+ *   So: ip → data.controller.id → which groups include that id → group labels
+ *
+ * loggingEnabled per controller is maintained here and checked by the UDP
+ * ingest path before appending / forwarding.
+ */
+
+const http = require("http");
+const https = require("https");
+
+const DEFAULT_PORT = 80;
+const REQUEST_TIMEOUT_MS = 5000;
+
+function fetchJson(host, port, path) {
+  return new Promise((resolve, reject) => {
+    const lib = http;
+    const req = lib.get(
+      {
+        hostname: host,
+        port,
+        path,
+        headers: { Accept: "application/json" },
+        timeout: REQUEST_TIMEOUT_MS,
+      },
+      (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          res.resume();
+          return reject(new Error(`HTTP ${res.statusCode} from ${host}${path}`));
+        }
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => (body += c));
+        res.on("end", () => {
+          try { resolve(JSON.parse(body)); }
+          catch (e) { reject(new Error(`JSON parse error from ${host}${path}: ${e.message}`)); }
+        });
+      },
+    );
+    req.on("timeout", () => { req.destroy(); reject(new Error(`Timeout: ${host}${path}`)); });
+    req.on("error", reject);
+  });
+}
+
+class ControllerDiscovery {
+  /**
+   * @param {object} opts
+   * @param {string[]} opts.seedHosts          hostnames/IPs to bootstrap from
+   * @param {number}   opts.controllerPort     HTTP port of controllers (default 80)
+   * @param {number}   opts.refreshIntervalMs  how often to re-query (default 5 min)
+   * @param {Function} opts.onUpdate           called with updated controller array
+   */
+  constructor({
+    seedHosts = ["lightinator.local"],
+    controllerPort = DEFAULT_PORT,
+    refreshIntervalMs = 300_000,
+    onUpdate = null,
+  } = {}) {
+    this.seedHosts = seedHosts;
+    this.controllerPort = controllerPort;
+    this.refreshIntervalMs = refreshIntervalMs;
+    this.onUpdate = onUpdate;
+
+    /** ip → { hostname, ip, deviceId, name, groups:[{id,name}], loggingEnabled, reachable, lastSeen } */
+    this.controllers = new Map();
+
+    /** IPs seen via syslog that we haven't resolved yet */
+    this.extraSeeds = new Set();
+
+    this._timer = null;
+  }
+
+  /** Called by UDP ingest when a syslog packet arrives from a new IP */
+  addSeenIp(ip) {
+    if (!this.controllers.has(ip) && !this.extraSeeds.has(ip)) {
+      this.extraSeeds.add(ip);
+      this.refresh().catch(() => {});
+    }
+  }
+
+  start() {
+    this.refresh().catch(() => {});
+    if (this.refreshIntervalMs > 0) {
+      this._timer = setInterval(() => this.refresh().catch(() => {}), this.refreshIntervalMs);
+      if (this._timer.unref) this._timer.unref();
+    }
+  }
+
+  stop() {
+    clearInterval(this._timer);
+    this._timer = null;
+  }
+
+  async refresh() {
+    const allSeeds = [...this.seedHosts, ...this.extraSeeds];
+
+    let hostsData = null;
+    let appData = null;
+    let sourceHost = null;
+
+    for (const host of allSeeds) {
+      try {
+        [hostsData, appData] = await Promise.all([
+          fetchJson(host, this.controllerPort, "/hosts"),
+          fetchJson(host, this.controllerPort, "/data"),
+        ]);
+        sourceHost = host;
+        break;
+      } catch {
+        // try next seed
+      }
+    }
+
+    if (!hostsData || !appData) {
+      console.debug("Discovery: no reachable seed found");
+      return;
+    }
+
+    // Build group membership: data.controller id → [{id,name}]
+    const groupsByControllerId = new Map();
+    for (const g of appData.groups || []) {
+      for (const cid of g.controller_ids || []) {
+        if (!groupsByControllerId.has(cid)) groupsByControllerId.set(cid, []);
+        groupsByControllerId.get(cid).push({ id: g.id, name: g.name });
+      }
+    }
+
+    // Build ip → data.controller.id map using the "ip-address" field
+    const ipToDataId = new Map();
+    const ipToDataName = new Map();
+    for (const c of appData.controllers || []) {
+      const ip = c["ip-address"];
+      if (ip) {
+        ipToDataId.set(ip, c.id);
+        ipToDataName.set(ip, c.name);
+      }
+    }
+
+    const updatedIps = new Set();
+    for (const h of hostsData.hosts || []) {
+      const ip = h.ip_address;
+      if (!ip) continue;
+
+      const dataId = ipToDataId.get(ip);
+      const groups = dataId ? (groupsByControllerId.get(dataId) || []) : [];
+      const name = ipToDataName.get(ip) || h.hostname;
+      const existing = this.controllers.get(ip) || {};
+
+      this.controllers.set(ip, {
+        hostname: h.hostname,
+        ip,
+        deviceId: String(h.id),
+        name,
+        groups,
+        loggingEnabled: existing.loggingEnabled !== undefined ? existing.loggingEnabled : true,
+        reachable: true,
+        lastSeen: new Date().toISOString(),
+      });
+      updatedIps.add(ip);
+      this.extraSeeds.delete(ip); // promoted to known
+    }
+
+    // Mark controllers no longer in /hosts as unreachable (keep them for history)
+    for (const [ip, entry] of this.controllers) {
+      if (!updatedIps.has(ip)) {
+        this.controllers.set(ip, { ...entry, reachable: false });
+      }
+    }
+
+    console.log(
+      `Discovery: ${updatedIps.size} controller(s) via ${sourceHost}: ` +
+      [...updatedIps].join(", "),
+    );
+
+    if (this.onUpdate) this.onUpdate(this.getAll());
+  }
+
+  getAll() {
+    return Array.from(this.controllers.values());
+  }
+
+  setLogging(ip, enabled) {
+    const c = this.controllers.get(ip);
+    if (!c) return false;
+    this.controllers.set(ip, { ...c, loggingEnabled: !!enabled });
+    return true;
+  }
+
+  /** Returns false only when we explicitly know this IP has logging disabled */
+  isLoggingEnabled(ip) {
+    const c = this.controllers.get(ip);
+    if (!c) return true; // unknown → allow, so we never silently drop logs
+    return c.loggingEnabled !== false;
+  }
+
+  /** Group names for this IP, used as Loki labels */
+  getGroupsForIp(ip) {
+    return (this.controllers.get(ip) || {}).groups || [];
+  }
+}
+
+module.exports = { ControllerDiscovery };

@@ -19,6 +19,10 @@ const config = {
   serviceName: process.env.LLS_SERVICE_NAME || "LightinatorLogService",
   mdnsHost: process.env.LLS_MDNS_HOST || "lightinator-logservice.local",
   lokiConfigFile: process.env.LLS_LOKI_CONFIG || path.join(process.cwd(), "data", "loki.json"),
+  // Discovery: comma-separated seed hostnames/IPs to bootstrap controller discovery
+  discoverySeedHosts: (process.env.LLS_DISCOVERY_SEEDS || "lightinator.local").split(",").map(s => s.trim()).filter(Boolean),
+  discoveryControllerPort: envInt("LLS_DISCOVERY_PORT", 80),
+  discoveryRefreshMs: envInt("LLS_DISCOVERY_REFRESH_MS", 300_000),
 };
 
 module.exports = { config };

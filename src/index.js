@@ -9,6 +9,7 @@ const { parseSyslogLine } = require("./syslogParser");
 const { LogStorage } = require("./storage");
 const { advertiseMdns } = require("./mdns");
 const { LokiForwarder } = require("./loki");
+const { ControllerDiscovery } = require("./discovery");
 
 function listCollectorIpv4Addresses() {
   const interfaces = os.networkInterfaces();
@@ -35,6 +36,28 @@ async function main() {
 
   const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
   await loki.loadConfig();
+
+  const discovery = new ControllerDiscovery({
+    seedHosts: config.discoverySeedHosts,
+    controllerPort: config.discoveryControllerPort,
+    refreshIntervalMs: config.discoveryRefreshMs,
+    onUpdate: (controllers) => {
+      // Push group memberships back into Loki controller config
+      // so streams are labelled with group names automatically.
+      const lokiControllers = {};
+      for (const c of controllers) {
+        const groupName = c.groups[0]?.name || "";
+        const existing = (loki.config.controllers || {})[c.ip] || {};
+        lokiControllers[c.ip] = {
+          group: existing.group || groupName,
+          labels: existing.labels || { controller_name: c.name },
+        };
+      }
+      // Merge, don't overwrite any user-set controller config
+      loki.config.controllers = { ...lokiControllers, ...(loki.config.controllers || {}) };
+    },
+  });
+  discovery.start();
 
   const app = express();
   app.use(cors({ origin: config.corsOrigin }));
@@ -148,13 +171,13 @@ async function main() {
 
   app.put("/api/v1/loki/config", async (req, res, next) => {
     try {
-      const { enabled, url, username, password, labels, batchSize, flushIntervalMs } = req.body;
+      const { enabled, url, username, password, labels, groups, controllers, batchSize, flushIntervalMs } = req.body;
       if (url) {
         try { new URL(url); } catch {
           return res.status(400).json({ error: "Invalid Loki URL" });
         }
       }
-      await loki.saveConfig({ enabled, url, username, password, labels, batchSize, flushIntervalMs });
+      await loki.saveConfig({ enabled, url, username, password, labels, groups, controllers, batchSize, flushIntervalMs });
       res.json({ ok: true });
     } catch (err) {
       next(err);
@@ -168,6 +191,31 @@ async function main() {
     } catch (err) {
       res.status(502).json({ error: err.message });
     }
+  });
+
+  // Discovery API
+  app.get("/api/v1/controllers", (_req, res) => {
+    res.json({ items: discovery.getAll() });
+  });
+
+  app.post("/api/v1/controllers/refresh", async (_req, res) => {
+    try {
+      await discovery.refresh();
+      res.json({ ok: true, items: discovery.getAll() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/v1/controllers/:ip/logging", (req, res) => {
+    const ip = req.params.ip;
+    const { enabled } = req.body;
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be boolean" });
+    }
+    const ok = discovery.setLogging(ip, enabled);
+    if (!ok) return res.status(404).json({ error: "Controller not found" });
+    res.json({ ok: true, ip, loggingEnabled: enabled });
   });
 
   app.use((err, _req, res, _next) => {
@@ -191,7 +239,10 @@ async function main() {
       const raw = msg.toString("utf8");
       const record = parseSyslogLine(raw, rinfo.address);
       await storage.append(rinfo.address, record);
-      loki.forward(record);
+      discovery.addSeenIp(rinfo.address);
+      if (discovery.isLoggingEnabled(rinfo.address)) {
+        loki.forward(record);
+      }
     } catch (err) {
       console.error("Failed processing UDP packet:", err);
     }
@@ -217,6 +268,7 @@ async function main() {
     console.log("Shutting down...");
     mdns.stop();
     loki.stop();
+    discovery.stop();
     udpServer.close();
     server.close(() => process.exit(0));
   };
