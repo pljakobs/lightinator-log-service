@@ -718,10 +718,11 @@
     try {
       const r = await fetch(`${BASE}/api/v1/loki/test`, { method: 'POST' });
       const data = await r.json().catch(() => ({}));
+      const target = data.target ? ` \u2192 ${data.target}` : '';
       if (r.ok) {
-        st.textContent = '✓ ' + (data.message || 'OK'); st.style.color = '#4ec9b0';
+        st.textContent = `\u2713 ${data.message || 'OK'}${target}`; st.style.color = '#4ec9b0';
       } else {
-        st.textContent = '✗ ' + (data.error || `HTTP ${r.status}`); st.style.color = '#f48771';
+        st.textContent = `\u2717 ${target ? target + ': ' : ''}${data.error || `HTTP ${r.status}`}`; st.style.color = '#f48771';
       }
     } catch (e) {
       st.textContent = '✗ ' + e.message; st.style.color = '#f48771';

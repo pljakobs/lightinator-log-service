@@ -32,6 +32,9 @@ class LokiForwarder {
     return { ...this._status };
   }
 
+  getConfig() {
+    return { url: this.config.url, enabled: this.config.enabled };
+  }
   async loadConfig() {
     try {
       const raw = await fs.readFile(this.configPath, "utf8");
@@ -158,10 +161,16 @@ class LokiForwarder {
           timeout: 10_000,
         },
         (res) => {
-          res.resume();
-          res.statusCode >= 400
-            ? reject(new Error(`Loki returned HTTP ${res.statusCode}`))
-            : resolve();
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () => {
+            const body = Buffer.concat(chunks).toString("utf8").trim();
+            if (res.statusCode >= 400) {
+              reject(new Error(`Loki returned HTTP ${res.statusCode}${body ? `: ${body}` : ""}`));
+            } else {
+              resolve();
+            }
+          });
         },
       );
 

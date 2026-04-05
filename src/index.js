@@ -191,11 +191,13 @@ async function main() {
   });
 
   app.post("/api/v1/loki/test", async (_req, res) => {
+    const cfg = loki.getConfig ? loki.getConfig() : {};
+    const target = cfg.url ? `POST ${cfg.url}/loki/api/v1/push` : "(no URL configured)";
     try {
       await loki.testConnection();
-      res.json({ ok: true, message: "Successfully pushed test entry to Loki" });
+      res.json({ ok: true, message: "Successfully pushed test entry to Loki", target });
     } catch (err) {
-      res.status(502).json({ error: err.message });
+      res.status(502).json({ error: err.message, target });
     }
   });
 
