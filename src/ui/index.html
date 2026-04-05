@@ -86,6 +86,7 @@
   <input id="filter-input" type="search" placeholder="Filter messages…" />
   <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
   <span id="status">Loading…</span>
+  <span id="loki-dot" title="Loki: checking…" style="font-size:16px;line-height:1;color:#555;cursor:default" aria-label="Loki status">&#9679;</span>
   <button id="settings-btn" style="background:#3c3c3c;margin-left:4px" title="Loki forwarding settings">&#9881; Loki</button>
 </header>
 <main>
@@ -318,24 +319,8 @@
     const prevScrollTop = logList.scrollTop;
 
     const parts = [];
-    // oldest-first for reboot detection (allRows is newest-first from API, reverse for scan)
-    // But display is also newest-first, so we iterate as stored and compare adjacent entries.
-    // Reboot: current row deviceTime < previous row deviceTime (previous = earlier in array = newer entry)
-    // allRows[0] is newest; rendered in order 0..N so we compare allRows[i].deviceTime > allRows[i-1].deviceTime
-    // meaning the device clock went backwards → reboot between allRows[i-1] and allRows[i].
-    // Insert marker BEFORE allRows[i] (which is the older entry after the reboot).
     for (let i = 0; i < filtered.length; i++) {
       const r = filtered[i];
-      const prev = filtered[i - 1];
-      if (
-        i > 0 &&
-        r.deviceTime != null && r.deviceTime > 0 &&
-        prev.deviceTime != null && prev.deviceTime > 0 &&
-        r.deviceTime > prev.deviceTime    // older entry has LOWER uptime → reboot
-      ) {
-        const rebootTime = prev.receivedAt ? new Date(prev.receivedAt).toLocaleTimeString('en', {hour12:false}) : '';
-        parts.push(`<div class="reboot-marker">&#x21BA; Device rebooted (last seen ${rebootTime}) &#x21BA;</div>`);
-      }
       const cls = severityClass(r.priority);
       const time = r.receivedAt ? new Date(r.receivedAt).toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3}) : '';
       parts.push(`<div class="log-row${cls?' '+cls:''}">
@@ -405,6 +390,30 @@
   // Init
   loadSources();
   refreshTimer = setInterval(async () => { await loadSources(); if (currentIp) await fetchLogs(); }, 5000);
+
+  // Loki status indicator
+  async function pollLokiStatus() {
+    const dot = document.getElementById('loki-dot');
+    try {
+      const s = await fetchJson(`${BASE}/api/v1/loki/status`);
+      if (s.state === 'ok') {
+        const ago = s.lastPushAt ? new Date(s.lastPushAt).toLocaleTimeString('en', {hour12:false}) : '';
+        dot.style.color = '#4ec9b0';
+        dot.title = `Loki: OK — last push ${ago} (${s.pushed} entries total)`;
+      } else if (s.state === 'error') {
+        dot.style.color = '#f48771';
+        dot.title = `Loki: error — ${s.lastError}`;
+      } else {
+        dot.style.color = '#555';
+        dot.title = 'Loki: forwarding disabled';
+      }
+    } catch {
+      dot.style.color = '#555';
+      dot.title = 'Loki: status unavailable';
+    }
+  }
+  pollLokiStatus();
+  setInterval(pollLokiStatus, 15000);
 
   // ── Tab switching
   document.querySelectorAll('.tab').forEach(tab => {

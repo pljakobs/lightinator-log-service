@@ -25,6 +25,11 @@ class LokiForwarder {
     this._buffer = [];
     this._timer = null;
     this._sending = false;
+    this._status = { state: 'disabled', lastPushAt: null, lastError: null, pushed: 0 };
+  }
+
+  getStatus() {
+    return { ...this._status };
   }
 
   async loadConfig() {
@@ -64,6 +69,7 @@ class LokiForwarder {
   _restartTimer() {
     clearInterval(this._timer);
     this._timer = null;
+    if (!this.config.enabled) this._status = { ...this._status, state: 'disabled' };
     if (!this.config.enabled || !(this.config.flushIntervalMs > 0)) return;
     this._timer = setInterval(() => {
       this._flush().catch(() => {});
@@ -85,8 +91,10 @@ class LokiForwarder {
     this._sending = true;
     try {
       await this._push(batch);
+      this._status = { state: 'ok', lastPushAt: new Date().toISOString(), lastError: null, pushed: (this._status.pushed || 0) + batch.length };
     } catch (err) {
       console.warn(`Loki: push failed (${batch.length} records dropped):`, err.message);
+      this._status = { ...this._status, state: 'error', lastError: err.message };
     } finally {
       this._sending = false;
     }

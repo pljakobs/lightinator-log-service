@@ -167,6 +167,10 @@ async function main() {
     }
   });
 
+  app.get("/api/v1/loki/status", (_req, res) => {
+    res.json(loki.getStatus());
+  });
+
   app.get("/api/v1/loki/config", (_req, res) => {
     res.json(loki.getConfig());
   });
