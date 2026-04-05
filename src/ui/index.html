@@ -66,6 +66,8 @@
     .ctrl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
     .ctrl-card { background: #252526; border: 1px solid #3c3c3c; border-radius: 5px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
     .ctrl-card.logging-off { opacity: 0.5; }
+    .ctrl-card.split-brain { border-color: #c8a000; }
+    .split-brain-badge { font-size: 10px; color: #c8a000; font-weight: 600; margin-left: 6px; }
     .ctrl-name { color: #9cdcfe; font-size: 13px; font-weight: 600; }
     .ctrl-ip { color: #888; font-size: 11px; }
     .ctrl-groups { font-size: 11px; color: #4ec9b0; }
@@ -440,8 +442,10 @@
       const groups = (c.groups||[]).map(g => g.name).join(', ') || '—';
       const reachable = c.reachable !== false;
       const logOn = c.loggingEnabled !== false;
-      return `<div class="ctrl-card${logOn ? '' : ' logging-off'}" data-ip="${escHtml(c.ip)}">
-        <div class="ctrl-name">${escHtml(c.name || c.hostname || c.ip)}</div>
+      const sb = !!c.splitBrain;
+      const cardClass = ['ctrl-card', logOn ? '' : 'logging-off', sb ? 'split-brain' : ''].filter(Boolean).join(' ');
+      return `<div class="${cardClass}" data-ip="${escHtml(c.ip)}">
+        <div class="ctrl-name">${escHtml(c.name || c.hostname || c.ip)}${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}</div>
         <div class="ctrl-ip">${escHtml(c.ip)} · ${escHtml(c.hostname||'')} · id:${escHtml(String(c.deviceId||''))}</div>
         <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>
         <div class="ctrl-actions">

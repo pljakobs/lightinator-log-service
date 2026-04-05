@@ -4,15 +4,19 @@
  * Discovers Lightinator controllers and their group memberships by querying
  * the controller REST API:
  *
- *   GET /hosts  → { hosts: [{ hostname, ip_address, id, ttl }] }
- *   GET /data   → { controllers: [{id, name, "ip-address"}],
- *                   groups: [{id, name, controller_ids:[]}] }
+ *   GET /hosts?all=true → { hosts: [{ hostname, ip_address, id, ttl }] }
+ *   GET /data           → { controllers: [{id, name, "ip-address"}],
+ *                           groups: [{id, name, controller_ids:[]}] }
  *
  * Cross-join strategy:
- *   - /hosts gives us all known IPs + numeric device IDs
+ *   - /hosts?all=true gives us all known IPs + numeric device IDs
  *   - /data.groups[].controller_ids[] contains the string IDs from /data.controllers[].id
  *   - /data.controllers[]."ip-address" matches /hosts[].ip_address
  *   So: ip → data.controller.id → which groups include that id → group labels
+ *
+ * Split-brain detection:
+ *   After seed fetch, /hosts?all=true is queried on every discovered IP in
+ *   parallel. Any IP missing from ≥1 peer's view is flagged splitBrain:true.
  *
  * loggingEnabled per controller is maintained here and checked by the UDP
  * ingest path before appending / forwarding.
@@ -113,7 +117,7 @@ class ControllerDiscovery {
     for (const host of allSeeds) {
       try {
         [hostsData, appData] = await Promise.all([
-          fetchJson(host, this.controllerPort, "/hosts"),
+          fetchJson(host, this.controllerPort, "/hosts?all=true"),
           fetchJson(host, this.controllerPort, "/data"),
         ]);
         sourceHost = host;
@@ -167,13 +171,14 @@ class ControllerDiscovery {
         groups,
         loggingEnabled: existing.loggingEnabled !== undefined ? existing.loggingEnabled : true,
         reachable: true,
+        splitBrain: false,
         lastSeen: new Date().toISOString(),
       });
       updatedIps.add(ip);
       this.extraSeeds.delete(ip); // promoted to known
     }
 
-    // Mark controllers no longer in /hosts as unreachable (keep them for history)
+    // Mark controllers no longer in /hosts?all=true as unreachable (keep for history)
     for (const [ip, entry] of this.controllers) {
       if (!updatedIps.has(ip)) {
         this.controllers.set(ip, { ...entry, reachable: false });
@@ -184,6 +189,39 @@ class ControllerDiscovery {
       `Discovery: ${updatedIps.size} controller(s) via ${sourceHost}: ` +
       [...updatedIps].join(", "),
     );
+
+    // ── Split-brain detection ─────────────────────────────────────────────────
+    // Query /hosts?all=true on every reachable controller in parallel.
+    // Any IP that is absent from ≥1 peer's view is a split-brain candidate.
+    const reachableIps = [...updatedIps];
+    if (reachableIps.length > 1) {
+      const peerViews = await Promise.all(
+        reachableIps.map(async (ip) => {
+          try {
+            const d = await fetchJson(ip, this.controllerPort, "/hosts?all=true");
+            return { ip, known: new Set((d.hosts || []).map(h => h.ip_address).filter(Boolean)) };
+          } catch {
+            return { ip, known: null }; // unreachable peer — skip
+          }
+        }),
+      );
+
+      const reachableViews = peerViews.filter(v => v.known !== null);
+      for (const [ip, entry] of this.controllers) {
+        if (!entry.reachable) continue;
+        // a controller is split-brain if any peer that responded doesn't list it
+        const missing = reachableViews.some(v => v.ip !== ip && !v.known.has(ip));
+        if (missing !== entry.splitBrain) {
+          this.controllers.set(ip, { ...entry, splitBrain: missing });
+          if (missing) console.warn(`Discovery: split-brain detected for ${ip}`);
+        }
+      }
+
+      const splitCount = [...this.controllers.values()].filter(c => c.splitBrain).length;
+      if (splitCount > 0) {
+        console.warn(`Discovery: ${splitCount} controller(s) have split-brain visibility`);
+      }
+    }
 
     if (this.onUpdate) this.onUpdate(this.getAll());
   }

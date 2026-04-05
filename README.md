@@ -10,11 +10,42 @@ cd lightinator-log-service
 ./scripts/run-container.sh
 ```
 
+Update to the latest image without losing logs:
+
+```bash
+./scripts/update-container.sh
+```
+
 Stop service:
 
 ```bash
 ./scripts/stop-container.sh
 ```
+
+## Podman Quadlet (systemd auto-start + auto-update)
+
+Quadlet is the recommended install method on systems running Podman ≥ 4.4.
+It creates a systemd service that starts on login and automatically updates
+whenever a new `:prod` image is published to GHCR.
+
+```bash
+mkdir -p ~/.config/containers/systemd
+cp quadlet/lightinator-log-service.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user enable --now lightinator-log-service
+# Enable daily auto-update pulls:
+systemctl --user enable --now podman-auto-update.timer
+```
+
+Check status and follow logs:
+
+```bash
+systemctl --user status lightinator-log-service
+journalctl --user -u lightinator-log-service -f
+```
+
+Data is stored in `~/lightinator-log-service/data/` (created automatically).
+Edit the `Volume=` line in the `.container` file to change the location.
 
 ## Build and Run via Makefile
 
