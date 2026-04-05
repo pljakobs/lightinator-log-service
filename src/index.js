@@ -28,6 +28,30 @@ function listCollectorIpv4Addresses() {
   return [...new Set(ips)];
 }
 
+/**
+ * Pick the best IP to advertise to controllers for syslog delivery.
+ * Preference order:
+ *   1. LLS_SYSLOG_ADVERTISE_HOST env var (explicit override)
+ *   2. Only one non-loopback IPv4 → use it
+ *   3. Multiple IPs → prefer one on the same /24 as the first seed
+ *   4. Fallback: first IP in the list
+ */
+function resolveAdvertiseHost(seedHosts) {
+  if (config.syslogAdvertiseHost) return config.syslogAdvertiseHost;
+  const ips = listCollectorIpv4Addresses();
+  if (!ips.length) return "";
+  if (ips.length === 1) return ips[0];
+
+  // Try to find an IP on the same /24 as the first seed that looks like an IP
+  const seed = seedHosts.find(s => /^\d+\.\d+\.\d+\.\d+$/.test(s));
+  if (seed) {
+    const seedPrefix = seed.split(".").slice(0, 3).join(".");
+    const match = ips.find(ip => ip.startsWith(seedPrefix + "."));
+    if (match) return match;
+  }
+  return ips[0];
+}
+
 async function main() {
   const storage = new LogStorage({
     dataDir: config.dataDir,
@@ -37,6 +61,15 @@ async function main() {
 
   const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
   await loki.loadConfig();
+
+  // Resolve the IP to advertise to controllers for syslog delivery
+  const advertiseHost = resolveAdvertiseHost(config.discoverySeedHosts);
+  if (advertiseHost) {
+    config.syslogAdvertiseHost = advertiseHost;
+    console.log(`Syslog advertise host: ${advertiseHost}`);
+  } else {
+    console.warn("Could not determine syslog advertise host — logging toggle will filter locally only");
+  }
 
   const discovery = new ControllerDiscovery({
     seedHosts: config.discoverySeedHosts,
