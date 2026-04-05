@@ -716,7 +716,16 @@
     const st = document.getElementById('loki-status');
     st.textContent = 'Testing…'; st.style.color = '#888';
     try {
-      const r = await fetch(`${BASE}/api/v1/loki/test`, { method: 'POST' });
+      const testBody = {
+        url: document.getElementById('loki-url').value.trim(),
+        username: document.getElementById('loki-user').value,
+        password: document.getElementById('loki-pass').value,
+      };
+      const r = await fetch(`${BASE}/api/v1/loki/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(testBody),
+      });
       const data = await r.json().catch(() => ({}));
       const target = data.target ? ` \u2192 ${data.target}` : '';
       if (r.ok) {

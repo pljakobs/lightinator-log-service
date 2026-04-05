@@ -191,11 +191,16 @@ async function main() {
     }
   });
 
-  app.post("/api/v1/loki/test", async (_req, res) => {
-    const cfg = loki.getConfig ? loki.getConfig() : {};
-    const target = cfg.url ? `POST ${cfg.url}/loki/api/v1/push` : "(no URL configured)";
+  app.post("/api/v1/loki/test", async (req, res) => {
+    // Accept optional override config from the request body (current form values)
+    const override = {};
+    if (req.body.url) override.url = req.body.url;
+    if (req.body.username !== undefined) override.username = req.body.username;
+    if (req.body.password !== undefined) override.password = req.body.password;
+    const effectiveUrl = override.url || (loki.getConfig ? loki.getConfig().url : "");
+    const target = effectiveUrl ? `POST ${effectiveUrl}/loki/api/v1/push` : "(no URL configured)";
     try {
-      await loki.testConnection();
+      await loki.testConnection(Object.keys(override).length ? override : null);
       res.json({ ok: true, message: "Successfully pushed test entry to Loki", target });
     } catch (err) {
       res.status(502).json({ error: err.message, target });

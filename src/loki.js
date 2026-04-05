@@ -184,8 +184,11 @@ class LokiForwarder {
     });
   }
 
-  async testConnection() {
-    await this._push([
+  async testConnection(overrideConfig = null) {
+    const savedConfig = this.config;
+    if (overrideConfig) this.config = { ...savedConfig, ...overrideConfig };
+    try {
+      await this._push([
       {
         id: "lls-test",
         receivedAt: new Date().toISOString(),
@@ -198,6 +201,9 @@ class LokiForwarder {
         raw: "",
       },
     ]);
+    } finally {
+      if (overrideConfig) this.config = savedConfig;
+    }
   }
 
   stop() {
