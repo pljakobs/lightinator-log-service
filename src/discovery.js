@@ -24,6 +24,8 @@
 
 const http = require("http");
 const https = require("https");
+const fs = require("fs/promises");
+const path = require("path");
 
 const DEFAULT_PORT = 80;
 const REQUEST_TIMEOUT_MS = 5000;
@@ -70,11 +72,13 @@ class ControllerDiscovery {
     seedHosts = ["lightinator.local"],
     controllerPort = DEFAULT_PORT,
     refreshIntervalMs = 300_000,
+    statePath = null,
     onUpdate = null,
   } = {}) {
     this.seedHosts = seedHosts;
     this.controllerPort = controllerPort;
     this.refreshIntervalMs = refreshIntervalMs;
+    this.statePath = statePath;
     this.onUpdate = onUpdate;
 
     /** ip → { hostname, ip, deviceId, name, groups:[{id,name}], loggingEnabled, reachable, lastSeen } */
@@ -95,7 +99,9 @@ class ControllerDiscovery {
   }
 
   start() {
-    this.refresh().catch(() => {});
+    this._loadState().then(() => {
+      this.refresh().catch(() => {});
+    });
     if (this.refreshIntervalMs > 0) {
       this._timer = setInterval(() => this.refresh().catch(() => {}), this.refreshIntervalMs);
       if (this._timer.unref) this._timer.unref();
@@ -223,11 +229,59 @@ class ControllerDiscovery {
       }
     }
 
+    // ── Fetch actual rsyslog.enabled from each reachable controller's /config ──
+    // This reflects the real firmware state rather than an in-memory shadow.
+    await Promise.all(
+      reachableIps.map(async (ip) => {
+        try {
+          const cfg = await fetchJson(ip, this.controllerPort, "/config");
+          const enabled = cfg?.network?.rsyslog?.enabled ?? null;
+          if (enabled !== null) {
+            const entry = this.controllers.get(ip);
+            if (entry) this.controllers.set(ip, { ...entry, loggingEnabled: enabled });
+          }
+        } catch {
+          // best-effort — keep existing value if unreachable
+        }
+      }),
+    );
+
+    await this._saveState();
+
     if (this.onUpdate) this.onUpdate(this.getAll());
   }
 
   getAll() {
     return Array.from(this.controllers.values());
+  }
+
+  async _loadState() {
+    if (!this.statePath) return;
+    try {
+      const raw = await fs.readFile(this.statePath, "utf8");
+      const arr = JSON.parse(raw);
+      for (const entry of arr) {
+        // Mark all as offline until next refresh confirms them
+        this.controllers.set(entry.ip, { ...entry, reachable: false });
+      }
+      console.log(`Discovery: loaded ${arr.length} persisted controller(s)`);
+    } catch {
+      // no state file yet — first run
+    }
+  }
+
+  async _saveState() {
+    if (!this.statePath) return;
+    try {
+      await fs.mkdir(path.dirname(this.statePath), { recursive: true });
+      await fs.writeFile(
+        this.statePath,
+        JSON.stringify(Array.from(this.controllers.values()), null, 2),
+        "utf8",
+      );
+    } catch (e) {
+      console.warn(`Discovery: failed to save state: ${e.message}`);
+    }
   }
 
   setLogging(ip, enabled) {

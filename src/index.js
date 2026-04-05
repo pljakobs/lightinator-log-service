@@ -42,6 +42,7 @@ async function main() {
     seedHosts: config.discoverySeedHosts,
     controllerPort: config.discoveryControllerPort,
     refreshIntervalMs: config.discoveryRefreshMs,
+    statePath: config.controllerStatePath,
     onUpdate: (controllers) => {
       // Push group memberships back into Loki controller config
       // so streams are labelled with group names automatically.
