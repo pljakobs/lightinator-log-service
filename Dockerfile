@@ -10,8 +10,13 @@ RUN bash -c " \
     source /opt/Sming/Tools/export.sh > /dev/null 2>&1; \
     mkdir -p /extract/tools; \
     for tool in xtensa-lx106-elf-addr2line xtensa-esp32-elf-addr2line riscv32-esp-elf-addr2line; do \
-        bin=\$(which \$tool 2>/dev/null); \
-        if [ -n \"\$bin\" ]; then cp \"\$bin\" /extract/; fi; \
+        bin=\$(which \$tool 2>/dev/null || find /opt /root /home -name \"\$tool\" -type f 2>/dev/null | head -1); \
+        if [ -n \"\$bin\" ]; then \
+            cp \"\$bin\" /extract/; \
+        else \
+            printf '#!/bin/sh\necho \"addr2line tool %s not available\" >&2; exit 1\n' \"\$tool\" > /extract/\$tool; \
+            chmod +x /extract/\$tool; \
+        fi; \
     done; \
     cp /opt/Sming/Sming/Arch/Esp8266/Tools/decode-stacktrace.py /extract/tools/decode-esp8266.py; \
     cp /opt/Sming/Sming/Arch/Esp32/Tools/decode-stacktrace.py   /extract/tools/decode-esp32.py"
