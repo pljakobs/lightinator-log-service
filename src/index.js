@@ -10,6 +10,7 @@ const { LogStorage } = require("./storage");
 const { advertiseMdns } = require("./mdns");
 const { LokiForwarder } = require("./loki");
 const { ControllerDiscovery } = require("./discovery");
+const { version } = require("../package.json");
 
 function listCollectorIpv4Addresses() {
   const interfaces = os.networkInterfaces();
@@ -68,12 +69,13 @@ async function main() {
     res.json({
       status: "ok",
       service: config.serviceName,
+      version,
       uptimeSec: Math.floor(process.uptime()),
     });
   });
 
   app.get("/api/v1/health", (_req, res) => {
-    res.json({ status: "ok" });
+    res.json({ status: "ok", version });
   });
 
   app.get("/api/v1/service-info", (req, res) => {
