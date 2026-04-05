@@ -72,6 +72,8 @@ Environment=LLS_DISCOVERY_SEEDS=lightinator.local
 # Environment=LLS_LOKI_CONFIG=/app/data/loki.json
 
 # Pull and restart automatically when the :prod image digest changes in GHCR.
+# A new :prod image is published only when a PR is merged into the `prod`
+# branch — use PRs from develop→prod as your production gate.
 AutoUpdate=registry
 
 [Service]
