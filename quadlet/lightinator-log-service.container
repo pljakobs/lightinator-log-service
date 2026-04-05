@@ -7,23 +7,27 @@
 # ── System-wide install (requires root) ────────────────────────────────────
 #   sudo mkdir -p /var/lib/lightinator-log-service/data
 #   sudo cp lightinator-log-service.container /etc/containers/systemd/
+#
+#   # Copy and edit the runtime config (all LLS_* settings live here):
+#   sudo cp config/service.env.example /var/lib/lightinator-log-service/data/service.env
+#   sudo nano /var/lib/lightinator-log-service/data/service.env
+#
 #   sudo systemctl daemon-reload
-#   sudo systemctl start lightinator-log-service
-#   sudo systemctl enable lightinator-log-service
+#   sudo systemctl enable --now lightinator-log-service
 #   sudo systemctl enable --now podman-auto-update.timer
 #
 # ── Per-user install (alternative) ──────────────────────────────────────────
 #   mkdir -p ~/.config/containers/systemd
 #   cp lightinator-log-service.container ~/.config/containers/systemd/
-#   # Update Volume= below to use %h instead of /var/lib
-#   systemctl --user daemon-reload
-#   systemctl --user start lightinator-log-service
-#   systemctl --user enable lightinator-log-service   # start on login
+#   # Update Volume= and EnvironmentFile= below to use %h instead of /var/lib
 #
-# Enable automatic updates (once, system-wide):
-#   sudo systemctl enable --now podman-auto-update.timer
-#   # The timer runs daily; check with:
-#   systemctl list-timers podman-auto-update
+#   mkdir -p ~/lightinator-log-service/data
+#   cp config/service.env.example ~/lightinator-log-service/data/service.env
+#   nano ~/lightinator-log-service/data/service.env
+#
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now lightinator-log-service
+#   systemctl --user enable --now podman-auto-update.timer
 #
 # ── Auto-update via podman-auto-update ──────────────────────────────────────
 #   The AutoUpdate=registry line below instructs podman-auto-update to pull
@@ -36,8 +40,8 @@
 #   journalctl -u lightinator-log-service -f
 #
 # ── Data directory ───────────────────────────────────────────────────────────
-#   Logs and configuration are stored in /var/lib/lightinator-log-service/data.
-#   Create it before first start: mkdir -p /var/lib/lightinator-log-service/data
+#   Logs, config and the runtime service.env live in the data directory.
+#   Create before first start: mkdir -p /var/lib/lightinator-log-service/data
 
 [Unit]
 Description=Lightinator Log Service
@@ -52,35 +56,17 @@ ContainerName=lightinator-log-service
 # Host networking is required for mDNS advertisement and UDP syslog reception.
 Network=host
 
-# Persistent data: logs + loki.json config.
-# For per-user install, replace with: %h/lightinator-log-service/data:/app/data:Z
+# Persistent data: logs, loki.json, controllers.json, service.env
+# For per-user install, replace /var/lib/... with %h/lightinator-log-service/data
 Volume=/var/lib/lightinator-log-service/data:/app/data:Z
 
-# Core settings — override as needed.
-Environment=LLS_HTTP_HOST=0.0.0.0
-Environment=LLS_HTTP_PORT=4821
-Environment=LLS_UDP_HOST=0.0.0.0
-Environment=LLS_UDP_PORT=5514
-Environment=LLS_DATA_DIR=/app/data/logs
-Environment=LLS_MAX_BYTES_PER_IP=20971520
-Environment=LLS_RETENTION_DAYS=7
-Environment=LLS_SERVICE_NAME=LightinatorLogService
-Environment=LLS_MDNS_HOST=lightinator-logservice.local
-
-# Discovery — set to a known controller IP or hostname if mDNS is unreliable.
-Environment=LLS_DISCOVERY_SEEDS=lightinator.local
-
-# The IP/hostname of THIS host as reachable by the controllers.
-# Required for the logging toggle to actually push rsyslog config to firmware.
-# Without this, the toggle only filters logs locally on the server.
-# Example: Environment=LLS_SYSLOG_ADVERTISE_HOST=192.168.29.10
-#Environment=LLS_SYSLOG_ADVERTISE_HOST=
-
-# Uncomment to point Loki config at a custom path inside the volume:
-# Environment=LLS_LOKI_CONFIG=/app/data/loki.json
+# Runtime configuration file — edit this instead of touching the quadlet.
+# Copy config/service.env.example to this path and uncomment/set values.
+# For per-user install: %h/lightinator-log-service/data/service.env
+EnvironmentFile=-/var/lib/lightinator-log-service/data/service.env
 
 # Pull and restart automatically when the :prod image digest changes in GHCR.
-# A new :prod image is published only when a PR is merged into the `prod`
+# A new :prod image is published only when changes are merged into the `prod`
 # branch — use PRs from develop→prod as your production gate.
 AutoUpdate=registry
 
