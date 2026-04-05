@@ -11,6 +11,7 @@ const { advertiseMdns } = require("./mdns");
 const { LokiForwarder } = require("./loki");
 const { ControllerDiscovery } = require("./discovery");
 const { version } = require("../package.json");
+const { SETTINGS_SCHEMA, readServiceEnv, writeServiceEnv } = require("./serviceConfig");
 
 function listCollectorIpv4Addresses() {
   const interfaces = os.networkInterfaces();
@@ -50,6 +51,20 @@ function resolveAdvertiseHost(seedHosts) {
     if (match) return match;
   }
   return ips[0];
+}
+
+/** Current effective runtime values for display in the UI */
+function getLiveValues() {
+  return {
+    LLS_DISCOVERY_SEEDS: config.discoverySeedHosts.join(","),
+    LLS_SYSLOG_ADVERTISE_HOST: config.syslogAdvertiseHost || "",
+    LLS_UDP_PORT: String(config.udpPort),
+    LLS_HTTP_PORT: String(config.httpPort),
+    LLS_RETENTION_DAYS: String(config.retentionDays),
+    LLS_MAX_BYTES_PER_IP: String(config.maxBytesPerIp),
+    LLS_DISCOVERY_REFRESH_MS: String(config.discoveryRefreshMs),
+    LLS_MDNS_HOST: config.mdnsHost,
+  };
 }
 
 async function main() {
@@ -203,6 +218,32 @@ async function main() {
 
   app.get("/api/v1/loki/status", (_req, res) => {
     res.json(loki.getStatus());
+  });
+
+  // ── Service config (service.env) ─────────────────────────────────────────
+  app.get("/api/v1/service-config", async (_req, res) => {
+    try {
+      const values = await readServiceEnv(config.serviceEnvPath);
+      res.json({ schema: SETTINGS_SCHEMA, values, liveValues: getLiveValues() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/v1/service-config", async (req, res) => {
+    try {
+      const values = req.body.values || {};
+      await writeServiceEnv(config.serviceEnvPath, values);
+      res.json({ ok: true, restartRequired: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/v1/service-config/restart", (_req, res) => {
+    res.json({ ok: true, message: "Restarting…" });
+    // Allow response to flush before exiting; systemd Restart=always brings it back
+    setTimeout(() => process.exit(0), 300);
   });
 
   app.get("/api/v1/loki/config", (_req, res) => {

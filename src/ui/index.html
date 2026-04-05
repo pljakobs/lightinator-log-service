@@ -45,6 +45,9 @@
     #auto-scroll-label { margin-left: auto; }
     #settings-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
     #settings-overlay.open { display: flex; }
+    #svc-settings-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+    #svc-settings-overlay.open { display: flex; }
+    .field-hint { font-size:11px;color:#666;margin-top:3px; }
     #settings-panel { background: #252526; border: 1px solid #3c3c3c; border-radius: 6px; width: 560px; max-width: 95vw; max-height: 90vh; padding: 20px; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
     #settings-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
     .field-row { display: flex; flex-direction: column; gap: 4px; }
@@ -88,6 +91,7 @@
   <span id="status">Loading…</span>
   <span id="loki-dot" title="Loki: checking…" style="font-size:16px;line-height:1;color:#555;cursor:default" aria-label="Loki status">&#9679;</span>
   <button id="settings-btn" style="background:#3c3c3c;margin-left:4px" title="Loki forwarding settings">&#9881; Loki</button>
+  <button id="svc-settings-btn" style="background:#3c3c3c;margin-left:4px" title="Service settings">&#9881; Service</button>
 </header>
 <main>
   <div id="sources-panel">
@@ -128,7 +132,7 @@
 <div id="settings-overlay">
   <div id="settings-panel">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0">
-      <h2 style="color:#ccc;font-size:14px;font-weight:600">&#9881; Loki Forwarding</h2>
+      <h2 id="settings-title" style="color:#ccc;font-size:14px;font-weight:600">&#9881; Loki Forwarding</h2>
       <button id="settings-close" style="background:none;color:#888;border:none;font-size:18px;cursor:pointer;line-height:1">&#x2715;</button>
     </div>
     <div id="settings-body">
@@ -185,6 +189,25 @@
       <button id="loki-save">Save</button>
       <button id="loki-test" style="background:#3c3c3c">Test connection</button>
       <span id="loki-status" style="font-size:12px;color:#888"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Service Settings overlay ───────────────────────────────────── -->
+<div id="svc-settings-overlay">
+  <div id="settings-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0">
+      <h2 style="color:#ccc;font-size:14px;font-weight:600">&#9881; Service Settings</h2>
+      <button id="svc-settings-close" style="background:none;color:#888;border:none;font-size:18px;cursor:pointer;line-height:1">&#x2715;</button>
+    </div>
+    <div id="svc-settings-body" style="overflow-y:auto;flex:1">
+      <p style="color:#888;font-size:12px;margin:0 0 12px">Changes are written to <code style="color:#9cdcfe">data/service.env</code> and require a service restart to take effect.</p>
+      <div id="svc-fields"></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-shrink:0;border-top:1px solid #3c3c3c;padding-top:12px">
+      <button id="svc-save">Save</button>
+      <button id="svc-restart" style="background:#5a1d1d">Save &amp; Restart</button>
+      <span id="svc-status" style="font-size:12px;color:#888"></span>
     </div>
   </div>
 </div>
@@ -737,6 +760,89 @@
       st.textContent = '✗ ' + e.message; st.style.color = '#f48771';
     }
   });
+
+  // ── Service Settings panel ───────────────────────────────────────────────
+  const svcOverlay = document.getElementById('svc-settings-overlay');
+  let _svcSchema = [];
+
+  async function openSvcSettings() {
+    const st = document.getElementById('svc-status');
+    st.textContent = 'Loading…';
+    svcOverlay.classList.add('open');
+    try {
+      const data = await fetchJson(`${BASE}/api/v1/service-config`);
+      _svcSchema = data.schema || [];
+      renderSvcFields(data.schema, data.values, data.liveValues);
+      st.textContent = '';
+    } catch (e) {
+      st.textContent = 'Error: ' + e.message;
+    }
+  }
+
+  function renderSvcFields(schema, savedValues, liveValues) {
+    const container = document.getElementById('svc-fields');
+    const detectedHost = window.location.hostname;
+    container.innerHTML = schema.map(s => {
+      const saved = savedValues[s.key] ?? '';
+      const live = liveValues[s.key] ?? '';
+      let hint = `<div class="field-hint">Currently active: <code style="color:#9cdcfe">${escHtml(live || '(default)')}</code></div>`;
+      if (s.autoDetect) {
+        hint += `<div class="field-hint">Detected from your browser URL: <a href="#" class="detect-link" data-key="${escHtml(s.key)}" data-val="${escHtml(detectedHost)}" style="color:#4ec9b0">${escHtml(detectedHost)}</a></div>`;
+      }
+      return `<div class="field-row" style="margin-bottom:8px">
+        <label>${escHtml(s.label)}</label>
+        <input id="svc-field-${escHtml(s.key)}" type="${s.type === 'number' ? 'number' : 'text'}" value="${escHtml(saved)}" placeholder="${escHtml(s.placeholder || '')}" style="font-family:monospace" />
+        ${hint}
+        <div class="field-hint" style="color:#555">${escHtml(s.description)}</div>
+      </div>`;
+    }).join('');
+
+    container.querySelectorAll('.detect-link').forEach(a => {
+      a.addEventListener('click', e => {
+        e.preventDefault();
+        const input = document.getElementById(`svc-field-${a.dataset.key}`);
+        if (input) input.value = a.dataset.val;
+      });
+    });
+  }
+
+  function collectSvcValues() {
+    const values = {};
+    for (const s of _svcSchema) {
+      const el = document.getElementById(`svc-field-${s.key}`);
+      if (el) values[s.key] = el.value.trim();
+    }
+    return values;
+  }
+
+  async function saveSvcSettings(andRestart) {
+    const st = document.getElementById('svc-status');
+    st.textContent = 'Saving…'; st.style.color = '#888';
+    try {
+      const r = await fetch(`${BASE}/api/v1/service-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values: collectSvcValues() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      if (andRestart) {
+        st.textContent = 'Saved. Restarting…'; st.style.color = '#4ec9b0';
+        await fetch(`${BASE}/api/v1/service-config/restart`, { method: 'POST' });
+        setTimeout(() => { st.textContent = 'Restarted.'; }, 2000);
+      } else {
+        st.textContent = '✓ Saved — restart service to apply changes'; st.style.color = '#4ec9b0';
+      }
+    } catch (e) {
+      st.textContent = '✗ ' + e.message; st.style.color = '#f48771';
+    }
+  }
+
+  document.getElementById('svc-settings-btn').addEventListener('click', openSvcSettings);
+  document.getElementById('svc-settings-close').addEventListener('click', () => svcOverlay.classList.remove('open'));
+  svcOverlay.addEventListener('click', e => { if (e.target === svcOverlay) svcOverlay.classList.remove('open'); });
+  document.getElementById('svc-save').addEventListener('click', () => saveSvcSettings(false));
+  document.getElementById('svc-restart').addEventListener('click', () => saveSvcSettings(true));
 </script>
 </body>
 </html>
