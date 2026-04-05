@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lightinator Log Viewer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: ui-monospace, monospace; font-size: 13px; background: #1a1a1a; color: #d4d4d4; display: flex; flex-direction: column; height: 100vh; }
+    header { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 10px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    header h1 { font-size: 15px; color: #ccc; font-weight: 600; flex-shrink: 0; }
+    #source-select { background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-family: inherit; font-size: 13px; }
+    #filter-input { background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-family: inherit; font-size: 13px; width: 220px; }
+    #filter-input::placeholder { color: #888; }
+    label { color: #aaa; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+    button { background: #0e639c; color: #fff; border: none; border-radius: 4px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+    button:hover { background: #1177bb; }
+    button.danger { background: #8b1c1c; }
+    button.danger:hover { background: #a02424; }
+    #status { margin-left: auto; font-size: 11px; color: #888; }
+    main { display: flex; flex: 1; overflow: hidden; }
+    #sources-panel { width: 200px; flex-shrink: 0; background: #252526; border-right: 1px solid #3c3c3c; overflow-y: auto; display: flex; flex-direction: column; }
+    #sources-panel h2 { font-size: 11px; text-transform: uppercase; color: #888; padding: 10px 12px 6px; letter-spacing: 0.08em; }
+    .source-item { padding: 6px 12px; cursor: pointer; border-left: 3px solid transparent; display: flex; flex-direction: column; gap: 2px; }
+    .source-item:hover { background: #2d2d2d; }
+    .source-item.active { border-left-color: #0e639c; background: #1e3a5f; }
+    .source-ip { color: #9cdcfe; font-size: 12px; }
+    .source-meta { font-size: 10px; color: #666; }
+    #log-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    #log-toolbar { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; }
+    #log-list { flex: 1; overflow-y: auto; padding: 0; }
+    .log-row { display: grid; grid-template-columns: 180px 80px 120px 1fr; gap: 8px; padding: 3px 12px; border-bottom: 1px solid #2a2a2a; align-items: baseline; }
+    .log-row:hover { background: #2d2d2d; }
+    .log-row.err { color: #f48771; }
+    .log-row.warn { color: #cca700; }
+    .col-time { color: #888; font-size: 11px; white-space: nowrap; }
+    .col-tag { color: #4ec9b0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .col-app { color: #dcdcaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .col-msg { white-space: pre-wrap; word-break: break-word; }
+    #log-list .empty { padding: 24px; color: #666; text-align: center; }
+    #pager { background: #252526; border-top: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #888; }
+    #auto-scroll-label { margin-left: auto; }
+    #settings-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+    #settings-overlay.open { display: flex; }
+    #settings-panel { background: #252526; border: 1px solid #3c3c3c; border-radius: 6px; width: 480px; max-width: 95vw; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+    .field-row { display: flex; flex-direction: column; gap: 4px; }
+    .field-row label { font-size: 11px; color: #888; }
+    .field-row input { background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; padding: 5px 8px; font-family: inherit; font-size: 13px; width: 100%; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>&#9889; Lightinator Logs</h1>
+  <input id="filter-input" type="search" placeholder="Filter messages…" />
+  <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
+  <span id="status">Loading…</span>
+  <button id="settings-btn" style="background:#3c3c3c;margin-left:4px" title="Loki forwarding settings">&#9881; Loki</button>
+</header>
+<main>
+  <div id="sources-panel">
+    <h2>Sources</h2>
+    <div id="sources-list"></div>
+  </div>
+  <div id="log-panel">
+    <div id="log-toolbar">
+      <span id="log-title" style="color:#9cdcfe">Select a source</span>
+      <button id="load-older-btn" style="display:none">Load older</button>
+      <span id="log-count" style="font-size:11px;color:#888"></span>
+      <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
+    </div>
+    <div id="log-list"><div class="empty">Select a source on the left</div></div>
+    <div id="pager">
+      <span id="pager-info"></span>
+      <label id="auto-scroll-label"><input type="checkbox" id="auto-scroll" checked /> Stick to bottom</label>
+    </div>
+  </div>
+</main>
+
+<script>
+  const BASE = '';
+  let currentIp = null;
+  let nextBefore = null;
+  let allRows = [];
+  let refreshTimer = null;
+
+  const sourcesList = document.getElementById('sources-list');
+  const logList = document.getElementById('log-list');
+  const logTitle = document.getElementById('log-title');
+  const logCount = document.getElementById('log-count');
+  const pagerInfo = document.getElementById('pager-info');
+  const loadOlderBtn = document.getElementById('load-older-btn');
+  const purgeBtn = document.getElementById('purge-btn');
+  const filterInput = document.getElementById('filter-input');
+  const autoRefresh = document.getElementById('auto-refresh');
+  const autoScroll = document.getElementById('auto-scroll');
+  const status = document.getElementById('status');
+
+  async function fetchJson(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  async function loadSources() {
+    try {
+      const data = await fetchJson(`${BASE}/api/v1/sources`);
+      renderSources(data.items || []);
+      status.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    } catch (e) {
+      status.textContent = 'Error loading sources';
+    }
+  }
+
+  function renderSources(items) {
+    sourcesList.innerHTML = '';
+    if (!items.length) {
+      sourcesList.innerHTML = '<div style="padding:12px;color:#666;font-size:11px">No sources yet</div>';
+      return;
+    }
+    for (const src of items) {
+      const el = document.createElement('div');
+      el.className = 'source-item' + (src.ip === currentIp ? ' active' : '');
+      el.innerHTML = `<span class="source-ip">${src.ip}</span>
+        <span class="source-meta">${src.bytes ? Math.ceil(src.bytes/1024)+'KB' : ''} ${src.lastSeen ? new Date(src.lastSeen).toLocaleDateString() : ''}</span>`;
+      el.addEventListener('click', () => selectSource(src.ip));
+      sourcesList.appendChild(el);
+    }
+  }
+
+  async function selectSource(ip) {
+    currentIp = ip;
+    allRows = [];
+    nextBefore = null;
+    logTitle.textContent = ip;
+    loadOlderBtn.style.display = 'none';
+    purgeBtn.style.display = '';
+    document.querySelectorAll('.source-item').forEach(el => {
+      el.classList.toggle('active', el.querySelector('.source-ip').textContent === ip);
+    });
+    await fetchLogs();
+  }
+
+  async function fetchLogs(before = null, prepend = false) {
+    if (!currentIp) return;
+    try {
+      let url = `${BASE}/api/v1/logs?ip=${encodeURIComponent(currentIp)}&limit=200`;
+      if (before != null) url += `&before=${before}`;
+      const data = await fetchJson(url);
+
+      if (prepend) {
+        allRows = [...data.items, ...allRows];
+      } else {
+        // merge new tail — avoid duplicates by id
+        const existingIds = new Set(allRows.map(r => r.id));
+        const newItems = data.items.filter(r => !existingIds.has(r.id));
+        allRows = [...allRows, ...newItems];
+      }
+
+      nextBefore = data.nextBefore;
+      logCount.textContent = `${data.total} entries`;
+      pagerInfo.textContent = nextBefore ? `Showing last ${allRows.length} of ${data.total}` : `All ${allRows.length} entries`;
+      loadOlderBtn.style.display = nextBefore != null ? '' : 'none';
+      renderLogs();
+    } catch (e) {
+      logList.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+    }
+  }
+
+  function severityClass(priority) {
+    if (priority == null) return '';
+    const sev = priority & 7;
+    if (sev <= 3) return 'err';
+    if (sev === 4) return 'warn';
+    return '';
+  }
+
+  function renderLogs() {
+    const filter = filterInput.value.toLowerCase();
+    const filtered = filter
+      ? allRows.filter(r => (r.message||'').toLowerCase().includes(filter) || (r.tag||'').toLowerCase().includes(filter))
+      : allRows;
+
+    if (!filtered.length) {
+      logList.innerHTML = '<div class="empty">No log entries</div>';
+      return;
+    }
+
+    const wasAtBottom = logList.scrollHeight - logList.scrollTop <= logList.clientHeight + 8;
+    logList.innerHTML = filtered.map(r => {
+      const cls = severityClass(r.priority);
+      const time = r.receivedAt ? new Date(r.receivedAt).toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3}) : '';
+      return `<div class="log-row${cls?' '+cls:''}">
+        <span class="col-time">${time}</span>
+        <span class="col-tag" title="${r.tag||''}">${r.tag||''}</span>
+        <span class="col-app" title="${r.app||''}">${r.app||''}</span>
+        <span class="col-msg">${escHtml(r.message||r.raw||'')}</span>
+      </div>`;
+    }).join('');
+
+    if (autoScroll.checked && wasAtBottom) {
+      logList.scrollTop = logList.scrollHeight;
+    }
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  loadOlderBtn.addEventListener('click', () => {
+    if (nextBefore != null) fetchLogs(nextBefore, true);
+  });
+
+  purgeBtn.addEventListener('click', async () => {
+    if (!currentIp) return;
+    if (!confirm(`Purge all logs for ${currentIp}?`)) return;
+    await fetch(`${BASE}/api/v1/logs?ip=${encodeURIComponent(currentIp)}`, { method: 'DELETE' });
+    allRows = [];
+    logList.innerHTML = '<div class="empty">Logs purged</div>';
+    await loadSources();
+  });
+
+  filterInput.addEventListener('input', renderLogs);
+
+  autoRefresh.addEventListener('change', () => {
+    clearInterval(refreshTimer);
+    if (autoRefresh.checked) {
+      refreshTimer = setInterval(async () => { await loadSources(); if (currentIp) await fetchLogs(); }, 5000);
+    }
+  });
+
+  // Init
+  loadSources();
+  refreshTimer = setInterval(async () => { await loadSources(); if (currentIp) await fetchLogs(); }, 5000);
+
+  // Settings panel
+  const settingsOverlay = document.getElementById('settings-overlay');
+  document.getElementById('settings-btn').addEventListener('click', async () => {
+    settingsOverlay.classList.add('open');
+    await loadLokiConfig();
+  });
+  document.getElementById('settings-close').addEventListener('click', () => settingsOverlay.classList.remove('open'));
+  settingsOverlay.addEventListener('click', (e) => { if (e.target === settingsOverlay) settingsOverlay.classList.remove('open'); });
+
+  async function loadLokiConfig() {
+    const st = document.getElementById('loki-status');
+    try {
+      const cfg = await fetchJson(`${BASE}/api/v1/loki/config`);
+      document.getElementById('loki-enabled').checked = !!cfg.enabled;
+      document.getElementById('loki-url').value = cfg.url || 'http://localhost:3100';
+      document.getElementById('loki-user').value = cfg.username || '';
+      document.getElementById('loki-pass').value = cfg.password || '';
+      document.getElementById('loki-labels').value = Object.entries(cfg.labels || {}).map(([k,v]) => `${k}=${v}`).join(', ');
+      document.getElementById('loki-batch').value = cfg.batchSize || 100;
+      document.getElementById('loki-interval').value = cfg.flushIntervalMs || 5000;
+      st.textContent = '';
+    } catch (e) {
+      st.textContent = 'Failed to load config'; st.style.color = '#f48771';
+    }
+  }
+
+  function labelsFromString(s) {
+    const obj = {};
+    for (const part of String(s).split(',')) {
+      const eq = part.indexOf('=');
+      if (eq < 0) continue;
+      const k = part.slice(0, eq).trim();
+      const v = part.slice(eq + 1).trim();
+      if (k) obj[k] = v;
+    }
+    return obj;
+  }
+
+  document.getElementById('loki-save').addEventListener('click', async () => {
+    const st = document.getElementById('loki-status');
+    st.textContent = 'Saving…'; st.style.color = '#888';
+    try {
+      const r = await fetch(`${BASE}/api/v1/loki/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: document.getElementById('loki-enabled').checked,
+          url: document.getElementById('loki-url').value.trim(),
+          username: document.getElementById('loki-user').value,
+          password: document.getElementById('loki-pass').value,
+          labels: labelsFromString(document.getElementById('loki-labels').value),
+          batchSize: Number(document.getElementById('loki-batch').value) || 100,
+          flushIntervalMs: Number(document.getElementById('loki-interval').value) || 5000,
+        }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      st.textContent = '✓ Saved'; st.style.color = '#4ec9b0';
+    } catch (e) {
+      st.textContent = '✗ ' + e.message; st.style.color = '#f48771';
+    }
+  });
+
+  document.getElementById('loki-test').addEventListener('click', async () => {
+    const st = document.getElementById('loki-status');
+    st.textContent = 'Testing…'; st.style.color = '#888';
+    try {
+      const r = await fetch(`${BASE}/api/v1/loki/test`, { method: 'POST' });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) {
+        st.textContent = '✓ ' + (data.message || 'OK'); st.style.color = '#4ec9b0';
+      } else {
+        st.textContent = '✗ ' + (data.error || `HTTP ${r.status}`); st.style.color = '#f48771';
+      }
+    } catch (e) {
+      st.textContent = '✗ ' + e.message; st.style.color = '#f48771';
+    }
+  });
+</script>
+<div id="settings-overlay">
+  <div id="settings-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <h2 style="color:#ccc;font-size:14px;font-weight:600">&#9881; Loki Forwarding</h2>
+      <button id="settings-close" style="background:none;color:#888;border:none;font-size:18px;cursor:pointer;line-height:1">&#x2715;</button>
+    </div>
+    <label style="color:#aaa;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input type="checkbox" id="loki-enabled" />
+      Enable Loki forwarding
+    </label>
+    <div class="field-row">
+      <label>Loki URL</label>
+      <input id="loki-url" type="url" placeholder="http://localhost:3100" />
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="field-row">
+        <label>Username <span style="color:#555">(optional)</span></label>
+        <input id="loki-user" type="text" autocomplete="off" />
+      </div>
+      <div class="field-row">
+        <label>Password <span style="color:#555">(optional)</span></label>
+        <input id="loki-pass" type="password" autocomplete="new-password" />
+      </div>
+    </div>
+    <div class="field-row">
+      <label>Labels <span style="color:#555">comma-separated key=value pairs</span></label>
+      <input id="loki-labels" type="text" placeholder="job=lightinator, env=local" />
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="field-row">
+        <label>Batch size</label>
+        <input id="loki-batch" type="number" min="1" max="1000" />
+      </div>
+      <div class="field-row">
+        <label>Flush interval (ms)</label>
+        <input id="loki-interval" type="number" min="1000" max="60000" step="1000" />
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+      <button id="loki-save">Save</button>
+      <button id="loki-test" style="background:#3c3c3c">Test connection</button>
+      <span id="loki-status" style="font-size:12px;color:#888"></span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

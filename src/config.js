@@ -18,6 +18,7 @@ const config = {
   corsOrigin: process.env.LLS_CORS_ORIGIN || "*",
   serviceName: process.env.LLS_SERVICE_NAME || "LightinatorLogService",
   mdnsHost: process.env.LLS_MDNS_HOST || "lightinator-logservice.local",
+  lokiConfigFile: process.env.LLS_LOKI_CONFIG || path.join(process.cwd(), "data", "loki.json"),
 };
 
 module.exports = { config };

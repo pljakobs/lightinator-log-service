@@ -1,4 +1,5 @@
 const dgram = require("dgram");
+const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const os = require("os");
@@ -7,6 +8,7 @@ const { config } = require("./config");
 const { parseSyslogLine } = require("./syslogParser");
 const { LogStorage } = require("./storage");
 const { advertiseMdns } = require("./mdns");
+const { LokiForwarder } = require("./loki");
 
 function listCollectorIpv4Addresses() {
   const interfaces = os.networkInterfaces();
@@ -31,9 +33,13 @@ async function main() {
   });
   await storage.init();
 
+  const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
+  await loki.loadConfig();
+
   const app = express();
   app.use(cors({ origin: config.corsOrigin }));
   app.use(express.json({ limit: "1mb" }));
+  app.use(express.static(path.join(__dirname, "ui")));
 
   app.get("/health", (_req, res) => {
     res.json({
@@ -136,6 +142,34 @@ async function main() {
     }
   });
 
+  app.get("/api/v1/loki/config", (_req, res) => {
+    res.json(loki.getConfig());
+  });
+
+  app.put("/api/v1/loki/config", async (req, res, next) => {
+    try {
+      const { enabled, url, username, password, labels, batchSize, flushIntervalMs } = req.body;
+      if (url) {
+        try { new URL(url); } catch {
+          return res.status(400).json({ error: "Invalid Loki URL" });
+        }
+      }
+      await loki.saveConfig({ enabled, url, username, password, labels, batchSize, flushIntervalMs });
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/loki/test", async (_req, res) => {
+    try {
+      await loki.testConnection();
+      res.json({ ok: true, message: "Successfully pushed test entry to Loki" });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
   app.use((err, _req, res, _next) => {
     console.error("Unhandled error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -157,6 +191,7 @@ async function main() {
       const raw = msg.toString("utf8");
       const record = parseSyslogLine(raw, rinfo.address);
       await storage.append(rinfo.address, record);
+      loki.forward(record);
     } catch (err) {
       console.error("Failed processing UDP packet:", err);
     }
@@ -181,6 +216,7 @@ async function main() {
   const shutdown = () => {
     console.log("Shutting down...");
     mdns.stop();
+    loki.stop();
     udpServer.close();
     server.close(() => process.exit(0));
   };
