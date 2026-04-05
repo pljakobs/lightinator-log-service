@@ -4,24 +4,26 @@
 # Quadlet is built into Podman ≥ 4.4 and generates a systemd service
 # automatically — no hand-written .service file required.
 #
-# ── Per-user install (recommended) ──────────────────────────────────────────
-#   mkdir -p ~/.config/containers/systemd
-#   cp lightinator-log-service.container ~/.config/containers/systemd/
-#   systemctl --user daemon-reload
-#   systemctl --user start lightinator-log-service
-#   systemctl --user enable lightinator-log-service   # start on login
-#
-# Enable automatic updates (once, per-user):
-#   systemctl --user enable --now podman-auto-update.timer
-#   # The timer runs daily; check with:
-#   systemctl --user list-timers podman-auto-update
-#
-# ── System-wide install (requires root) ─────────────────────────────────────
+# ── System-wide install (requires root) ────────────────────────────────────
+#   sudo mkdir -p /var/lib/lightinator-log-service/data
 #   sudo cp lightinator-log-service.container /etc/containers/systemd/
 #   sudo systemctl daemon-reload
 #   sudo systemctl start lightinator-log-service
 #   sudo systemctl enable lightinator-log-service
 #   sudo systemctl enable --now podman-auto-update.timer
+#
+# ── Per-user install (alternative) ──────────────────────────────────────────
+#   mkdir -p ~/.config/containers/systemd
+#   cp lightinator-log-service.container ~/.config/containers/systemd/
+#   # Update Volume= below to use %h instead of /var/lib
+#   systemctl --user daemon-reload
+#   systemctl --user start lightinator-log-service
+#   systemctl --user enable lightinator-log-service   # start on login
+#
+# Enable automatic updates (once, system-wide):
+#   sudo systemctl enable --now podman-auto-update.timer
+#   # The timer runs daily; check with:
+#   systemctl list-timers podman-auto-update
 #
 # ── Auto-update via podman-auto-update ──────────────────────────────────────
 #   The AutoUpdate=registry line below instructs podman-auto-update to pull
@@ -30,12 +32,12 @@
 #     systemctl --user enable --now podman-auto-update.timer
 #
 # ── Status / logs ────────────────────────────────────────────────────────────
-#   systemctl --user status lightinator-log-service
-#   journalctl --user -u lightinator-log-service -f
+#   systemctl status lightinator-log-service
+#   journalctl -u lightinator-log-service -f
 #
 # ── Data directory ───────────────────────────────────────────────────────────
-#   Logs and configuration are stored in ~/lightinator-log-service/data.
-#   Override with Volume= below if you prefer a different path.
+#   Logs and configuration are stored in /var/lib/lightinator-log-service/data.
+#   Create it before first start: mkdir -p /var/lib/lightinator-log-service/data
 
 [Unit]
 Description=Lightinator Log Service
@@ -51,8 +53,8 @@ ContainerName=lightinator-log-service
 Network=host
 
 # Persistent data: logs + loki.json config.
-# %h expands to the user's home directory (quadlet variable).
-Volume=%h/lightinator-log-service/data:/app/data:Z
+# For per-user install, replace with: %h/lightinator-log-service/data:/app/data:Z
+Volume=/var/lib/lightinator-log-service/data:/app/data:Z
 
 # Core settings — override as needed.
 Environment=LLS_HTTP_HOST=0.0.0.0
