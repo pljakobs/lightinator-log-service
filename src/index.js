@@ -1,5 +1,6 @@
 const dgram = require("dgram");
 const path = require("path");
+const fs = require("fs/promises");
 const express = require("express");
 const cors = require("cors");
 const os = require("os");
@@ -69,6 +70,9 @@ function getLiveValues() {
 }
 
 async function main() {
+  // Ensure the data directory exists (parent of loki.json, controllers.json, service.env)
+  await fs.mkdir(path.dirname(config.lokiConfigFile), { recursive: true });
+
   const storage = new LogStorage({
     dataDir: config.dataDir,
     maxBytesPerIp: config.maxBytesPerIp,

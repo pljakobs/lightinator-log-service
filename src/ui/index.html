@@ -73,6 +73,7 @@
     .ctrl-card.split-brain { border-color: #c8a000; }
     .split-brain-badge { font-size: 10px; color: #c8a000; font-weight: 600; margin-left: 6px; }
     .ctrl-name { color: #9cdcfe; font-size: 13px; font-weight: 600; }
+    .ctrl-name a:hover { text-decoration: underline; }
     .ctrl-ip { color: #888; font-size: 11px; }
     .ctrl-groups { font-size: 11px; color: #4ec9b0; }
     .ctrl-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
@@ -272,6 +273,9 @@
   }
 
   async function selectSource(ip) {
+    // ensure Logs tab is visible
+    const logsTab = document.querySelector('.tab[data-tab="logs"]');
+    if (logsTab && !logsTab.classList.contains('active')) logsTab.click();
     currentIp = ip;
     allRows = [];
     nextBefore = null;
@@ -472,7 +476,7 @@
       const sb = !!c.splitBrain;
       const cardClass = ['ctrl-card', logOn ? '' : 'logging-off', sb ? 'split-brain' : ''].filter(Boolean).join(' ');
       return `<div class="${cardClass}" data-ip="${escHtml(c.ip)}">
-        <div class="ctrl-name">${escHtml(c.name || c.hostname || c.ip)}${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}</div>
+        <div class="ctrl-name"><a href="http://${escHtml(c.ip)}/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none" title="Open controller UI">${escHtml(c.name || c.hostname || c.ip)}</a>${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}</div>
         <div class="ctrl-ip">${escHtml(c.ip)} · ${escHtml(c.hostname||'')} · id:${escHtml(String(c.deviceId||''))}</div>
         <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>
         <div class="ctrl-actions">
