@@ -6,20 +6,19 @@
 # using an amd64 build stage even when the final image targets arm64.
 FROM --platform=linux/amd64 docker.io/pjakobs/sming:latest AS sming-tools
 
-RUN bash -c " \
+RUN set -e; \
     source /opt/Sming/Tools/export.sh > /dev/null 2>&1; \
     mkdir -p /extract/tools; \
     for tool in xtensa-lx106-elf-addr2line xtensa-esp32-elf-addr2line riscv32-esp-elf-addr2line; do \
-        bin=\$(which \$tool 2>/dev/null || find /opt /root /home -name \"\$tool\" -type f 2>/dev/null | head -1); \
-        if [ -n \"\$bin\" ]; then \
-            cp \"\$bin\" /extract/; \
-        else \
-            printf '#!/bin/sh\necho \"addr2line tool %s not available\" >&2; exit 1\n' \"\$tool\" > /extract/\$tool; \
-            chmod +x /extract/\$tool; \
+        bin=$(which $tool 2>/dev/null || find /opt -name "$tool" -type f 2>/dev/null | head -1); \
+        if [ -z "$bin" ]; then \
+            echo "ERROR: $tool not found in sming image" >&2; exit 1; \
         fi; \
+        echo "Found $tool at $bin"; \
+        cp "$bin" /extract/; \
     done; \
     cp /opt/Sming/Sming/Arch/Esp8266/Tools/decode-stacktrace.py /extract/tools/decode-esp8266.py; \
-    cp /opt/Sming/Sming/Arch/Esp32/Tools/decode-stacktrace.py   /extract/tools/decode-esp32.py"
+    cp /opt/Sming/Sming/Arch/Esp32/Tools/decode-stacktrace.py   /extract/tools/decode-esp32.py
 
 # ── Stage 2: production service image ────────────────────────────────────────
 # Use full Debian node image (not alpine) for glibc compatibility with the
