@@ -124,9 +124,11 @@ do_quadlet() {
   $ctl daemon-reload
   info "daemon-reload complete"
 
-  if yn "Enable and start ${SERVICE_NAME} now?" y; then
-    $ctl enable --now "$SERVICE_NAME"
-    info "Service enabled and started"
+  if yn "Start ${SERVICE_NAME} now?" y; then
+    # Quadlet units are auto-enabled via WantedBy= in the .container file.
+    # 'enable' is not supported on generated units — just start.
+    $ctl start "$SERVICE_NAME"
+    info "Service started"
   fi
 
   if yn "Enable podman-auto-update.timer (pulls new :prod image automatically)?" y; then
