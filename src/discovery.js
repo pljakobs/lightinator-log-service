@@ -132,8 +132,9 @@ class ControllerDiscovery {
     const groupsByControllerId = new Map();
     for (const g of appData.groups || []) {
       for (const cid of g.controller_ids || []) {
-        if (!groupsByControllerId.has(cid)) groupsByControllerId.set(cid, []);
-        groupsByControllerId.get(cid).push({ id: g.id, name: g.name });
+        const key = String(cid);
+        if (!groupsByControllerId.has(key)) groupsByControllerId.set(key, []);
+        groupsByControllerId.get(key).push({ id: g.id, name: g.name });
       }
     }
 
@@ -143,7 +144,7 @@ class ControllerDiscovery {
     for (const c of appData.controllers || []) {
       const ip = c["ip-address"];
       if (ip) {
-        ipToDataId.set(ip, c.id);
+        ipToDataId.set(ip, String(c.id));
         ipToDataName.set(ip, c.name);
       }
     }
