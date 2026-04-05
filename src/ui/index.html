@@ -38,6 +38,9 @@
     .col-app { color: #dcdcaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .col-msg { white-space: pre-wrap; word-break: break-word; }
     #log-list .empty { padding: 24px; color: #666; text-align: center; }
+    .reboot-marker { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: #f48771; font-size: 11px; font-weight: 600; background: #2a1a1a; border-top: 1px solid #5a2020; border-bottom: 1px solid #5a2020; }
+    .reboot-marker::before, .reboot-marker::after { content: ''; flex: 1; height: 1px; background: #5a2020; }
+    .loading-older { padding: 8px 12px; color: #666; font-size: 11px; text-align: center; }
     #pager { background: #252526; border-top: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #888; }
     #auto-scroll-label { margin-left: auto; }
     #settings-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
@@ -295,6 +298,8 @@
     return '';
   }
 
+  let _loadingOlder = false;
+
   function renderLogs() {
     const filter = filterInput.value.toLowerCase();
     const filtered = filter
@@ -307,21 +312,67 @@
     }
 
     const wasAtBottom = logList.scrollHeight - logList.scrollTop <= logList.clientHeight + 8;
-    logList.innerHTML = filtered.map(r => {
+    const prevScrollHeight = logList.scrollHeight;
+    const prevScrollTop = logList.scrollTop;
+
+    const parts = [];
+    // oldest-first for reboot detection (allRows is newest-first from API, reverse for scan)
+    // But display is also newest-first, so we iterate as stored and compare adjacent entries.
+    // Reboot: current row deviceTime < previous row deviceTime (previous = earlier in array = newer entry)
+    // allRows[0] is newest; rendered in order 0..N so we compare allRows[i].deviceTime > allRows[i-1].deviceTime
+    // meaning the device clock went backwards → reboot between allRows[i-1] and allRows[i].
+    // Insert marker BEFORE allRows[i] (which is the older entry after the reboot).
+    for (let i = 0; i < filtered.length; i++) {
+      const r = filtered[i];
+      const prev = filtered[i - 1];
+      if (
+        i > 0 &&
+        r.deviceTime != null && r.deviceTime > 0 &&
+        prev.deviceTime != null && prev.deviceTime > 0 &&
+        r.deviceTime > prev.deviceTime    // older entry has LOWER uptime → reboot
+      ) {
+        const rebootTime = prev.receivedAt ? new Date(prev.receivedAt).toLocaleTimeString('en', {hour12:false}) : '';
+        parts.push(`<div class="reboot-marker">&#x21BA; Device rebooted (last seen ${rebootTime}) &#x21BA;</div>`);
+      }
       const cls = severityClass(r.priority);
       const time = r.receivedAt ? new Date(r.receivedAt).toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3}) : '';
-      return `<div class="log-row${cls?' '+cls:''}">
+      parts.push(`<div class="log-row${cls?' '+cls:''}">
         <span class="col-time">${time}</span>
-        <span class="col-tag" title="${r.tag||''}">${r.tag||''}</span>
-        <span class="col-app" title="${r.app||''}">${r.app||''}</span>
+        <span class="col-tag" title="${escHtml(r.tag||'')}">${escHtml(r.tag||'')}</span>
+        <span class="col-app" title="${escHtml(r.app||'')}">${escHtml(r.app||'')}</span>
         <span class="col-msg">${escHtml(r.message||r.raw||'')}</span>
-      </div>`;
-    }).join('');
+      </div>`);
+    }
+    logList.innerHTML = parts.join('');
 
     if (autoScroll.checked && wasAtBottom) {
       logList.scrollTop = logList.scrollHeight;
+    } else {
+      // preserve position when prepending older rows
+      logList.scrollTop = prevScrollTop + (logList.scrollHeight - prevScrollHeight);
     }
   }
+
+  // Infinite scroll: load older entries when reaching the top
+  logList.addEventListener('scroll', async () => {
+    if (_loadingOlder) return;
+    if (nextBefore == null) return;
+    if (logList.scrollTop > 80) return;
+    _loadingOlder = true;
+    const sentinel = document.createElement('div');
+    sentinel.className = 'loading-older';
+    sentinel.textContent = 'Loading older entries…';
+    logList.prepend(sentinel);
+    const prevHeight = logList.scrollHeight;
+    try {
+      await fetchLogs(nextBefore, true);
+    } finally {
+      sentinel.remove();
+      // restore position so the view doesn't jump to top
+      logList.scrollTop += logList.scrollHeight - prevHeight;
+      _loadingOlder = false;
+    }
+  });
 
   function escHtml(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
