@@ -2,6 +2,9 @@ FROM node:22-alpine AS base
 
 ENV NODE_ENV=production
 WORKDIR /app
+# Injected at build time by CI: e.g. develop-a1b2c3d
+ARG GIT_VERSION=dev
+ENV APP_VERSION=$GIT_VERSION
 
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --no-audit --no-fund

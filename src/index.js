@@ -10,7 +10,8 @@ const { LogStorage } = require("./storage");
 const { advertiseMdns } = require("./mdns");
 const { LokiForwarder } = require("./loki");
 const { ControllerDiscovery } = require("./discovery");
-const { version } = require("../package.json");
+const { version: pkgVersion } = require("../package.json");
+const version = process.env.APP_VERSION || pkgVersion;
 const { SETTINGS_SCHEMA, readServiceEnv, writeServiceEnv } = require("./serviceConfig");
 
 function listCollectorIpv4Addresses() {
