@@ -2,7 +2,9 @@
 # The pjakobs/sming image has all ESP toolchains installed.
 # We copy only the addr2line binaries and the two decode-stacktrace.py scripts
 # so the final image stays small.
-FROM docker.io/pjakobs/sming:latest AS sming-tools
+# Pin to linux/amd64: pjakobs/sming is amd64-only; Docker multi-stage allows
+# using an amd64 build stage even when the final image targets arm64.
+FROM --platform=linux/amd64 docker.io/pjakobs/sming:latest AS sming-tools
 
 RUN bash -c " \
     source /opt/Sming/Tools/export.sh > /dev/null 2>&1; \
