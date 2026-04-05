@@ -71,6 +71,8 @@
     .ctrl-card { background: #252526; border: 1px solid #3c3c3c; border-radius: 5px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
     .ctrl-card.logging-off { opacity: 0.5; }
     .ctrl-card.split-brain { border-color: #c8a000; }
+    .ctrl-card.release-build { opacity: 0.45; filter: grayscale(40%); }
+    .release-badge { font-size: 10px; color: #888; font-style: italic; margin-left: 6px; }
     .split-brain-badge { font-size: 10px; color: #c8a000; font-weight: 600; margin-left: 6px; }
     .ctrl-name { color: #9cdcfe; font-size: 13px; font-weight: 600; }
     .ctrl-name a:hover { text-decoration: underline; }
@@ -474,13 +476,18 @@
       const reachable = c.reachable !== false;
       const logOn = c.loggingEnabled !== false;
       const sb = !!c.splitBrain;
-      const cardClass = ['ctrl-card', logOn ? '' : 'logging-off', sb ? 'split-brain' : ''].filter(Boolean).join(' ');
+      // Nodes not running a debug build cannot produce useful decoded stack traces;
+      // grey them out permanently. buildType is absent until discovery fetches /info?v=2.
+      const isDebug = !c.buildType || c.buildType === 'debug';
+      const cardClass = ['ctrl-card', logOn ? '' : 'logging-off', sb ? 'split-brain' : '', isDebug ? '' : 'release-build'].filter(Boolean).join(' ');
+      const buildBadge = isDebug ? '' : `<span class="release-badge" title="Release build — detailed crash decode unavailable">release</span>`;
+      const toggleDisabled = !isDebug ? 'disabled title="Release build — logging not useful without debug symbols"' : '';
       return `<div class="${cardClass}" data-ip="${escHtml(c.ip)}">
-        <div class="ctrl-name"><a href="http://${escHtml(c.ip)}/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none" title="Open controller UI">${escHtml(c.name || c.hostname || c.ip)}</a>${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}</div>
+        <div class="ctrl-name"><a href="http://${escHtml(c.ip)}/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none" title="Open controller UI">${escHtml(c.name || c.hostname || c.ip)}</a>${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}${buildBadge}</div>
         <div class="ctrl-ip">${escHtml(c.ip)} · ${escHtml(c.hostname||'')} · id:${escHtml(String(c.deviceId||''))}</div>
         <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>
         <div class="ctrl-actions">
-          <button class="toggle-btn ${logOn?'on':'off'}" onclick="toggleLogging('${escHtml(c.ip)}',${!logOn})">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
+          <button class="toggle-btn ${logOn?'on':'off'}" ${toggleDisabled} onclick="${isDebug ? `toggleLogging('${escHtml(c.ip)}',${!logOn})` : 'void 0'}">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
           <span class="ctrl-status ${reachable?'ok':'unreachable'}">${reachable ? '● online' : '● last seen ' + (c.lastSeen ? new Date(c.lastSeen).toLocaleDateString() : 'unknown')}</span>
         </div>
       </div>`;

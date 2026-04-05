@@ -31,6 +31,10 @@ const config = {
   // Required for the logging toggle to push rsyslog config to firmware.
   // If unset, the toggle falls back to a local filter only.
   syslogAdvertiseHost: process.env.LLS_SYSLOG_ADVERTISE_HOST || "",
+  // Crash-decode ELF cache directory (persistent between restarts)
+  elfCacheDir: process.env.LLS_ELF_CACHE_DIR || path.join(process.cwd(), "data", "elfs"),
+  // Base URL where firmware ELF files are published by the CI deploy workflow
+  elfBaseUrl: process.env.LLS_ELF_BASE_URL || "http://lightinator.de/download",
 };
 
 module.exports = { config };

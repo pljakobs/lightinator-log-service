@@ -11,6 +11,7 @@ const { LogStorage } = require("./storage");
 const { advertiseMdns } = require("./mdns");
 const { LokiForwarder } = require("./loki");
 const { ControllerDiscovery } = require("./discovery");
+const { CrashDecoder } = require("./crashDecoder");
 const { version: pkgVersion } = require("../package.json");
 const version = process.env.APP_VERSION || pkgVersion;
 const { SETTINGS_SCHEMA, readServiceEnv, writeServiceEnv } = require("./serviceConfig");
@@ -81,6 +82,16 @@ async function main() {
 
   const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
   await loki.loadConfig();
+
+  const crashDecoder = new CrashDecoder({
+    elfCacheDir: config.elfCacheDir,
+    elfBaseUrl:  config.elfBaseUrl,
+    onDecoded: (syntheticRecord) => {
+      // Store and forward decoded crash output as a separate log entry
+      storage.append(syntheticRecord.sourceIp, syntheticRecord).catch(() => {});
+      loki.forward({ ...syntheticRecord, tag: (syntheticRecord.tag || "") + ":crash-decode" });
+    },
+  });
 
   // Resolve the IP to advertise to controllers for syslog delivery
   const advertiseHost = resolveAdvertiseHost(config.discoverySeedHosts);
@@ -371,6 +382,9 @@ async function main() {
       if (discovery.isLoggingEnabled(rinfo.address)) {
         loki.forward(record);
       }
+      // Feed to crash decoder regardless of logging toggle — crash context
+      // is always valuable. The decoder only acts on matching lines.
+      crashDecoder.feed(record);
     } catch (err) {
       console.error("Failed processing UDP packet:", err);
     }

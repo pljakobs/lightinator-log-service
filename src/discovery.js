@@ -234,11 +234,20 @@ class ControllerDiscovery {
     await Promise.all(
       reachableIps.map(async (ip) => {
         try {
-          const cfg = await fetchJson(ip, this.controllerPort, "/config");
+          const [cfg, info] = await Promise.all([
+            fetchJson(ip, this.controllerPort, "/config").catch(() => null),
+            fetchJson(ip, this.controllerPort, "/info?v=2").catch(() => null),
+          ]);
+          const entry = this.controllers.get(ip);
+          if (!entry) return;
+          const updates = {};
           const enabled = cfg?.network?.rsyslog?.enabled ?? null;
-          if (enabled !== null) {
-            const entry = this.controllers.get(ip);
-            if (entry) this.controllers.set(ip, { ...entry, loggingEnabled: enabled });
+          if (enabled !== null) updates.loggingEnabled = enabled;
+          if (info?.device?.soc)     updates.soc        = info.device.soc;
+          if (info?.app?.build_type) updates.buildType  = info.app.build_type;
+          if (info?.app?.git_version) updates.gitVersion = info.app.git_version;
+          if (Object.keys(updates).length) {
+            this.controllers.set(ip, { ...entry, ...updates });
           }
         } catch {
           // best-effort — keep existing value if unreachable
