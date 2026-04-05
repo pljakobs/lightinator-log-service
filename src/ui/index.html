@@ -389,6 +389,7 @@
 
   // Init
   loadSources();
+  loadControllers();
   refreshTimer = setInterval(async () => { await loadSources(); if (currentIp) await fetchLogs(); }, 5000);
 
   // Loki status indicator
