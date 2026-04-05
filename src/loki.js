@@ -10,6 +10,10 @@ const DEFAULT_CONFIG = {
   username: "",
   password: "",
   labels: { job: "lightinator" },
+  // groups: { groupName: { labelKey: labelValue, ... } }
+  groups: {},
+  // controllers: { ip: { labels: { labelKey: labelValue }, group: "groupName" } }
+  controllers: {},
   batchSize: 100,
   flushIntervalMs: 5000,
 };
@@ -88,11 +92,20 @@ class LokiForwarder {
     }
   }
 
+  _resolveLabels(sourceIp) {
+    const global = { ...(this.config.labels || {}) };
+    const controllerCfg = (this.config.controllers || {})[sourceIp] || {};
+    const groupName = controllerCfg.group || "";
+    const groupLabels = groupName ? (this.config.groups || {})[groupName] || {} : {};
+    const controllerLabels = controllerCfg.labels || {};
+    return { ...global, ...groupLabels, ...controllerLabels };
+  }
+
   _buildPayload(records) {
     const streams = new Map();
     for (const r of records) {
       const streamKey = {
-        ...this.config.labels,
+        ...this._resolveLabels(r.sourceIp || "unknown"),
         source_ip: r.sourceIp || "unknown",
         tag: r.tag || "unknown",
       };
