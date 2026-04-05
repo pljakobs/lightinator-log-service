@@ -467,15 +467,24 @@
   }
 
   async function toggleLogging(ip, enabled) {
+    const st = document.getElementById('ctrl-status');
     try {
-      await fetch(`${BASE}/api/v1/controllers/${encodeURIComponent(ip)}/logging`, {
+      const r = await fetch(`${BASE}/api/v1/controllers/${encodeURIComponent(ip)}/logging`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled }),
       });
+      const d = await r.json();
       await loadControllers();
+      if (!r.ok) {
+        st.textContent = `⚠ ${ip}: ${d.error || 'failed'}`;
+      } else if (!d.firmwareUpdated && d.firmwareUpdated !== undefined) {
+        st.textContent = `⚠ ${ip}: local filter updated, but firmware push skipped (set LLS_SYSLOG_ADVERTISE_HOST)`;
+      } else {
+        st.textContent = '';
+      }
     } catch (e) {
-      document.getElementById('ctrl-status').textContent = 'Error: ' + e.message;
+      st.textContent = 'Error: ' + e.message;
     }
   }
 
@@ -497,15 +506,24 @@
     try {
       const data = await fetchJson(`${BASE}/api/v1/controllers`);
       const controllers = data.items || [];
-      await Promise.all(controllers.map(c =>
-        fetch(`${BASE}/api/v1/controllers/${encodeURIComponent(c.ip)}/logging`, {
+      const results = await Promise.all(controllers.map(async c => {
+        const r = await fetch(`${BASE}/api/v1/controllers/${encodeURIComponent(c.ip)}/logging`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled }),
-        })
-      ));
+        });
+        return { ip: c.ip, ok: r.ok, d: await r.json() };
+      }));
       await loadControllers();
-      st.textContent = `Logging ${enabled ? 'ON' : 'OFF'} for all ${controllers.length} controller(s)`;
+      const failed = results.filter(r => !r.ok);
+      const noFwPush = results.filter(r => r.ok && r.d.firmwareUpdated === false);
+      if (failed.length) {
+        st.textContent = `⚠ ${failed.length} controller(s) failed: ${failed.map(r=>r.ip).join(', ')}`;
+      } else if (noFwPush.length) {
+        st.textContent = `Local filter ${enabled?'ON':'OFF'} for all — firmware push skipped (set LLS_SYSLOG_ADVERTISE_HOST)`;
+      } else {
+        st.textContent = `Logging ${enabled ? 'ON' : 'OFF'} for all ${controllers.length} controller(s)`;
+      }
     } catch (e) {
       st.textContent = 'Error: ' + e.message;
     }

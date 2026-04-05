@@ -23,6 +23,10 @@ const config = {
   discoverySeedHosts: (process.env.LLS_DISCOVERY_SEEDS || "lightinator.local").split(",").map(s => s.trim()).filter(Boolean),
   discoveryControllerPort: envInt("LLS_DISCOVERY_PORT", 80),
   discoveryRefreshMs: envInt("LLS_DISCOVERY_REFRESH_MS", 300_000),
+  // The IP/hostname controllers should use to reach this service's syslog UDP port.
+  // Required for the logging toggle to push rsyslog config to firmware.
+  // If unset, the toggle falls back to a local filter only.
+  syslogAdvertiseHost: process.env.LLS_SYSLOG_ADVERTISE_HOST || "",
 };
 
 module.exports = { config };

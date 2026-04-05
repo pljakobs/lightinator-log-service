@@ -213,7 +213,7 @@ async function main() {
     }
   });
 
-  app.patch("/api/v1/controllers/:ip/logging", (req, res) => {
+  app.patch("/api/v1/controllers/:ip/logging", async (req, res) => {
     const ip = req.params.ip;
     const { enabled } = req.body;
     if (typeof enabled !== "boolean") {
@@ -221,7 +221,42 @@ async function main() {
     }
     const ok = discovery.setLogging(ip, enabled);
     if (!ok) return res.status(404).json({ error: "Controller not found" });
-    res.json({ ok: true, ip, loggingEnabled: enabled });
+
+    // Push rsyslog config to firmware if we know our own advertise address
+    let firmwareUpdated = false;
+    if (config.syslogAdvertiseHost) {
+      try {
+        const controllerPort = config.discoveryControllerPort;
+        const payload = {
+          network: {
+            rsyslog: {
+              enabled,
+              host: config.syslogAdvertiseHost,
+              port: config.udpPort,
+            },
+          },
+        };
+        const resp = await fetch(`http://${ip}:${controllerPort}/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!resp.ok) {
+          throw new Error(`Firmware returned ${resp.status}`);
+        }
+        firmwareUpdated = true;
+      } catch (err) {
+        console.warn(`Failed to push rsyslog config to ${ip}: ${err.message}`);
+        return res.status(502).json({
+          error: `Local flag updated but firmware push failed: ${err.message}`,
+          loggingEnabled: enabled,
+          firmwareUpdated: false,
+        });
+      }
+    }
+
+    res.json({ ok: true, ip, loggingEnabled: enabled, firmwareUpdated });
   });
 
   app.use((err, _req, res, _next) => {
