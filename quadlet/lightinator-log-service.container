@@ -63,7 +63,10 @@ Volume=/var/lib/lightinator-log-service/data:/app/data:Z
 # Runtime configuration file — edit this instead of touching the quadlet.
 # Copy config/service.env.example to this path and uncomment/set values.
 # For per-user install: %h/lightinator-log-service/data/service.env
-EnvironmentFile=-/var/lib/lightinator-log-service/data/service.env
+#
+# NOTE: Podman Quadlet does not support the systemd '-' optional-file prefix here.
+# The file is created automatically by ExecStartPre below if absent.
+EnvironmentFile=/var/lib/lightinator-log-service/data/service.env
 
 # Pull and restart automatically when the :prod image digest changes in GHCR.
 # A new :prod image is published only when changes are merged into the `prod`
@@ -71,6 +74,9 @@ EnvironmentFile=-/var/lib/lightinator-log-service/data/service.env
 AutoUpdate=registry
 
 [Service]
+# Create data dir and an empty service.env if they do not yet exist.
+# This avoids a startup failure when EnvironmentFile= path is absent.
+ExecStartPre=-/bin/sh -c 'mkdir -p /var/lib/lightinator-log-service/data && test -f /var/lib/lightinator-log-service/data/service.env || touch /var/lib/lightinator-log-service/data/service.env'
 Restart=always
 RestartSec=5
 
