@@ -60,13 +60,15 @@ runtime() {
 }
 
 # ── scope selection ───────────────────────────────────────────────────────────
+# Sets global variable $scope (cannot use stdout — would be captured in $())
+scope=system
 ask_scope() {
   if is_root; then
-    yn "Install system-wide (all users)?" y && printf 'system' || printf 'user'
+    yn "Install system-wide (all users)?" y && scope=system || scope=user
   else
     warn "Running as non-root — system-wide install requires sudo."
     yn "Install as current user (--user systemd scope)?" y \
-      && printf 'user' \
+      && scope=user \
       || die "Re-run with sudo for a system-wide install."
   fi
 }
@@ -336,7 +338,7 @@ main() {
   # ── scope (quadlet / systemd only) ──
   case "$method" in
     quadlet|systemd)
-      scope=$(ask_scope)
+      ask_scope
       ;;
     openrc)
       scope=system
