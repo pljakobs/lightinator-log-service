@@ -41,6 +41,7 @@
     .reboot-marker { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: #f48771; font-size: 11px; font-weight: 600; background: #2a1a1a; border-top: 1px solid #5a2020; border-bottom: 1px solid #5a2020; }
     .reboot-marker::before, .reboot-marker::after { content: ''; flex: 1; height: 1px; background: #5a2020; }
     .loading-older { padding: 8px 12px; color: #666; font-size: 11px; text-align: center; }
+    .log-row.context { opacity: 0.45; }
     #pager { background: #252526; border-top: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #888; }
     #auto-scroll-label { margin-left: auto; }
     #settings-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
@@ -91,6 +92,7 @@
 <header>
   <h1>&#9889; Lightinator Logs</h1>
   <input id="filter-input" type="search" placeholder="Filter messages…" />
+  <label title="Lines of context shown before and after each search hit">Context: <input id="context-input" type="number" min="0" max="50" value="0" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
   <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
   <span id="status">Loading…</span>
   <span id="loki-dot" title="Loki: checking…" style="font-size:16px;line-height:1;color:#555;cursor:default" aria-label="Loki status">&#9679;</span>
@@ -328,11 +330,27 @@
 
   function renderLogs() {
     const filter = filterInput.value.toLowerCase();
-    const filtered = filter
-      ? allRows.filter(r => (r.message||'').toLowerCase().includes(filter) || (r.tag||'').toLowerCase().includes(filter))
-      : allRows;
+    const ctxN = Math.max(0, parseInt(document.getElementById('context-input').value, 10) || 0);
 
-    if (!filtered.length) {
+    let displayRows; // array of { row, isContext }
+    if (filter) {
+      const matchIndices = new Set();
+      allRows.forEach((r, i) => {
+        if ((r.message||'').toLowerCase().includes(filter) || (r.tag||'').toLowerCase().includes(filter))
+          matchIndices.add(i);
+      });
+      const included = new Set();
+      for (const idx of matchIndices) {
+        for (let j = Math.max(0, idx - ctxN); j <= Math.min(allRows.length - 1, idx + ctxN); j++)
+          included.add(j);
+      }
+      // sort by index to preserve order
+      displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: allRows[i], isContext: !matchIndices.has(i) }));
+    } else {
+      displayRows = allRows.map(r => ({ row: r, isContext: false }));
+    }
+
+    if (!displayRows.length) {
       logList.innerHTML = '<div class="empty">No log entries</div>';
       return;
     }
@@ -342,11 +360,11 @@
     const prevScrollTop = logList.scrollTop;
 
     const parts = [];
-    for (let i = 0; i < filtered.length; i++) {
-      const r = filtered[i];
+    for (const { row: r, isContext } of displayRows) {
       const cls = severityClass(r.priority);
+      const extraCls = isContext ? ' context' : '';
       const time = r.receivedAt ? new Date(r.receivedAt).toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3}) : '';
-      parts.push(`<div class="log-row${cls?' '+cls:''}">
+      parts.push(`<div class="log-row${cls?' '+cls:''}${extraCls}">
         <span class="col-time">${time}</span>
         <span class="col-tag" title="${escHtml(r.tag||'')}">${escHtml(r.tag||'')}</span>
         <span class="col-app" title="${escHtml(r.app||'')}">${escHtml(r.app||'')}</span>
@@ -402,6 +420,7 @@
   });
 
   filterInput.addEventListener('input', renderLogs);
+  document.getElementById('context-input').addEventListener('input', renderLogs);
 
   autoRefresh.addEventListener('change', () => {
     clearInterval(refreshTimer);
