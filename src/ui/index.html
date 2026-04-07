@@ -406,25 +406,41 @@
 
   let _loadingOlder = false;
   function renderLogs() {
-    const filter = filterInput.value.toLowerCase();
+    const rawFilter = filterInput.value.trim();
+    // Parse optional boot:N / boot:-1 prefix out of the filter string
+    let bootFilter = null; // null = no boot filter
+    let textFilter = rawFilter.toLowerCase();
+    const bootMatch = rawFilter.match(/(?:^|\s)boot:(-?\d+)(?:\s|$)/i);
+    if (bootMatch) {
+      bootFilter = parseInt(bootMatch[1], 10);
+      textFilter = rawFilter.replace(bootMatch[0], ' ').trim().toLowerCase();
+    }
+    // Resolve negative boot index like journald: -1 = latest, -2 = one before, …
+    if (bootFilter !== null && bootFilter < 0) {
+      const maxBoot = allRows.reduce((m, r) => Math.max(m, r.boot ?? 0), 0);
+      bootFilter = maxBoot + 1 + bootFilter; // e.g. -1 → maxBoot
+    }
+
     const ctxN = Math.max(0, parseInt(document.getElementById('context-input').value, 10) || 0);
 
+    // Pre-filter by boot number if specified
+    const bootRows = bootFilter !== null ? allRows.filter(r => (r.boot ?? 0) === bootFilter) : allRows;
+
     let displayRows; // array of { row, isContext }
-    if (filter) {
+    if (textFilter) {
       const matchIndices = new Set();
-      allRows.forEach((r, i) => {
-        if ((r.message||'').toLowerCase().includes(filter) || (r.tag||'').toLowerCase().includes(filter))
+      bootRows.forEach((r, i) => {
+        if ((r.message||'').toLowerCase().includes(textFilter) || (r.tag||'').toLowerCase().includes(textFilter))
           matchIndices.add(i);
       });
       const included = new Set();
       for (const idx of matchIndices) {
-        for (let j = Math.max(0, idx - ctxN); j <= Math.min(allRows.length - 1, idx + ctxN); j++)
+        for (let j = Math.max(0, idx - ctxN); j <= Math.min(bootRows.length - 1, idx + ctxN); j++)
           included.add(j);
       }
-      // sort by index to preserve order
-      displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: allRows[i], isContext: !matchIndices.has(i) }));
+      displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: bootRows[i], isContext: !matchIndices.has(i) }));
     } else {
-      displayRows = allRows.map(r => ({ row: r, isContext: false }));
+      displayRows = bootRows.map(r => ({ row: r, isContext: false }));
     }
 
     if (document.getElementById('sort-device-time').checked) {
@@ -454,7 +470,15 @@
 
     const rawMode = document.getElementById('raw-mode-toggle').checked;
     const parts = [];
+    let lastBoot = undefined;
     for (const { row: r, isContext } of displayRows) {
+      // Insert a boot divider whenever the boot number changes (and we're not in raw mode)
+      if (!rawMode && r.boot !== undefined && r.boot !== lastBoot) {
+        if (lastBoot !== undefined || bootFilter === null) {
+          parts.push(`<div class="reboot-marker">boot ${r.boot}</div>`);
+        }
+        lastBoot = r.boot;
+      }
       const cls = severityClass(r.priority);
       const extraCls = isContext ? ' context' : '';
       if (rawMode) {

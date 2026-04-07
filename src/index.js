@@ -80,6 +80,15 @@ async function main() {
   });
   await storage.init();
 
+  // Per-source boot counters. Loaded from stored records on startup so the
+  // counter survives service restarts. Incremented each time a restart sentinel
+  // arrives. Stamped onto every stored record as `boot`.
+  const bootCounters = new Map();
+  for (const src of storage.listSources()) {
+    const last = await storage.lastBootFor(src.ip);
+    bootCounters.set(src.ip, last);
+  }
+
   const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
   await loki.loadConfig();
 
@@ -377,6 +386,14 @@ async function main() {
     try {
       const raw = msg.toString("utf8");
       const record = parseSyslogLine(raw, rinfo.address);
+
+      // Increment boot counter when we see a restart sentinel, then stamp
+      // every record (including the sentinel itself) with the current value.
+      if (record.isRestartMarker) {
+        bootCounters.set(rinfo.address, (bootCounters.get(rinfo.address) || 0) + 1);
+      }
+      record.boot = bootCounters.get(rinfo.address) || 0;
+
       await storage.append(rinfo.address, record);
       discovery.addSeenIp(rinfo.address);
       if (discovery.isLoggingEnabled(rinfo.address)) {

@@ -1,4 +1,5 @@
 const SYSLOG_RE = /^<(\d+)>\s*([^\s]+)\s+([^:]+):\s*(\d+)\s*(.*)$/;
+const RESTART_RE = /^={4,}\s*system restart\s*={4,}$/i;
 
 function parseSyslogLine(rawLine, sourceIp) {
   const line = String(rawLine || "").trim();
@@ -14,11 +15,13 @@ function parseSyslogLine(rawLine, sourceIp) {
       tag: null,
       app: null,
       deviceTime: null,
+      isRestartMarker: false,
       message: line,
       raw: line,
     };
   }
 
+  const message = match[5] || "";
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     receivedAt,
@@ -27,7 +30,8 @@ function parseSyslogLine(rawLine, sourceIp) {
     tag: match[2],
     app: match[3].trim(),
     deviceTime: Number.parseInt(match[4], 10),
-    message: match[5] || "",
+    isRestartMarker: RESTART_RE.test(message),
+    message,
     raw: line,
   };
 }
