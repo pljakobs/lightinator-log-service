@@ -126,6 +126,7 @@
       <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
       <button id="col-picker-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">Columns &#9660;</button>
       <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px"><input type="checkbox" id="raw-mode-toggle" /> Raw</label>
+      <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px" title="Sort displayed rows by the device uptime timestamp embedded in each message"><input type="checkbox" id="sort-device-time" /> Sort by device time</label>
       <div id="col-picker"></div>
     </div>
     <div id="log-header-row"></div>
@@ -426,6 +427,22 @@
       displayRows = allRows.map(r => ({ row: r, isContext: false }));
     }
 
+    if (document.getElementById('sort-device-time').checked) {
+      // Entries with a deviceTime sort ascending by that value.
+      // Entries without a deviceTime (no parseable uptime prefix) sort after
+      // the last timestamped entry, preserving their original receive order
+      // relative to each other — that's the closest correct position we know.
+      displayRows = displayRows
+        .map((r, i) => ({ r, i }))
+        .sort((a, b) => {
+          const ta = a.r.row.deviceTime ?? Infinity;
+          const tb = b.r.row.deviceTime ?? Infinity;
+          if (ta !== tb) return ta - tb;
+          return a.i - b.i; // stable: preserve receive order for ties (including all nulls)
+        })
+        .map(({ r }) => r);
+    }
+
     if (!displayRows.length) {
       logList.innerHTML = '<div class="empty">No log entries</div>';
       return;
@@ -505,6 +522,7 @@
   document.getElementById('context-input').addEventListener('input', renderLogs);
 
   document.getElementById('raw-mode-toggle').addEventListener('change', () => { updateGridTemplate(); renderLogs(); });
+  document.getElementById('sort-device-time').addEventListener('change', renderLogs);
 
   const colPickerBtn = document.getElementById('col-picker-btn');
   const colPickerEl  = document.getElementById('col-picker');
