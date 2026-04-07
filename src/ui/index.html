@@ -452,13 +452,19 @@
     }
 
     if (document.getElementById('sort-device-time').checked) {
-      // Entries with a deviceTime sort ascending by that value.
-      // Entries without a deviceTime (no parseable uptime prefix) sort after
-      // the last timestamped entry, preserving their original receive order
-      // relative to each other — that's the closest correct position we know.
+      // Sort by boot ascending first, then by deviceTime ascending within each
+      // boot. Without the boot-first key, pre-net buffer messages from boot N+1
+      // (tiny deviceTime values) interleave with boot N regular messages that
+      // cover the same uptime range, causing boot dividers to flip back and
+      // forth and the same section to appear repeated in the UI.
+      // Entries without a deviceTime sort after all timed entries in their boot,
+      // preserving original receive order among themselves.
       displayRows = displayRows
         .map((r, i) => ({ r, i }))
         .sort((a, b) => {
+          const ba = a.r.row.boot ?? 0;
+          const bb = b.r.row.boot ?? 0;
+          if (ba !== bb) return ba - bb;
           const ta = a.r.row.deviceTime ?? Infinity;
           const tb = b.r.row.deviceTime ?? Infinity;
           if (ta !== tb) return ta - tb;

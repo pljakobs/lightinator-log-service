@@ -1,4 +1,6 @@
-const SYSLOG_RE = /^<(\d+)>\s*([^\s]+)\s+([^:]+):\s*(\d+)\s*(.*)$/;
+// The sequence-number (uptime-ms prefix) is optional: messages emitted via
+// Serial.printf / debugf without the debug_i uptime stamp won't have one.
+const SYSLOG_RE = /^<(\d+)>\s*([^\s]+)\s+([^:]+):\s*(?:(\d+)\s+)?(.*)/;
 // Optional nonce suffix: "===== system restart ===== nonce:12345"
 const RESTART_RE = /^={4,}\s*system restart\s*={4,}(?:\s+nonce:(\d+))?$/i;
 
@@ -31,7 +33,7 @@ function parseSyslogLine(rawLine, sourceIp) {
     priority: Number.parseInt(match[1], 10),
     tag: match[2],
     app: match[3].trim(),
-    deviceTime: Number.parseInt(match[4], 10),
+    deviceTime: match[4] != null ? Number.parseInt(match[4], 10) : null,
     isRestartMarker: !!restartMatch,
     bootNonce: restartMatch ? restartMatch[1] : undefined,
     message,
