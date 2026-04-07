@@ -103,7 +103,7 @@
 <header>
   <h1>&#9889; Lightinator Logs</h1>
   <input id="filter-input" type="search" placeholder="Filter messages…" />
-  <label title="Lines of context shown before and after each search hit">Context: <input id="context-input" type="number" min="0" max="50" value="0" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
+  <label title="Lines of context around each search hit. -1 = show all lines (matches highlighted, rest dimmed)">Context: <input id="context-input" type="number" min="-1" max="50" value="0" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
   <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
   <span id="status">Loading…</span>
   <span id="loki-dot" title="Loki: checking…" style="font-size:16px;line-height:1;color:#555;cursor:default" aria-label="Loki status">&#9679;</span>
@@ -422,7 +422,9 @@
       bootFilter = maxBoot + 1 + bootFilter; // e.g. -1 → maxBoot
     }
 
-    const ctxN = Math.max(0, parseInt(document.getElementById('context-input').value, 10) || 0);
+    const ctxRaw = parseInt(document.getElementById('context-input').value, 10);
+    const ctxUnlimited = ctxRaw === -1;
+    const ctxN = ctxUnlimited ? 0 : Math.max(0, ctxRaw || 0);
 
     // Pre-filter by boot number if specified
     const bootRows = bootFilter !== null ? allRows.filter(r => (r.boot ?? 0) === bootFilter) : allRows;
@@ -434,12 +436,17 @@
         if ((r.message||'').toLowerCase().includes(textFilter) || (r.tag||'').toLowerCase().includes(textFilter))
           matchIndices.add(i);
       });
-      const included = new Set();
-      for (const idx of matchIndices) {
-        for (let j = Math.max(0, idx - ctxN); j <= Math.min(bootRows.length - 1, idx + ctxN); j++)
-          included.add(j);
+      if (ctxUnlimited) {
+        // Show every row; non-matching rows are dimmed as context
+        displayRows = bootRows.map((row, i) => ({ row, isContext: !matchIndices.has(i) }));
+      } else {
+        const included = new Set();
+        for (const idx of matchIndices) {
+          for (let j = Math.max(0, idx - ctxN); j <= Math.min(bootRows.length - 1, idx + ctxN); j++)
+            included.add(j);
+        }
+        displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: bootRows[i], isContext: !matchIndices.has(i) }));
       }
-      displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: bootRows[i], isContext: !matchIndices.has(i) }));
     } else {
       displayRows = bootRows.map(r => ({ row: r, isContext: false }));
     }
