@@ -84,6 +84,9 @@ async function main() {
   // counter survives service restarts. Incremented each time a restart sentinel
   // arrives. Stamped onto every stored record as `boot`.
   const bootCounters = new Map();
+  // Last seen restart nonce per IP — used to deduplicate the 3× sentinel
+  // copies the firmware sends to protect against UDP packet loss.
+  const bootNonces = new Map();
   for (const src of storage.listSources()) {
     const last = await storage.lastBootFor(src.ip);
     bootCounters.set(src.ip, last);
@@ -390,6 +393,14 @@ async function main() {
       // Increment boot counter when we see a restart sentinel, then stamp
       // every record (including the sentinel itself) with the current value.
       if (record.isRestartMarker) {
+        const nonce = record.bootNonce;
+        const lastNonce = bootNonces.get(rinfo.address);
+        // Deduplicate: firmware sends sentinel 3× for reliability.
+        // Only process it if there is no nonce (old firmware) or the nonce differs.
+        if (nonce !== undefined && nonce === lastNonce) {
+          return; // duplicate copy of the same boot sentinel — discard
+        }
+        bootNonces.set(rinfo.address, nonce);
         bootCounters.set(rinfo.address, (bootCounters.get(rinfo.address) || 0) + 1);
       }
       record.boot = bootCounters.get(rinfo.address) || 0;
