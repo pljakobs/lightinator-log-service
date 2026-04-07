@@ -589,6 +589,20 @@
     }
   });
 
+  // Ctrl+A inside the log area selects log content only (not the whole page UI)
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      const active = document.activeElement;
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return;
+      e.preventDefault();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(logList);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+
   // Init
   loadColState();
   updateGridTemplate();
