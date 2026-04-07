@@ -48,8 +48,9 @@
     #col-picker label { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; color: #ccc; font-size: 12px; white-space: nowrap; }
     .log-row.raw-row { display: block; white-space: pre-wrap; word-break: break-all; color: #9cdcfe; }
     #log-list .empty { padding: 24px; color: #666; text-align: center; }
-    .reboot-marker { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: #f48771; font-size: 11px; font-weight: 600; background: #2a1a1a; border-top: 1px solid #5a2020; border-bottom: 1px solid #5a2020; }
-    .reboot-marker::before, .reboot-marker::after { content: ''; flex: 1; height: 1px; background: #5a2020; }
+    .reboot-marker { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 11px; font-weight: 700; background: #444; border-top: 1px solid #666; border-bottom: 1px solid #666; }
+    .reboot-marker::before, .reboot-marker::after { content: ''; flex: 1; height: 1px; background: #666; }
+    .reboot-marker-label { background: #ccc; color: #111; padding: 1px 8px; border-radius: 3px; letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
     .loading-older { padding: 8px 12px; color: #666; font-size: 11px; text-align: center; }
     .log-row.context { opacity: 0.45; }
     #pager { background: #252526; border-top: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #888; }
@@ -475,7 +476,7 @@
       // Insert a boot divider whenever the boot number changes (and we're not in raw mode)
       if (!rawMode && r.boot !== undefined && r.boot !== lastBoot) {
         if (lastBoot !== undefined || bootFilter === null) {
-          parts.push(`<div class="reboot-marker">boot ${r.boot}</div>`);
+          parts.push(`<div class="reboot-marker"><span class="reboot-marker-label">&#x21bb; boot ${r.boot}</span></div>`);
         }
         lastBoot = r.boot;
       }
