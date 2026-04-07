@@ -390,18 +390,23 @@ async function main() {
       const raw = msg.toString("utf8");
       const record = parseSyslogLine(raw, rinfo.address);
 
-      // Increment boot counter when we see a restart sentinel, then stamp
-      // every record (including the sentinel itself) with the current value.
-      if (record.isRestartMarker) {
-        const nonce = record.bootNonce;
-        const lastNonce = bootNonces.get(rinfo.address);
-        // Deduplicate: firmware sends sentinel 3× for reliability.
-        // Only process it if there is no nonce (old firmware) or the nonce differs.
-        if (nonce !== undefined && nonce === lastNonce) {
-          return; // duplicate copy of the same boot sentinel — discard
+      // Boot detection: new firmware embeds the nonce on every packet header,
+      // so we can assign lines to the correct boot the moment any packet arrives
+      // with a previously-unseen nonce — no need to wait for the sentinel.
+      // Old firmware only carries the nonce on the sentinel (isRestartMarker),
+      // handled by the same path since bootNonce is also populated from the
+      // message body as a fallback in the parser.
+      const nonce = record.bootNonce;
+      const lastNonce = bootNonces.get(rinfo.address);
+      if (nonce !== undefined) {
+        if (nonce !== lastNonce) {
+          // New nonce → new boot.
+          bootNonces.set(rinfo.address, nonce);
+          bootCounters.set(rinfo.address, (bootCounters.get(rinfo.address) || 0) + 1);
+        } else if (record.isRestartMarker) {
+          // Same nonce + sentinel = duplicate copy of the 3× sentinel — discard.
+          return;
         }
-        bootNonces.set(rinfo.address, nonce);
-        bootCounters.set(rinfo.address, (bootCounters.get(rinfo.address) || 0) + 1);
       }
       record.boot = bootCounters.get(rinfo.address) || 0;
 
