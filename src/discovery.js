@@ -81,7 +81,7 @@ class ControllerDiscovery {
     this.statePath = statePath;
     this.onUpdate = onUpdate;
 
-    /** ip → { hostname, ip, deviceId, name, groups:[{id,name}], loggingEnabled, reachable, lastSeen } */
+    /** ip → { hostname, ip, deviceId, name, groups:[{id,name}], loggingEnabled, reachable, lastSeen, lastLogReceived } */
     this.controllers = new Map();
 
     /** IPs seen via syslog that we haven't resolved yet */
@@ -95,6 +95,14 @@ class ControllerDiscovery {
     if (!this.controllers.has(ip) && !this.extraSeeds.has(ip)) {
       this.extraSeeds.add(ip);
       this.refresh().catch(() => {});
+    }
+  }
+
+  /** Called by UDP ingest to record when a log message was received from a controller */
+  recordLogReceived(ip) {
+    const c = this.controllers.get(ip);
+    if (c) {
+      this.controllers.set(ip, { ...c, lastLogReceived: new Date().toISOString() });
     }
   }
 
@@ -179,6 +187,7 @@ class ControllerDiscovery {
         reachable: true,
         splitBrain: false,
         lastSeen: new Date().toISOString(),
+        lastLogReceived: existing.lastLogReceived || null,
       });
       updatedIps.add(ip);
       this.extraSeeds.delete(ip); // promoted to known

@@ -379,6 +379,7 @@ async function main() {
       const record = parseSyslogLine(raw, rinfo.address);
       await storage.append(rinfo.address, record);
       discovery.addSeenIp(rinfo.address);
+      discovery.recordLogReceived(rinfo.address);
       if (discovery.isLoggingEnabled(rinfo.address)) {
         loki.forward(record);
       }

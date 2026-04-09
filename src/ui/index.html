@@ -86,6 +86,7 @@
     .ctrl-status { font-size: 10px; }
     .ctrl-status.ok { color: #4ec9b0; }
     .ctrl-status.unreachable { color: #666; }
+    .ctrl-log-received { font-size: 10px; color: #888; }
     .ctrl-fw { font-size: 11px; color: #888; }
     .fw-debug { color: #4ec9b0; }
     .fw-release { color: #888; font-style: italic; }
@@ -272,7 +273,7 @@
       el.className = 'source-item' + (src.ip === currentIp ? ' active' : '');
       const label = src.name && src.name !== src.ip ? `<span class="source-ip">${escHtml(src.name)}</span><span class="source-meta">${escHtml(src.ip)}</span>` :
         `<span class="source-ip">${escHtml(src.ip)}</span>`;
-      const meta = (src.bytes ? Math.ceil(src.bytes/1024)+'KB ' : '') + (src.lastSeen ? new Date(src.lastSeen).toLocaleDateString() : '');
+      const meta = (src.bytes ? Math.ceil(src.bytes/1024)+'KB ' : '') + (src.lastSeen ? timeAgo(src.lastSeen) : '');
       el.innerHTML = label + `<span class="source-meta">${meta}</span>`;
       el.addEventListener('click', () => selectSource(src.ip));
       sourcesList.appendChild(el);
@@ -412,6 +413,24 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  function timeAgo(isoString) {
+    if (!isoString) return 'never';
+    const diffMs = Date.now() - new Date(isoString).getTime();
+    if (diffMs < 0) return 'just now';
+    const seconds = Math.floor(diffMs / 1000);
+    if (seconds < 30) return 'just now';
+    if (seconds < 60) return 'within one minute';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes === 1) return '1 minute ago';
+    if (minutes < 60) return minutes + ' minutes ago';
+    const hours = Math.floor(minutes / 60);
+    if (hours === 1) return '1 hour ago';
+    if (hours < 24) return hours + ' hours ago';
+    const days = Math.floor(hours / 24);
+    if (days === 1) return '1 day ago';
+    return days + ' days ago';
+  }
+
   loadOlderBtn.addEventListener('click', () => {
     if (nextBefore != null) fetchLogs(nextBefore, true);
   });
@@ -517,7 +536,8 @@
         <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>
         <div class="ctrl-actions">
           <button class="toggle-btn ${toggleBtnClass}" ${toggleDisabled} onclick="${isDebug ? `toggleLogging('${escHtml(c.ip)}',${!logOn})` : 'void 0'}">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
-          <span class="ctrl-status ${reachable?'ok':'unreachable'}">${reachable ? '● online' : '● last seen ' + (c.lastSeen ? new Date(c.lastSeen).toLocaleDateString() : 'unknown')}</span>
+          <span class="ctrl-status ${reachable?'ok':'unreachable'}">${reachable ? '● online' : '● offline'}</span>
+          <span class="ctrl-log-received">last log received: ${timeAgo(c.lastLogReceived)}</span>
         </div>
       </div>`;
     }).join('');
