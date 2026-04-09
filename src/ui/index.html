@@ -312,7 +312,7 @@
       logCount.textContent = `${data.total} entries`;
       pagerInfo.textContent = nextBefore ? `Showing last ${allRows.length} of ${data.total}` : `All ${allRows.length} entries`;
       loadOlderBtn.style.display = nextBefore != null ? '' : 'none';
-      renderLogs();
+      renderLogs(prepend);
     } catch (e) {
       logList.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
     }
@@ -328,7 +328,7 @@
 
   let _loadingOlder = false;
 
-  function renderLogs() {
+  function renderLogs(prepend = false) {
     const filter = filterInput.value.toLowerCase();
     const ctxN = Math.max(0, parseInt(document.getElementById('context-input').value, 10) || 0);
 
@@ -375,9 +375,12 @@
 
     if (autoScroll.checked && wasAtBottom) {
       logList.scrollTop = logList.scrollHeight;
-    } else {
-      // preserve position when prepending older rows
+    } else if (prepend) {
+      // preserve position when prepending older rows (items added at top)
       logList.scrollTop = prevScrollTop + (logList.scrollHeight - prevScrollHeight);
+    } else {
+      // items appended at bottom or filter change — keep scroll position exactly as-is
+      logList.scrollTop = prevScrollTop;
     }
   }
 
