@@ -364,12 +364,31 @@
     const prevScrollHeight = logList.scrollHeight;
     const prevScrollTop = logList.scrollTop;
 
+    // Pre-compute reboot boundaries from the full allRows array.
+    // A reboot is detected when deviceTime drops (device uptime counter resets).
+    const bootAtIdx = new Set();  // indices in allRows where a reboot occurred
+    let bootCount = 0;
+    const bootNumAtIdx = new Map();
+    for (let i = 1; i < allRows.length; i++) {
+      const prev = allRows[i - 1].deviceTime;
+      const cur  = allRows[i].deviceTime;
+      if (prev != null && cur != null && cur < prev) {
+        bootCount++;
+        bootAtIdx.add(i);
+        bootNumAtIdx.set(i, bootCount);
+      }
+    }
+
     const parts = [];
     for (let di = 0; di < displayRows.length; di++) {
       const { row: r, isContext, idx } = displayRows[di];
       // Insert a divider when there is a gap between consecutive included indices
       if (filter && di > 0 && idx !== displayRows[di - 1].idx + 1) {
         parts.push('<div class="context-divider">&hellip;</div>');
+      }
+      // Insert a reboot marker if this row is at a detected boot boundary
+      if (bootAtIdx.has(idx)) {
+        parts.push(`<div class="reboot-marker">\u21bb boot ${bootNumAtIdx.get(idx)}</div>`);
       }
       const cls = severityClass(r.priority);
       const extraCls = isContext ? ' context' : '';
