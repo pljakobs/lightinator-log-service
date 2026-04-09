@@ -41,6 +41,8 @@
     .reboot-marker { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: #f48771; font-size: 11px; font-weight: 600; background: #2a1a1a; border-top: 1px solid #5a2020; border-bottom: 1px solid #5a2020; }
     .reboot-marker::before, .reboot-marker::after { content: ''; flex: 1; height: 1px; background: #5a2020; }
     .loading-older { padding: 8px 12px; color: #666; font-size: 11px; text-align: center; }
+    .context-divider { display: flex; align-items: center; gap: 8px; padding: 4px 12px; color: #666; font-size: 11px; }
+    .context-divider::before, .context-divider::after { content: ''; flex: 1; height: 1px; background: #3c3c3c; }
     .log-row.context { opacity: 0.45; }
     #pager { background: #252526; border-top: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #888; }
     #auto-scroll-label { margin-left: auto; }
@@ -332,7 +334,7 @@
     const filter = filterInput.value.toLowerCase();
     const ctxN = Math.max(0, parseInt(document.getElementById('context-input').value, 10) || 0);
 
-    let displayRows; // array of { row, isContext }
+    let displayRows; // array of { row, isContext, idx }
     if (filter) {
       const matchIndices = new Set();
       allRows.forEach((r, i) => {
@@ -345,9 +347,9 @@
           included.add(j);
       }
       // sort by index to preserve order
-      displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: allRows[i], isContext: !matchIndices.has(i) }));
+      displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: allRows[i], isContext: !matchIndices.has(i), idx: i }));
     } else {
-      displayRows = allRows.map(r => ({ row: r, isContext: false }));
+      displayRows = allRows.map((r, i) => ({ row: r, isContext: false, idx: i }));
     }
 
     if (!displayRows.length) {
@@ -360,7 +362,12 @@
     const prevScrollTop = logList.scrollTop;
 
     const parts = [];
-    for (const { row: r, isContext } of displayRows) {
+    for (let di = 0; di < displayRows.length; di++) {
+      const { row: r, isContext, idx } = displayRows[di];
+      // Insert a divider when there is a gap between consecutive included indices
+      if (filter && di > 0 && idx !== displayRows[di - 1].idx + 1) {
+        parts.push('<div class="context-divider">&hellip;</div>');
+      }
       const cls = severityClass(r.priority);
       const extraCls = isContext ? ' context' : '';
       const time = r.receivedAt ? new Date(r.receivedAt).toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3}) : '';
