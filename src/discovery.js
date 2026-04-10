@@ -188,6 +188,11 @@ class ControllerDiscovery {
         splitBrain: false,
         lastSeen: new Date().toISOString(),
         lastLogReceived: existing.lastLogReceived || null,
+        // Preserve fields fetched from /info?v=2 so they survive refresh cycles
+        // where the per-controller /info fetch might be slow or temporarily fail.
+        soc:        existing.soc,
+        buildType:  existing.buildType,
+        gitVersion: existing.gitVersion,
       });
       updatedIps.add(ip);
       this.extraSeeds.delete(ip); // promoted to known
