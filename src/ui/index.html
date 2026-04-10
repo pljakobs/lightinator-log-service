@@ -29,7 +29,7 @@
     #log-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
     #log-toolbar { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; }
     #log-list { flex: 1; overflow-y: auto; padding: 0; }
-    .log-row { display: grid; grid-template-columns: 180px 80px 120px 1fr; gap: 8px; padding: 3px 12px; border-bottom: 1px solid #2a2a2a; align-items: baseline; }
+    .log-row { display: grid; gap: 8px; padding: 3px 12px; border-bottom: 1px solid #2a2a2a; align-items: baseline; }
     .log-row:hover { background: #2d2d2d; }
     .log-row.err { color: #f48771; }
     .log-row.warn { color: #cca700; }
@@ -37,9 +37,20 @@
     .col-tag { color: #4ec9b0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .col-app { color: #dcdcaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .col-msg { white-space: pre-wrap; word-break: break-word; }
+    #log-toolbar { position: relative; }
+    #log-header-row { display: grid; gap: 8px; padding: 4px 12px; background: #1e1e1e; border-bottom: 1px solid #3c3c3c; flex-shrink: 0; user-select: none; font-size: 10px; }
+    .hdr-cell { color: #777; text-transform: uppercase; letter-spacing: 0.06em; display: flex; align-items: center; white-space: nowrap; overflow: hidden; position: relative; padding-right: 12px; }
+    .resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: col-resize; }
+    .resize-handle::after { content: ''; position: absolute; right: 2px; top: 2px; bottom: 2px; width: 2px; background: #3c3c3c; border-radius: 1px; }
+    .resize-handle:hover::after, .resize-handle.active::after { background: #888; }
+    #col-picker { display: none; position: absolute; top: 100%; background: #252526; border: 1px solid #3c3c3c; border-radius: 4px; padding: 8px 12px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.5); min-width: 110px; }
+    #col-picker.open { display: block; }
+    #col-picker label { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; color: #ccc; font-size: 12px; white-space: nowrap; }
+    .log-row.raw-row { display: block; white-space: pre-wrap; word-break: break-all; color: #9cdcfe; }
     #log-list .empty { padding: 24px; color: #666; text-align: center; }
-    .reboot-marker { display: flex; align-items: center; gap: 8px; padding: 6px 12px; color: #f48771; font-size: 11px; font-weight: 600; background: #2a1a1a; border-top: 1px solid #5a2020; border-bottom: 1px solid #5a2020; }
-    .reboot-marker::before, .reboot-marker::after { content: ''; flex: 1; height: 1px; background: #5a2020; }
+    .reboot-marker { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 11px; font-weight: 700; background: #444; border-top: 1px solid #666; border-bottom: 1px solid #666; }
+    .reboot-marker::before, .reboot-marker::after { content: ''; flex: 1; height: 1px; background: #666; }
+    .reboot-marker-label { background: #ccc; color: #111; padding: 1px 8px; border-radius: 3px; letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
     .loading-older { padding: 8px 12px; color: #666; font-size: 11px; text-align: center; }
     .context-divider { display: flex; align-items: center; gap: 8px; padding: 4px 12px; color: #666; font-size: 11px; }
     .context-divider::before, .context-divider::after { content: ''; flex: 1; height: 1px; background: #3c3c3c; }
@@ -98,7 +109,7 @@
 <header>
   <h1>&#9889; Lightinator Logs</h1>
   <input id="filter-input" type="search" placeholder="Filter messages…" />
-  <label title="Lines of context shown before and after each search hit">Context: <input id="context-input" type="number" min="0" max="50" value="0" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
+  <label title="Lines of context around each search hit. -1 = show all lines (matches highlighted, rest dimmed)">Context: <input id="context-input" type="number" min="-1" max="50" value="0" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
   <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
   <span id="status">Loading…</span>
   <span id="loki-dot" title="Loki: checking…" style="font-size:16px;line-height:1;color:#555;cursor:default" aria-label="Loki status">&#9679;</span>
@@ -120,7 +131,12 @@
       <button id="load-older-btn" style="display:none">Load older</button>
       <span id="log-count" style="font-size:11px;color:#888"></span>
       <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
+      <button id="col-picker-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">Columns &#9660;</button>
+      <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px"><input type="checkbox" id="raw-mode-toggle" /> Raw</label>
+      <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px" title="Sort displayed rows by the device uptime timestamp embedded in each message"><input type="checkbox" id="sort-device-time" /> Sort by device time</label>
+      <div id="col-picker"></div>
     </div>
+    <div id="log-header-row"></div>
     <div id="log-list"><div class="empty">Select a source on the left</div></div>
     <div id="pager">
       <span id="pager-info"></span>
@@ -332,28 +348,135 @@
     return '';
   }
 
+  // ── Column state ───────────────────────────────────────────────
+  const columns = [
+    { id: 'time', label: 'Time',    width: 160, visible: true },
+    { id: 'tag',  label: 'Tag',     width: 90,  visible: true },
+    { id: 'app',  label: 'App',     width: 140, visible: true },
+    { id: 'msg',  label: 'Message', width: null, visible: true },
+  ];
+
+  const colStyleEl = document.createElement('style');
+  document.head.appendChild(colStyleEl);
+
+  function saveColState() {
+    try { localStorage.setItem('lls-columns', JSON.stringify(columns.map(c => ({ id: c.id, width: c.width, visible: c.visible })))); } catch {}
+  }
+
+  function loadColState() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('lls-columns') || '[]');
+      for (const s of saved) {
+        const col = columns.find(c => c.id === s.id);
+        if (col) { if (s.width != null) col.width = s.width; if (s.visible != null) col.visible = s.visible; }
+      }
+    } catch {}
+  }
+
+  function updateGridTemplate() {
+    const rawMode = document.getElementById('raw-mode-toggle')?.checked;
+    if (rawMode) {
+      colStyleEl.textContent = '#log-header-row { grid-template-columns: 1fr; }';
+    } else {
+      const tpl = columns.filter(c => c.visible).map(c => c.id === 'msg' ? '1fr' : c.width + 'px').join(' ');
+      colStyleEl.textContent = `.log-row, #log-header-row { grid-template-columns: ${tpl}; }`;
+    }
+    renderHeader();
+  }
+
+  function renderHeader() {
+    const hdr = document.getElementById('log-header-row');
+    if (!hdr) return;
+    const rawMode = document.getElementById('raw-mode-toggle')?.checked;
+    if (rawMode) { hdr.innerHTML = '<div class="hdr-cell">Raw</div>'; return; }
+    hdr.innerHTML = columns.filter(c => c.visible).map(c =>
+      `<div class="hdr-cell">${escHtml(c.label)}${c.id !== 'msg' ? `<span class="resize-handle" data-col="${c.id}"></span>` : ''}</div>`
+    ).join('');
+    hdr.querySelectorAll('.resize-handle').forEach(h => h.addEventListener('mousedown', startResize));
+  }
+
+  function startResize(e) {
+    e.preventDefault();
+    const col = columns.find(c => c.id === e.target.dataset.col);
+    if (!col) return;
+    e.target.classList.add('active');
+    const startX = e.clientX, startW = col.width;
+    function onMove(ev) { col.width = Math.max(40, startW + (ev.clientX - startX)); updateGridTemplate(); }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      saveColState();
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
   let _loadingOlder = false;
+  function renderLogs() {
+    const rawFilter = filterInput.value.trim();
+    // Parse optional boot:N / boot:-1 prefix out of the filter string
+    let bootFilter = null; // null = no boot filter
+    let textFilter = rawFilter.toLowerCase();
+    const bootMatch = rawFilter.match(/(?:^|\s)boot:(-?\d+)(?:\s|$)/i);
+    if (bootMatch) {
+      bootFilter = parseInt(bootMatch[1], 10);
+      textFilter = rawFilter.replace(bootMatch[0], ' ').trim().toLowerCase();
+    }
+    // Resolve negative boot index like journald: -1 = latest, -2 = one before, …
+    if (bootFilter !== null && bootFilter < 0) {
+      const maxBoot = allRows.reduce((m, r) => Math.max(m, r.boot ?? 0), 0);
+      bootFilter = maxBoot + 1 + bootFilter; // e.g. -1 → maxBoot
+    }
 
-  function renderLogs(prepend = false) {
-    const filter = filterInput.value.toLowerCase();
-    const ctxN = Math.max(0, parseInt(document.getElementById('context-input').value, 10) || 0);
+    const ctxRaw = parseInt(document.getElementById('context-input').value, 10);
+    const ctxUnlimited = ctxRaw === -1;
+    const ctxN = ctxUnlimited ? 0 : Math.max(0, ctxRaw || 0);
 
-    let displayRows; // array of { row, isContext, idx }
-    if (filter) {
+    // Pre-filter by boot number if specified
+    const bootRows = bootFilter !== null ? allRows.filter(r => (r.boot ?? 0) === bootFilter) : allRows;
+
+    let displayRows; // array of { row, isContext }
+    if (textFilter) {
       const matchIndices = new Set();
-      allRows.forEach((r, i) => {
-        if ((r.message||'').toLowerCase().includes(filter) || (r.tag||'').toLowerCase().includes(filter))
+      bootRows.forEach((r, i) => {
+        if ((r.message||'').toLowerCase().includes(textFilter) || (r.tag||'').toLowerCase().includes(textFilter))
           matchIndices.add(i);
       });
-      const included = new Set();
-      for (const idx of matchIndices) {
-        for (let j = Math.max(0, idx - ctxN); j <= Math.min(allRows.length - 1, idx + ctxN); j++)
-          included.add(j);
+      if (ctxUnlimited) {
+        // Show every row; non-matching rows are dimmed as context
+        displayRows = bootRows.map((row, i) => ({ row, isContext: !matchIndices.has(i) }));
+      } else {
+        const included = new Set();
+        for (const idx of matchIndices) {
+          for (let j = Math.max(0, idx - ctxN); j <= Math.min(bootRows.length - 1, idx + ctxN); j++)
+            included.add(j);
+        }
+        displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: bootRows[i], isContext: !matchIndices.has(i) }));
       }
-      // sort by index to preserve order
-      displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: allRows[i], isContext: !matchIndices.has(i), idx: i }));
     } else {
-      displayRows = allRows.map((r, i) => ({ row: r, isContext: false, idx: i }));
+      displayRows = bootRows.map(r => ({ row: r, isContext: false }));
+    }
+
+    if (document.getElementById('sort-device-time').checked) {
+      // Sort by boot ascending first, then by deviceTime ascending within each
+      // boot. Without the boot-first key, pre-net buffer messages from boot N+1
+      // (tiny deviceTime values) interleave with boot N regular messages that
+      // cover the same uptime range, causing boot dividers to flip back and
+      // forth and the same section to appear repeated in the UI.
+      // Entries without a deviceTime sort after all timed entries in their boot,
+      // preserving original receive order among themselves.
+      displayRows = displayRows
+        .map((r, i) => ({ r, i }))
+        .sort((a, b) => {
+          const ba = a.r.row.boot ?? 0;
+          const bb = b.r.row.boot ?? 0;
+          if (ba !== bb) return ba - bb;
+          const ta = a.r.row.deviceTime ?? Infinity;
+          const tb = b.r.row.deviceTime ?? Infinity;
+          if (ta !== tb) return ta - tb;
+          return a.i - b.i; // stable: preserve receive order for ties (including all nulls)
+        })
+        .map(({ r }) => r);
     }
 
     if (!displayRows.length) {
@@ -365,55 +488,31 @@
     const prevScrollHeight = logList.scrollHeight;
     const prevScrollTop = logList.scrollTop;
 
-    // Pre-compute reboot boundaries from the full allRows array.
-    // Primary: nonce change (nonce is calculated once per boot, so a new value = reboot).
-    // Fallback: deviceTime drop (for old firmware without nonce support).
-    const bootAtIdx = new Set();  // indices in allRows where a reboot occurred
-    let bootCount = 0;
-    const bootNumAtIdx = new Map();
-    for (let i = 1; i < allRows.length; i++) {
-      const prevNonce = allRows[i - 1].bootNonce;
-      const curNonce  = allRows[i].bootNonce;
-      let isReboot = false;
-      if (curNonce !== undefined && prevNonce !== undefined) {
-        // Both lines have a nonce — a change means a reboot
-        isReboot = curNonce !== prevNonce;
-      } else if (curNonce === undefined && prevNonce === undefined) {
-        // Neither has a nonce (old firmware) — fall back to deviceTime drop
-        const prevDt = allRows[i - 1].deviceTime;
-        const curDt  = allRows[i].deviceTime;
-        if (prevDt != null && curDt != null && curDt < prevDt) isReboot = true;
-      } else if (curNonce !== undefined && prevNonce === undefined) {
-        // Transition from no-nonce to nonce firmware — treat as a reboot
-        isReboot = true;
-      }
-      if (isReboot) {
-        bootCount++;
-        bootAtIdx.add(i);
-        bootNumAtIdx.set(i, bootCount);
-      }
-    }
-
+    const rawMode = document.getElementById('raw-mode-toggle').checked;
     const parts = [];
-    for (let di = 0; di < displayRows.length; di++) {
-      const { row: r, isContext, idx } = displayRows[di];
-      // Insert a divider when there is a gap between consecutive included indices
-      if (filter && di > 0 && idx !== displayRows[di - 1].idx + 1) {
-        parts.push('<div class="context-divider">&hellip;</div>');
-      }
-      // Insert a reboot marker if this row is at a detected boot boundary
-      if (bootAtIdx.has(idx)) {
-        parts.push(`<div class="reboot-marker">\u21bb boot ${bootNumAtIdx.get(idx)}</div>`);
+    let lastBoot = undefined;
+    for (const { row: r, isContext } of displayRows) {
+      // Insert a boot divider whenever the boot number changes (and we're not in raw mode)
+      if (!rawMode && r.boot !== undefined && r.boot !== lastBoot) {
+        if (lastBoot !== undefined || bootFilter === null) {
+          parts.push(`<div class="reboot-marker"><span class="reboot-marker-label">&#x21bb; boot ${r.boot}</span></div>`);
+        }
+        lastBoot = r.boot;
       }
       const cls = severityClass(r.priority);
       const extraCls = isContext ? ' context' : '';
+      if (rawMode) {
+        parts.push(`<div class="log-row raw-row${cls?' '+cls:''}${extraCls}">${escHtml(r.raw||'')}</div>`);
+        continue;
+      }
       const time = r.receivedAt ? new Date(r.receivedAt).toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3}) : '';
-      parts.push(`<div class="log-row${cls?' '+cls:''}${extraCls}">
-        <span class="col-time">${time}</span>
-        <span class="col-tag" title="${escHtml(r.tag||'')}">${escHtml(r.tag||'')}</span>
-        <span class="col-app" title="${escHtml(r.app||'')}">${escHtml(r.app||'')}</span>
-        <span class="col-msg">${escHtml(r.message||r.raw||'')}</span>
-      </div>`);
+      const cellMap = {
+        time: `<span class="col-time">${time}</span>`,
+        tag:  `<span class="col-tag" title="${escHtml(r.tag||'')}">${escHtml(r.tag||'')}</span>`,
+        app:  `<span class="col-app" title="${escHtml(r.app||'')}">${escHtml(r.app||'')}</span>`,
+        msg:  `<span class="col-msg">${escHtml(r.message||r.raw||'')}</span>`,
+      };
+      parts.push(`<div class="log-row${cls?' '+cls:''}${extraCls}">${columns.filter(c => c.visible).map(c => cellMap[c.id]||'').join('')}</div>`);
     }
     logList.innerHTML = parts.join('');
 
@@ -487,6 +586,29 @@
   filterInput.addEventListener('input', renderLogs);
   document.getElementById('context-input').addEventListener('input', renderLogs);
 
+  document.getElementById('raw-mode-toggle').addEventListener('change', () => { updateGridTemplate(); renderLogs(); });
+  document.getElementById('sort-device-time').addEventListener('change', renderLogs);
+
+  const colPickerBtn = document.getElementById('col-picker-btn');
+  const colPickerEl  = document.getElementById('col-picker');
+  colPickerBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (colPickerEl.classList.contains('open')) { colPickerEl.classList.remove('open'); return; }
+    colPickerEl.innerHTML = columns.map(c =>
+      `<label><input type="checkbox" data-col="${c.id}" ${c.visible ? 'checked' : ''} />${escHtml(c.label)}</label>`
+    ).join('');
+    colPickerEl.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const col = columns.find(c => c.id === cb.dataset.col);
+        if (col) { col.visible = cb.checked; updateGridTemplate(); renderLogs(); saveColState(); }
+      });
+    });
+    colPickerEl.classList.add('open');
+  });
+  document.addEventListener('click', (e) => {
+    if (!colPickerEl.contains(e.target) && e.target !== colPickerBtn) colPickerEl.classList.remove('open');
+  });
+
   autoRefresh.addEventListener('change', () => {
     clearInterval(refreshTimer);
     if (autoRefresh.checked) {
@@ -494,7 +616,23 @@
     }
   });
 
+  // Ctrl+A inside the log area selects log content only (not the whole page UI)
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+      const active = document.activeElement;
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return;
+      e.preventDefault();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(logList);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+
   // Init
+  loadColState();
+  updateGridTemplate();
   loadSources();
   loadControllers();
   refreshTimer = setInterval(async () => { await loadSources(); if (currentIp) await fetchLogs(); }, 5000);

@@ -128,6 +128,36 @@ class LogStorage {
     );
     this.sourceMeta.clear();
   }
+
+  /**
+   * Read the most recent `boot` counter stored for an IP from its ndjson file.
+   * Returns 0 if the file doesn't exist or no record has a boot field.
+   * Called on service startup so the in-memory boot counter resumes correctly.
+   */
+  async lastBootFor(ip) {
+    const filePath = this.filePathForIp(ip);
+    try {
+      const stat = await fs.stat(filePath);
+      // Read only the last 512 bytes — enough to find the last record
+      const readLen = Math.min(512, stat.size);
+      const buf = Buffer.alloc(readLen);
+      const handle = await fs.open(filePath, "r");
+      try {
+        await handle.read(buf, 0, readLen, stat.size - readLen);
+      } finally {
+        await handle.close();
+      }
+      const chunk = buf.toString("utf8");
+      const lines = chunk.split("\n").filter(Boolean);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const rec = JSON.parse(lines[i]);
+          if (typeof rec.boot === "number") return rec.boot;
+        } catch {}
+      }
+    } catch {}
+    return 0;
+  }
 }
 
 module.exports = { LogStorage };

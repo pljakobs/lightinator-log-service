@@ -80,6 +80,18 @@ async function main() {
   });
   await storage.init();
 
+  // Per-source boot counters. Loaded from stored records on startup so the
+  // counter survives service restarts. Incremented each time a restart sentinel
+  // arrives. Stamped onto every stored record as `boot`.
+  const bootCounters = new Map();
+  // Last seen restart nonce per IP — used to deduplicate the 3× sentinel
+  // copies the firmware sends to protect against UDP packet loss.
+  const bootNonces = new Map();
+  for (const src of storage.listSources()) {
+    const last = await storage.lastBootFor(src.ip);
+    bootCounters.set(src.ip, last);
+  }
+
   const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
   await loki.loadConfig();
 
@@ -377,6 +389,27 @@ async function main() {
     try {
       const raw = msg.toString("utf8");
       const record = parseSyslogLine(raw, rinfo.address);
+
+      // Boot detection: new firmware embeds the nonce on every packet header,
+      // so we can assign lines to the correct boot the moment any packet arrives
+      // with a previously-unseen nonce — no need to wait for the sentinel.
+      // Old firmware only carries the nonce on the sentinel (isRestartMarker),
+      // handled by the same path since bootNonce is also populated from the
+      // message body as a fallback in the parser.
+      const nonce = record.bootNonce;
+      const lastNonce = bootNonces.get(rinfo.address);
+      if (nonce !== undefined) {
+        if (nonce !== lastNonce) {
+          // New nonce → new boot.
+          bootNonces.set(rinfo.address, nonce);
+          bootCounters.set(rinfo.address, (bootCounters.get(rinfo.address) || 0) + 1);
+        } else if (record.isRestartMarker) {
+          // Same nonce + sentinel = duplicate copy of the 3× sentinel — discard.
+          return;
+        }
+      }
+      record.boot = bootCounters.get(rinfo.address) || 0;
+
       await storage.append(rinfo.address, record);
       discovery.addSeenIp(rinfo.address);
       discovery.recordLogReceived(rinfo.address);
