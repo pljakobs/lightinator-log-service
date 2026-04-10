@@ -27,6 +27,44 @@ const https = require("https");
 const fs = require("fs/promises");
 const path = require("path");
 
+// ── SQLite helpers ────────────────────────────────────────────────────────────
+
+function rowToController(row) {
+  return {
+    ip:               row.ip,
+    hostname:         row.hostname,
+    deviceId:         row.device_id,
+    name:             row.name,
+    groups:           JSON.parse(row.groups || "[]"),
+    loggingEnabled:   row.logging_enabled !== 0,
+    reachable:        row.reachable       !== 0,
+    splitBrain:       row.split_brain     !== 0,
+    lastSeen:         row.last_seen,
+    lastLogReceived:  row.last_log_received,
+    soc:              row.soc,
+    buildType:        row.build_type,
+    gitVersion:       row.git_version,
+  };
+}
+
+function controllerToRow(c) {
+  return {
+    ip:                c.ip,
+    hostname:          c.hostname          || null,
+    device_id:         c.deviceId          || null,
+    name:              c.name              || null,
+    groups:            JSON.stringify(c.groups || []),
+    logging_enabled:   c.loggingEnabled !== false ? 1 : 0,
+    reachable:         c.reachable  ? 1 : 0,
+    split_brain:       c.splitBrain ? 1 : 0,
+    last_seen:         c.lastSeen          || null,
+    last_log_received: c.lastLogReceived    || null,
+    soc:               c.soc               || null,
+    build_type:        c.buildType         || null,
+    git_version:       c.gitVersion        || null,
+  };
+}
+
 const DEFAULT_PORT = 80;
 const REQUEST_TIMEOUT_MS = 5000;
 
@@ -73,12 +111,14 @@ class ControllerDiscovery {
     controllerPort = DEFAULT_PORT,
     refreshIntervalMs = 300_000,
     statePath = null,
+    db = null,
     onUpdate = null,
   } = {}) {
     this.seedHosts = seedHosts;
     this.controllerPort = controllerPort;
     this.refreshIntervalMs = refreshIntervalMs;
     this.statePath = statePath;
+    this.db = db;
     this.onUpdate = onUpdate;
 
     /** ip → { hostname, ip, deviceId, name, groups:[{id,name}], loggingEnabled, reachable, lastSeen, lastLogReceived } */
@@ -290,12 +330,51 @@ class ControllerDiscovery {
   }
 
   async _loadState() {
+    if (this.db) {
+      // ── SQLite path ──────────────────────────────────────────────────────
+      const rows = this.db.prepare("SELECT * FROM controllers").all();
+      if (rows.length > 0) {
+        for (const row of rows) {
+          this.controllers.set(row.ip, { ...rowToController(row), reachable: false });
+        }
+        console.log(`Discovery: loaded ${rows.length} persisted controller(s)`);
+        return;
+      }
+
+      // Empty DB — attempt one-time migration from legacy controllers.json
+      if (this.statePath) {
+        try {
+          const raw = await fs.readFile(this.statePath, "utf8");
+          const arr = JSON.parse(raw);
+          const upsert = this.db.prepare(`
+            INSERT OR REPLACE INTO controllers
+              (ip, hostname, device_id, name, groups, logging_enabled, reachable,
+               split_brain, last_seen, last_log_received, soc, build_type, git_version)
+            VALUES
+              (@ip, @hostname, @device_id, @name, @groups, @logging_enabled, @reachable,
+               @split_brain, @last_seen, @last_log_received, @soc, @build_type, @git_version)
+          `);
+          const importAll = this.db.transaction((entries) => {
+            for (const e of entries) upsert.run(controllerToRow(e));
+          });
+          importAll(arr);
+          for (const entry of arr) {
+            this.controllers.set(entry.ip, { ...entry, reachable: false });
+          }
+          console.log(`Discovery: migrated ${arr.length} controller(s) from controllers.json`);
+        } catch {
+          // No JSON file — first run
+        }
+      }
+      return;
+    }
+
+    // ── Legacy file-only path (no db passed) ─────────────────────────────
     if (!this.statePath) return;
     try {
       const raw = await fs.readFile(this.statePath, "utf8");
       const arr = JSON.parse(raw);
       for (const entry of arr) {
-        // Mark all as offline until next refresh confirms them
         this.controllers.set(entry.ip, { ...entry, reachable: false });
       }
       console.log(`Discovery: loaded ${arr.length} persisted controller(s)`);
@@ -304,18 +383,36 @@ class ControllerDiscovery {
     }
   }
 
-  async _saveState() {
-    if (!this.statePath) return;
-    try {
-      await fs.mkdir(path.dirname(this.statePath), { recursive: true });
-      await fs.writeFile(
+  _saveState() {
+    if (this.db) {
+      try {
+        const upsert = this.db.prepare(`
+          INSERT OR REPLACE INTO controllers
+            (ip, hostname, device_id, name, groups, logging_enabled, reachable,
+             split_brain, last_seen, last_log_received, soc, build_type, git_version)
+          VALUES
+            (@ip, @hostname, @device_id, @name, @groups, @logging_enabled, @reachable,
+             @split_brain, @last_seen, @last_log_received, @soc, @build_type, @git_version)
+        `);
+        const saveAll = this.db.transaction((entries) => {
+          for (const e of entries) upsert.run(controllerToRow(e));
+        });
+        saveAll(Array.from(this.controllers.values()));
+      } catch (e) {
+        console.warn(`Discovery: failed to save state to SQLite: ${e.message}`);
+      }
+      return Promise.resolve();
+    }
+
+    // Legacy JSON fallback
+    if (!this.statePath) return Promise.resolve();
+    return fs.mkdir(path.dirname(this.statePath), { recursive: true })
+      .then(() => fs.writeFile(
         this.statePath,
         JSON.stringify(Array.from(this.controllers.values()), null, 2),
         "utf8",
-      );
-    } catch (e) {
-      console.warn(`Discovery: failed to save state: ${e.message}`);
-    }
+      ))
+      .catch((e) => console.warn(`Discovery: failed to save state: ${e.message}`));
   }
 
   setLogging(ip, enabled) {

@@ -25,6 +25,8 @@ const config = {
   discoveryRefreshMs: envInt("LLS_DISCOVERY_REFRESH_MS", 300_000),
   // Path to persist the controller list so it survives restarts
   controllerStatePath: process.env.LLS_CONTROLLER_STATE || path.join(process.cwd(), "data", "controllers.json"),
+  dbPath: process.env.LLS_DB_PATH || path.join(process.cwd(), "data", "db.sqlite"),
+  maxRowsPerIp: envInt("LLS_MAX_ROWS_PER_IP", 10_000),
   // Path to the runtime service.env config file (edited via UI)
   serviceEnvPath: process.env.LLS_SERVICE_ENV || path.join(process.cwd(), "data", "service.env"),
   // The IP/hostname controllers should use to reach this service's syslog UDP port.
