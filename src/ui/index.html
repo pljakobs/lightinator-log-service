@@ -130,6 +130,8 @@
       <span id="log-title" style="color:#9cdcfe">Select a source</span>
       <button id="load-older-btn" style="display:none">Load older</button>
       <span id="log-count" style="font-size:11px;color:#888"></span>
+      <button id="boot-prev-btn" title="Jump to previous boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Previous boot">&#x21bb;&#x25B4;</button>
+      <button id="boot-next-btn" title="Jump to next boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Next boot">&#x21bb;&#x25BE;</button>
       <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
       <button id="col-picker-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">Columns &#9660;</button>
       <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px"><input type="checkbox" id="raw-mode-toggle" /> Raw</label>
@@ -245,7 +247,9 @@
   const logTitle = document.getElementById('log-title');
   const logCount = document.getElementById('log-count');
   const pagerInfo = document.getElementById('pager-info');
-  const loadOlderBtn = document.getElementById('load-older-btn');
+  const loadOlderBtn  = document.getElementById('load-older-btn');
+  const bootPrevBtn   = document.getElementById('boot-prev-btn');
+  const bootNextBtn   = document.getElementById('boot-next-btn');
   const purgeBtn = document.getElementById('purge-btn');
   const filterInput = document.getElementById('filter-input');
   const autoRefresh = document.getElementById('auto-refresh');
@@ -335,6 +339,7 @@
       pagerInfo.textContent = nextBefore ? `Showing last ${allRows.length} of ${data.total}` : `All ${allRows.length} entries`;
       loadOlderBtn.style.display = nextBefore != null ? '' : 'none';
       renderLogs();
+      updateBootNavButtons();
     } catch (e) {
       logList.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
     }
@@ -583,11 +588,59 @@
     await loadSources();
   });
 
-  filterInput.addEventListener('input', renderLogs);
-  document.getElementById('context-input').addEventListener('input', renderLogs);
+  filterInput.addEventListener('input', () => { renderLogs(); updateBootNavButtons(); });
+  document.getElementById('context-input').addEventListener('input', () => { renderLogs(); updateBootNavButtons(); });
 
-  document.getElementById('raw-mode-toggle').addEventListener('change', () => { updateGridTemplate(); renderLogs(); });
-  document.getElementById('sort-device-time').addEventListener('change', renderLogs);
+  document.getElementById('raw-mode-toggle').addEventListener('change', () => { updateGridTemplate(); renderLogs(); updateBootNavButtons(); });
+  document.getElementById('sort-device-time').addEventListener('change', () => { renderLogs(); updateBootNavButtons(); });
+
+  // ── Boot navigation ──────────────────────────────────────────────────────
+  function hasBootFilter() {
+    return /(?:^|\s)boot:-?\d+(?:\s|$)/i.test(filterInput.value.trim());
+  }
+
+  function updateBootNavButtons() {
+    const markers = logList.querySelectorAll('.reboot-marker');
+    const show = currentIp && (hasBootFilter() || markers.length > 0);
+    bootPrevBtn.style.display = show ? '' : 'none';
+    bootNextBtn.style.display = show ? '' : 'none';
+  }
+
+  bootPrevBtn.addEventListener('click', () => {
+    if (hasBootFilter()) {
+      // Within a single boot: jump to top of the list
+      logList.scrollTop = 0;
+      return;
+    }
+    // No filter: find the reboot marker closest above the current viewport top
+    const markers = [...logList.querySelectorAll('.reboot-marker')];
+    if (!markers.length) return;
+    const threshold = logList.scrollTop - 4;
+    // Search from the bottom up for the last marker above the threshold
+    const target = [...markers].reverse().find(m => m.offsetTop < threshold);
+    if (target) {
+      logList.scrollTop = target.offsetTop - 4;
+    } else {
+      // Already above the first marker — scroll to very top
+      logList.scrollTop = 0;
+    }
+  });
+
+  bootNextBtn.addEventListener('click', () => {
+    if (hasBootFilter()) {
+      // Within a single boot: jump to bottom of the list
+      logList.scrollTop = logList.scrollHeight;
+      return;
+    }
+    // No filter: find the reboot marker closest below the current viewport top
+    const markers = [...logList.querySelectorAll('.reboot-marker')];
+    if (!markers.length) return;
+    const threshold = logList.scrollTop + 4;
+    const target = markers.find(m => m.offsetTop > threshold);
+    if (target) {
+      logList.scrollTop = target.offsetTop - 4;
+    }
+  });
 
   const colPickerBtn = document.getElementById('col-picker-btn');
   const colPickerEl  = document.getElementById('col-picker');
