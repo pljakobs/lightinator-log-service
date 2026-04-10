@@ -1,4 +1,5 @@
-const SYSLOG_RE = /^<(\d+)>\s*([^\s]+)\s+([^:]+):\s*(\d+)\s*(.*)$/;
+// Format: <priority> tag app: [nonce:NNNN] [deviceTime] message
+const SYSLOG_RE = /^<(\d+)>\s*([^\s]+)\s+([^:]+):\s*(?:nonce:\d+\s+)?(?:(\d+)(?:\s+|$))?(.*)$/;
 
 function parseSyslogLine(rawLine, sourceIp) {
   const line = String(rawLine || "").trim();
@@ -26,7 +27,7 @@ function parseSyslogLine(rawLine, sourceIp) {
     priority: Number.parseInt(match[1], 10),
     tag: match[2],
     app: match[3].trim(),
-    deviceTime: Number.parseInt(match[4], 10),
+    deviceTime: match[4] != null ? Number.parseInt(match[4], 10) : null,
     message: match[5] || "",
     raw: line,
   };
