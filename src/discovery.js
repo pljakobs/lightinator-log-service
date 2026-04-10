@@ -122,7 +122,11 @@ class ControllerDiscovery {
   }
 
   async refresh() {
-    const allSeeds = [...this.seedHosts, ...this.extraSeeds];
+    const allSeeds = [
+      ...this.seedHosts,
+      ...this.extraSeeds,
+      ...[...this.controllers.keys()],
+    ];
 
     let hostsData = null;
     let appData = null;
