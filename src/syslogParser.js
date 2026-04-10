@@ -1,5 +1,6 @@
-// Format: <priority> tag app: [nonce:NNNN] [deviceTime] message
-const SYSLOG_RE = /^<(\d+)>\s*([^\s]+)\s+([^:]+):\s*(?:nonce:\d+\s+)?(?:(\d+)(?:\s+|$))?(.*)$/;
+// Group layout:
+//   1 priority  2 hostname  3 tag  4 nonce (optional, new fw)  5 deviceTime (optional)  6 message
+const SYSLOG_RE = /^<(\d+)>\s*([^\s]+)\s+([^:]+):\s*(?:nonce:(\d+)\s+)?(?:(\d+)(?:\s+|$))?(.*)$/;
 
 function parseSyslogLine(rawLine, sourceIp) {
   const line = String(rawLine || "").trim();
@@ -15,6 +16,7 @@ function parseSyslogLine(rawLine, sourceIp) {
       tag: null,
       app: null,
       deviceTime: null,
+      bootNonce: undefined,
       message: line,
       raw: line,
     };
@@ -27,8 +29,9 @@ function parseSyslogLine(rawLine, sourceIp) {
     priority: Number.parseInt(match[1], 10),
     tag: match[2],
     app: match[3].trim(),
-    deviceTime: match[4] != null ? Number.parseInt(match[4], 10) : null,
-    message: match[5] || "",
+    deviceTime: match[5] != null ? Number.parseInt(match[5], 10) : null,
+    bootNonce: match[4] != null ? Number.parseInt(match[4], 10) : undefined,
+    message: match[6] || "",
     raw: line,
   };
 }

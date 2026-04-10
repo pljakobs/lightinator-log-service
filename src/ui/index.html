@@ -365,14 +365,28 @@
     const prevScrollTop = logList.scrollTop;
 
     // Pre-compute reboot boundaries from the full allRows array.
-    // A reboot is detected when deviceTime drops (device uptime counter resets).
+    // Primary: nonce change (nonce is calculated once per boot, so a new value = reboot).
+    // Fallback: deviceTime drop (for old firmware without nonce support).
     const bootAtIdx = new Set();  // indices in allRows where a reboot occurred
     let bootCount = 0;
     const bootNumAtIdx = new Map();
     for (let i = 1; i < allRows.length; i++) {
-      const prev = allRows[i - 1].deviceTime;
-      const cur  = allRows[i].deviceTime;
-      if (prev != null && cur != null && cur < prev) {
+      const prevNonce = allRows[i - 1].bootNonce;
+      const curNonce  = allRows[i].bootNonce;
+      let isReboot = false;
+      if (curNonce !== undefined && prevNonce !== undefined) {
+        // Both lines have a nonce — a change means a reboot
+        isReboot = curNonce !== prevNonce;
+      } else if (curNonce === undefined && prevNonce === undefined) {
+        // Neither has a nonce (old firmware) — fall back to deviceTime drop
+        const prevDt = allRows[i - 1].deviceTime;
+        const curDt  = allRows[i].deviceTime;
+        if (prevDt != null && curDt != null && curDt < prevDt) isReboot = true;
+      } else if (curNonce !== undefined && prevNonce === undefined) {
+        // Transition from no-nonce to nonce firmware — treat as a reboot
+        isReboot = true;
+      }
+      if (isReboot) {
         bootCount++;
         bootAtIdx.add(i);
         bootNumAtIdx.set(i, bootCount);
