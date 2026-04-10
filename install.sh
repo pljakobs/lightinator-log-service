@@ -16,7 +16,7 @@ IMAGE="ghcr.io/pljakobs/lightinator-log-service:prod"
 SYS_DATA="/var/lib/${SERVICE_NAME}/data"
 USR_DATA="${HOME}/${SERVICE_NAME}/data"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-QUADLET_SRC="${SCRIPT_DIR}/quadlet/${SERVICE_NAME}.container"
+QUADLET_SRC="${SCRIPT_DIR}/quadlet/${SERVICE_NAME}@.container"
 ENV_EXAMPLE="${SCRIPT_DIR}/config/service.env.example"
 
 # ── terminal helpers ──────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ place_env() {
 
 # ── Podman Quadlet ────────────────────────────────────────────────────────────
 do_quadlet() {
-  local scope="$1" dest data ctl
+  local scope="$1" dest data ctl image_tag unit_name
   if [ "$scope" = system ]; then
     dest=/etc/containers/systemd
     data=$SYS_DATA
@@ -107,35 +107,58 @@ do_quadlet() {
 
   printf '\n  \033[1mQuadlet install\033[0m  (scope: %s)\n\n' "$scope"
 
+  # ── select image flavour ────────────────────────────────────────────────────
+  printf '  \033[0;34m?\033[0m  Image flavour:\n'
+  printf '    1) prod     (stable, merged to prod branch)  — recommended\n'
+  printf '    2) develop  (latest development build)\n'
+  printf '    Choice [1]: '
+  read -r _pick 2>/dev/null || _pick=1
+  case "${_pick:-1}" in
+    2) image_tag=develop ;;
+    *) image_tag=prod ;;
+  esac
+  info "Using image tag: $image_tag"
+  unit_name="${SERVICE_NAME}@${image_tag}"
+
   [ -f "$QUADLET_SRC" ] || die "Quadlet source not found: $QUADLET_SRC"
   mkdir -p "$dest" "$data"
 
+  # ── transition: remove old non-template unit if present ──────────────────
+  _old_unit="${dest}/${SERVICE_NAME}.container"
+  if [ -f "$_old_unit" ]; then
+    warn "Found existing non-template unit at $_old_unit — migrating to template."
+    $ctl stop "$SERVICE_NAME" 2>/dev/null || true
+    rm -f "$_old_unit"
+    info "Old unit removed."
+  fi
+
+  # ── install template unit ──────────────────────────────────────────────────
   if [ "$scope" = user ]; then
     # patch volume and EnvironmentFile paths for per-user layout
     sed "s|/var/lib/${SERVICE_NAME}/data|${data}|g" \
-      "$QUADLET_SRC" > "${dest}/${SERVICE_NAME}.container"
+      "$QUADLET_SRC" > "${dest}/${SERVICE_NAME}@.container"
   else
-    cp "$QUADLET_SRC" "${dest}/${SERVICE_NAME}.container"
+    cp "$QUADLET_SRC" "${dest}/${SERVICE_NAME}@.container"
   fi
-  info "Quadlet unit → ${dest}/${SERVICE_NAME}.container"
+  info "Quadlet template unit → ${dest}/${SERVICE_NAME}@.container"
 
   place_env "$data"
 
   $ctl daemon-reload
   info "daemon-reload complete"
 
-  if yn "Start ${SERVICE_NAME} now?" y; then
+  if yn "Start ${unit_name} now?" y; then
     # Quadlet units are auto-enabled via WantedBy= in the .container file.
     # 'enable' is not supported on generated units — just start.
-    $ctl start "$SERVICE_NAME"
+    $ctl start "$unit_name"
     info "Service started"
   fi
 
-  if yn "Enable podman-auto-update.timer (pulls new :prod image automatically)?" y; then
+  if yn "Enable podman-auto-update.timer (auto-restarts on new :${image_tag} image)?" y; then
     $ctl enable --now podman-auto-update.timer
     info "podman-auto-update.timer enabled"
   else
-    warn "Auto-update not enabled. Run manually: podman auto-update"
+    warn "Auto-update not enabled. Run 'systemctl restart ${unit_name}' to pull manually."
   fi
 }
 

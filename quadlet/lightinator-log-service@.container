@@ -1,0 +1,109 @@
+# lightinator-log-service@.container
+#
+# Podman Quadlet template unit file.
+# The instance name (the part after @) selects the image tag:
+#
+#   systemctl start lightinator-log-service@prod     ← stable production image
+#   systemctl start lightinator-log-service@develop  ← latest development build
+#
+# Quadlet is built into Podman ≥ 4.4 and generates a systemd service
+# automatically — no hand-written .service file required.
+#
+# ── System-wide install (requires root) ────────────────────────────────────
+#   sudo mkdir -p /var/lib/lightinator-log-service/data
+#   sudo cp lightinator-log-service@.container /etc/containers/systemd/
+#
+#   # Copy and edit the runtime config (all LLS_* settings live here):
+#   sudo cp config/service.env.example /var/lib/lightinator-log-service/data/service.env
+#   sudo nano /var/lib/lightinator-log-service/data/service.env
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lightinator-log-service@prod
+#   sudo systemctl enable --now podman-auto-update.timer
+#
+# ── Per-user install (alternative) ──────────────────────────────────────────
+#   mkdir -p ~/.config/containers/systemd
+#   cp lightinator-log-service@.container ~/.config/containers/systemd/
+#   # Update Volume= and EnvironmentFile= below to use %h instead of /var/lib
+#
+#   mkdir -p ~/lightinator-log-service/data
+#   cp config/service.env.example ~/lightinator-log-service/data/service.env
+#   nano ~/lightinator-log-service/data/service.env
+#
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now lightinator-log-service@prod
+#   systemctl --user enable --now podman-auto-update.timer
+#
+# ── Transition from non-template unit ────────────────────────────────────────
+#   If lightinator-log-service.container is already installed, install.sh
+#   handles migration automatically (stop + remove old unit, install template,
+#   daemon-reload, start new instance).  To migrate manually:
+#
+#   sudo systemctl stop lightinator-log-service
+#   sudo rm /etc/containers/systemd/lightinator-log-service.container
+#   sudo cp lightinator-log-service@.container /etc/containers/systemd/
+#   sudo systemctl daemon-reload
+#   sudo systemctl start lightinator-log-service@prod
+#
+# ── Manual image update ───────────────────────────────────────────────────────
+#   systemctl restart lightinator-log-service@prod
+#   ExecStartPre pulls the latest :%i digest before the container starts.
+#   Note: systemctl reload sends SIGHUP only — use restart to trigger a pull.
+#
+# ── Auto-update via podman-auto-update ──────────────────────────────────────
+#   The AutoUpdate=registry line below instructs podman-auto-update to pull
+#   a fresh image and restart the unit when the registry digest changes.
+#   Enable the timer once:
+#     systemctl --user enable --now podman-auto-update.timer
+#
+# ── Status / logs ────────────────────────────────────────────────────────────
+#   systemctl status lightinator-log-service@prod
+#   journalctl -u lightinator-log-service@prod -f
+#
+# ── Data directory ───────────────────────────────────────────────────────────
+#   Both prod and develop instances share the same data directory.
+#   Create before first start: mkdir -p /var/lib/lightinator-log-service/data
+
+[Unit]
+Description=Lightinator Log Service (%i)
+Documentation=https://github.com/pljakobs/lightinator-log-service
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/pljakobs/lightinator-log-service:%i
+ContainerName=lightinator-log-service-%i
+
+# Host networking is required for mDNS advertisement and UDP syslog reception.
+Network=host
+
+# Persistent data: logs, loki.json, controllers.json, service.env
+# For per-user install, replace /var/lib/... with %h/lightinator-log-service/data
+Volume=/var/lib/lightinator-log-service/data:/app/data:Z
+
+# Runtime configuration file — edit this instead of touching the quadlet.
+# Copy config/service.env.example to this path and uncomment/set values.
+# For per-user install: %h/lightinator-log-service/data/service.env
+#
+# NOTE: Podman Quadlet does not support the systemd '-' optional-file prefix here.
+# The file is created automatically by ExecStartPre below if absent.
+EnvironmentFile=/var/lib/lightinator-log-service/data/service.env
+
+# Pull and restart automatically when the :%i image digest changes in GHCR.
+# A new :prod image is published only when changes are merged into the prod
+# branch; :develop tracks the develop branch.
+AutoUpdate=registry
+
+[Service]
+# Create data dir and an empty service.env if they do not yet exist.
+# This avoids a startup failure when EnvironmentFile= path is absent.
+ExecStartPre=-/bin/sh -c 'mkdir -p /var/lib/lightinator-log-service/data && test -f /var/lib/lightinator-log-service/data/service.env || touch /var/lib/lightinator-log-service/data/service.env'
+# Pull the latest image digest before (re)starting — ensures a manual
+# 'systemctl restart' always gets the newest build.  The '-' prefix makes
+# this non-fatal so the service can still start when the host is offline.
+ExecStartPre=-/usr/bin/podman pull ghcr.io/pljakobs/lightinator-log-service:%i
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
