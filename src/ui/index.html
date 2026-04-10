@@ -334,7 +334,7 @@
       logCount.textContent = `${data.total} entries`;
       pagerInfo.textContent = nextBefore ? `Showing last ${allRows.length} of ${data.total}` : `All ${allRows.length} entries`;
       loadOlderBtn.style.display = nextBefore != null ? '' : 'none';
-      renderLogs(prepend);
+      renderLogs();
     } catch (e) {
       logList.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
     }
@@ -518,7 +518,7 @@
 
     if (autoScroll.checked && wasAtBottom) {
       logList.scrollTop = logList.scrollHeight;
-    } else if (prepend) {
+    } else if (_loadingOlder) {
       // preserve position when prepending older rows (items added at top)
       logList.scrollTop = prevScrollTop + (logList.scrollHeight - prevScrollHeight);
     } else {
