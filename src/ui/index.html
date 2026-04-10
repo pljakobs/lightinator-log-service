@@ -457,6 +457,11 @@
             included.add(j);
         }
         displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: bootRows[i], isContext: !matchIndices.has(i), srcIdx: i }));
+        // Mark gap boundaries before any re-sort so the flag survives reordering.
+        for (let di = 1; di < displayRows.length; di++) {
+          if (displayRows[di].srcIdx !== displayRows[di - 1].srcIdx + 1)
+            displayRows[di].hasGapBefore = true;
+        }
       }
     } else {
       displayRows = bootRows.map(r => ({ row: r, isContext: false }));
@@ -494,16 +499,14 @@
     const prevScrollTop = logList.scrollTop;
 
     const rawMode = document.getElementById('raw-mode-toggle').checked;
-    const sortingByDeviceTime = document.getElementById('sort-device-time').checked;
     const parts = [];
     let lastBoot = undefined;
-    let lastSrcIdx = undefined;
-    for (const { row: r, isContext, srcIdx } of displayRows) {
-      // Insert a gap divider when context rows have a gap (only when not re-sorted)
-      if (!rawMode && !sortingByDeviceTime && srcIdx !== undefined && lastSrcIdx !== undefined && srcIdx !== lastSrcIdx + 1) {
+    for (const { row: r, isContext, hasGapBefore } of displayRows) {
+      // Insert a gap divider wherever lines were omitted between context groups.
+      // hasGapBefore is computed before any re-sort so it is always correct.
+      if (!rawMode && hasGapBefore) {
         parts.push('<div class="context-divider">&hellip;</div>');
       }
-      lastSrcIdx = srcIdx !== undefined ? srcIdx : lastSrcIdx;
       // Insert a boot divider whenever the boot number changes (and we're not in raw mode)
       if (!rawMode && r.boot !== undefined && r.boot !== lastBoot) {
         if (lastBoot !== undefined || bootFilter === null) {
