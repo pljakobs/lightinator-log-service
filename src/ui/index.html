@@ -364,12 +364,45 @@
     const prevScrollHeight = logList.scrollHeight;
     const prevScrollTop = logList.scrollTop;
 
+    // Pre-compute reboot boundaries from the full allRows array.
+    // Primary: nonce change (nonce is calculated once per boot, so a new value = reboot).
+    // Fallback: deviceTime drop (for old firmware without nonce support).
+    const bootAtIdx = new Set();  // indices in allRows where a reboot occurred
+    let bootCount = 0;
+    const bootNumAtIdx = new Map();
+    for (let i = 1; i < allRows.length; i++) {
+      const prevNonce = allRows[i - 1].bootNonce;
+      const curNonce  = allRows[i].bootNonce;
+      let isReboot = false;
+      if (curNonce !== undefined && prevNonce !== undefined) {
+        // Both lines have a nonce — a change means a reboot
+        isReboot = curNonce !== prevNonce;
+      } else if (curNonce === undefined && prevNonce === undefined) {
+        // Neither has a nonce (old firmware) — fall back to deviceTime drop
+        const prevDt = allRows[i - 1].deviceTime;
+        const curDt  = allRows[i].deviceTime;
+        if (prevDt != null && curDt != null && curDt < prevDt) isReboot = true;
+      } else if (curNonce !== undefined && prevNonce === undefined) {
+        // Transition from no-nonce to nonce firmware — treat as a reboot
+        isReboot = true;
+      }
+      if (isReboot) {
+        bootCount++;
+        bootAtIdx.add(i);
+        bootNumAtIdx.set(i, bootCount);
+      }
+    }
+
     const parts = [];
     for (let di = 0; di < displayRows.length; di++) {
       const { row: r, isContext, idx } = displayRows[di];
       // Insert a divider when there is a gap between consecutive included indices
       if (filter && di > 0 && idx !== displayRows[di - 1].idx + 1) {
         parts.push('<div class="context-divider">&hellip;</div>');
+      }
+      // Insert a reboot marker if this row is at a detected boot boundary
+      if (bootAtIdx.has(idx)) {
+        parts.push(`<div class="reboot-marker">\u21bb boot ${bootNumAtIdx.get(idx)}</div>`);
       }
       const cls = severityClass(r.priority);
       const extraCls = isContext ? ' context' : '';
