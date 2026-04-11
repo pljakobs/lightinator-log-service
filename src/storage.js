@@ -1,162 +1,199 @@
 const fs = require("fs/promises");
 const path = require("path");
 
-function ipToFileName(ip) {
-  return String(ip).replace(/[^a-zA-Z0-9.-]/g, "_") + ".ndjson";
+/**
+ * Map a SQLite logs row (snake_case columns) back to the record shape the
+ * rest of the application expects (camelCase).
+ */
+function rowToRecord(row) {
+  return {
+    id:          row.id,
+    receivedAt:  row.received_at,
+    sourceIp:    row.source_ip,
+    priority:    row.priority,
+    tag:         row.tag,
+    app:         row.app,
+    message:     row.message,
+    boot:        row.boot        != null ? row.boot        : undefined,
+    bootNonce:   row.boot_nonce  != null ? row.boot_nonce  : undefined,
+    deviceTime:  row.device_time != null ? row.device_time : undefined,
+    raw:         row.raw,
+  };
 }
 
 class LogStorage {
-  constructor({ dataDir, maxBytesPerIp }) {
+  /**
+   * @param {object} opts
+   * @param {import('better-sqlite3').Database} opts.db
+   * @param {string} opts.dataDir      Legacy NDJSON directory — used only once for migration.
+   * @param {number} opts.maxRowsPerIp Max rows kept per IP (oldest trimmed on insert).
+   */
+  constructor({ db, dataDir, maxRowsPerIp = 10_000 }) {
+    this.db = db;
     this.dataDir = dataDir;
-    this.maxBytesPerIp = maxBytesPerIp;
-    this.sourceMeta = new Map();
-  }
+    this.maxRowsPerIp = maxRowsPerIp;
 
-  async init() {
-    await fs.mkdir(this.dataDir, { recursive: true });
-    const files = await fs.readdir(this.dataDir);
-    for (const file of files) {
-      if (!file.endsWith(".ndjson")) continue;
-      const sourceIp = file.replace(/\.ndjson$/, "").replace(/_/g, ":");
-      const fullPath = path.join(this.dataDir, file);
-      const stats = await fs.stat(fullPath);
-      this.sourceMeta.set(sourceIp, {
-        ip: sourceIp,
-        bytes: stats.size,
-        entries: null,
-        lastSeen: stats.mtime.toISOString(),
-      });
-    }
-  }
-
-  filePathForIp(ip) {
-    return path.join(this.dataDir, ipToFileName(ip));
-  }
-
-  async append(ip, record) {
-    const filePath = this.filePathForIp(ip);
-    const line = JSON.stringify(record) + "\n";
-    await fs.appendFile(filePath, line, "utf8");
-    await this.trimFileIfNeeded(filePath);
-
-    const stats = await fs.stat(filePath);
-    this.sourceMeta.set(ip, {
-      ip,
-      bytes: stats.size,
-      entries: null,
-      lastSeen: record.receivedAt,
-    });
-  }
-
-  async trimFileIfNeeded(filePath) {
-    const stats = await fs.stat(filePath);
-    if (stats.size <= this.maxBytesPerIp) return;
-
-    const handle = await fs.open(filePath, "r");
-    try {
-      const toKeep = this.maxBytesPerIp;
-      const start = Math.max(0, stats.size - toKeep);
-      const buf = Buffer.alloc(stats.size - start);
-      await handle.read(buf, 0, buf.length, start);
-
-      let content = buf.toString("utf8");
-      const firstNewline = content.indexOf("\n");
-      if (firstNewline !== -1) {
-        content = content.slice(firstNewline + 1);
-      }
-      await fs.writeFile(filePath, content, "utf8");
-    } finally {
-      await handle.close();
-    }
-  }
-
-  listSources() {
-    return Array.from(this.sourceMeta.values()).sort((a, b) => {
-      if (!a.lastSeen) return 1;
-      if (!b.lastSeen) return -1;
-      return b.lastSeen.localeCompare(a.lastSeen);
-    });
-  }
-
-  async getLogs({ ip, limit = 200, before = 0 }) {
-    const filePath = this.filePathForIp(ip);
-
-    let content;
-    try {
-      content = await fs.readFile(filePath, "utf8");
-    } catch (err) {
-      if (err.code === "ENOENT") {
-        return { items: [], total: 0, before, nextBefore: null };
-      }
-      throw err;
-    }
-
-    const lines = content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    const total = lines.length;
-    const safeBefore = Math.max(0, Number.parseInt(before, 10) || 0);
-    const safeLimit = Math.max(1, Math.min(2000, Number.parseInt(limit, 10) || 200));
-
-    const end = Math.max(0, total - safeBefore);
-    const start = Math.max(0, end - safeLimit);
-    const page = lines.slice(start, end).map((line) => JSON.parse(line));
-
-    const hasMoreOlder = start > 0;
-    return {
-      items: page,
-      total,
-      before: safeBefore,
-      nextBefore: hasMoreOlder ? safeBefore + page.length : null,
-    };
-  }
-
-  async purgeIp(ip) {
-    const filePath = this.filePathForIp(ip);
-    await fs.rm(filePath, { force: true });
-    this.sourceMeta.delete(ip);
-  }
-
-  async purgeAll() {
-    const files = await fs.readdir(this.dataDir);
-    await Promise.all(
-      files
-        .filter((file) => file.endsWith(".ndjson"))
-        .map((file) => fs.rm(path.join(this.dataDir, file), { force: true })),
+    // Pre-compile frequently used statements (better-sqlite3 is synchronous)
+    this._stmtInsert = db.prepare(`
+      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot, boot_nonce, device_time, raw)
+      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot, @boot_nonce, @device_time, @raw)
+    `);
+    this._stmtTrimCheck = db.prepare(
+      "SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?",
     );
-    this.sourceMeta.clear();
+    this._stmtTrim = db.prepare(`
+      DELETE FROM logs WHERE ip = ? AND id < (
+        SELECT id FROM logs WHERE ip = ? ORDER BY id DESC LIMIT 1 OFFSET ?
+      )
+    `);
+    this._stmtLastBoot = db.prepare(
+      "SELECT boot FROM logs WHERE ip = ? AND boot IS NOT NULL ORDER BY id DESC LIMIT 1",
+    );
+    this._stmtSources = db.prepare(`
+      SELECT ip, MAX(received_at) AS last_seen, COUNT(*) AS entries
+      FROM logs
+      GROUP BY ip
+      ORDER BY last_seen DESC
+    `);
+    this._stmtLogs = db.prepare(`
+      SELECT * FROM logs
+      WHERE ip = ? AND (? = 0 OR id < ?)
+      ORDER BY id DESC
+      LIMIT ?
+    `);
+    this._stmtCount = db.prepare("SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?");
+    this._stmtPurgeIp  = db.prepare("DELETE FROM logs WHERE ip = ?");
+    this._stmtPurgeAll = db.prepare("DELETE FROM logs");
   }
 
   /**
-   * Read the most recent `boot` counter stored for an IP from its ndjson file.
-   * Returns 0 if the file doesn't exist or no record has a boot field.
+   * One-time migration: import any *.ndjson files found in dataDir into the
+   * database, then rename each to *.ndjson.imported so they are not re-read.
+   */
+  async init() {
+    let files;
+    try {
+      files = await fs.readdir(this.dataDir);
+    } catch {
+      return; // dataDir doesn't exist yet — nothing to migrate
+    }
+
+    const ndjsonFiles = files.filter((f) => f.endsWith(".ndjson"));
+    if (ndjsonFiles.length === 0) return;
+
+    console.log(`Storage: migrating ${ndjsonFiles.length} NDJSON file(s) to SQLite…`);
+
+    const insertMany = this.db.transaction((records) => {
+      for (const r of records) this._stmtInsert.run(r);
+    });
+
+    for (const file of ndjsonFiles) {
+      const fullPath = path.join(this.dataDir, file);
+      try {
+        const content = await fs.readFile(fullPath, "utf8");
+        const records = content
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .map((l) => {
+            try { return JSON.parse(l); } catch { return null; }
+          })
+          .filter(Boolean)
+          .map((rec) => ({
+            ip:          rec.sourceIp || file.replace(/\.ndjson$/, "").replace(/_/g, ":"),
+            received_at: rec.receivedAt  || new Date().toISOString(),
+            source_ip:   rec.sourceIp   || null,
+            priority:    rec.priority   ?? null,
+            tag:         rec.tag        || null,
+            app:         rec.app        || null,
+            message:     rec.message    || null,
+            boot:        rec.boot       ?? null,
+            boot_nonce:  rec.bootNonce  ?? null,
+            device_time: rec.deviceTime ?? null,
+            raw:         rec.raw        || null,
+          }));
+
+        insertMany(records);
+        await fs.rename(fullPath, fullPath + ".imported");
+        console.log(`Storage: migrated ${records.length} record(s) from ${file}`);
+      } catch (err) {
+        console.warn(`Storage: failed to migrate ${file}: ${err.message}`);
+      }
+    }
+  }
+
+  append(ip, record) {
+    this._stmtInsert.run({
+      ip,
+      received_at: record.receivedAt  || new Date().toISOString(),
+      source_ip:   record.sourceIp   || ip,
+      priority:    record.priority   ?? null,
+      tag:         record.tag        || null,
+      app:         record.app        || null,
+      message:     record.message    || null,
+      boot:        record.boot       ?? null,
+      boot_nonce:  record.bootNonce  ?? null,
+      device_time: record.deviceTime ?? null,
+      raw:         record.raw        || null,
+    });
+
+    // Trim to maxRowsPerIp — the sub-SELECT finds the id at position
+    // (maxRowsPerIp - 1) from the newest end (0-based OFFSET); all older rows
+    // are deleted, leaving exactly maxRowsPerIp rows.
+    const { cnt } = this._stmtTrimCheck.get(ip);
+    if (cnt > this.maxRowsPerIp) {
+      this._stmtTrim.run(ip, ip, this.maxRowsPerIp - 1);
+    }
+
+    return Promise.resolve();
+  }
+
+  listSources() {
+    return this._stmtSources.all().map((row) => ({
+      ip:       row.ip,
+      entries:  row.entries,
+      lastSeen: row.last_seen,
+      bytes:    null, // no longer tracked
+    }));
+  }
+
+  getLogs({ ip, limit = 200, before = 0 }) {
+    const safeLimit  = Math.max(1, Math.min(2000, Number.parseInt(limit, 10)  || 200));
+    const safeBefore = Math.max(0,               Number.parseInt(before, 10)  || 0);
+
+    // Fetch one extra row to detect whether older records exist
+    const rows = this._stmtLogs.all(ip, safeBefore, safeBefore, safeLimit + 1);
+
+    const hasMore = rows.length > safeLimit;
+    if (hasMore) rows.pop();
+
+    // rows are newest-first; reverse to chronological order for the UI
+    const items = rows.reverse().map(rowToRecord);
+    const nextBefore = hasMore ? rows[0].id : null;
+
+    const { cnt: total } = this._stmtCount.get(ip);
+
+    return Promise.resolve({ items, total, before: safeBefore, nextBefore });
+  }
+
+  purgeIp(ip) {
+    this._stmtPurgeIp.run(ip);
+    return Promise.resolve();
+  }
+
+  purgeAll() {
+    this._stmtPurgeAll.run();
+    return Promise.resolve();
+  }
+
+  /**
+   * Return the most recent `boot` counter stored for an IP from SQLite.
+   * Returns 0 if no records exist or no record has a boot value.
    * Called on service startup so the in-memory boot counter resumes correctly.
    */
-  async lastBootFor(ip) {
-    const filePath = this.filePathForIp(ip);
-    try {
-      const stat = await fs.stat(filePath);
-      // Read only the last 512 bytes — enough to find the last record
-      const readLen = Math.min(512, stat.size);
-      const buf = Buffer.alloc(readLen);
-      const handle = await fs.open(filePath, "r");
-      try {
-        await handle.read(buf, 0, readLen, stat.size - readLen);
-      } finally {
-        await handle.close();
-      }
-      const chunk = buf.toString("utf8");
-      const lines = chunk.split("\n").filter(Boolean);
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try {
-          const rec = JSON.parse(lines[i]);
-          if (typeof rec.boot === "number") return rec.boot;
-        } catch {}
-      }
-    } catch {}
-    return 0;
+  lastBootFor(ip) {
+    const row = this._stmtLastBoot.get(ip);
+    return Promise.resolve(row ? row.boot : 0);
   }
 }
 

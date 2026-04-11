@@ -8,6 +8,7 @@ const os = require("os");
 const { config } = require("./config");
 const { parseSyslogLine } = require("./syslogParser");
 const { LogStorage } = require("./storage");
+const { openDatabase } = require("./db");
 const { advertiseMdns } = require("./mdns");
 const { LokiForwarder } = require("./loki");
 const { ControllerDiscovery } = require("./discovery");
@@ -64,7 +65,7 @@ function getLiveValues() {
     LLS_UDP_PORT: String(config.udpPort),
     LLS_HTTP_PORT: String(config.httpPort),
     LLS_RETENTION_DAYS: String(config.retentionDays),
-    LLS_MAX_BYTES_PER_IP: String(config.maxBytesPerIp),
+    LLS_MAX_ROWS_PER_IP: String(config.maxRowsPerIp),
     LLS_DISCOVERY_REFRESH_MS: String(config.discoveryRefreshMs),
     LLS_MDNS_HOST: config.mdnsHost,
   };
@@ -74,9 +75,12 @@ async function main() {
   // Ensure the data directory exists (parent of loki.json, controllers.json, service.env)
   await fs.mkdir(path.dirname(config.lokiConfigFile), { recursive: true });
 
+  const db = openDatabase(config.dbPath);
+
   const storage = new LogStorage({
+    db,
     dataDir: config.dataDir,
-    maxBytesPerIp: config.maxBytesPerIp,
+    maxRowsPerIp: config.maxRowsPerIp,
   });
   await storage.init();
 
@@ -119,6 +123,7 @@ async function main() {
     controllerPort: config.discoveryControllerPort,
     refreshIntervalMs: config.discoveryRefreshMs,
     statePath: config.controllerStatePath,
+    db,
     onUpdate: (controllers) => {
       // Push group memberships back into Loki controller config
       // so streams are labelled with group names automatically.

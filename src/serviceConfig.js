@@ -50,10 +50,10 @@ const SETTINGS_SCHEMA = [
     type: "number",
   },
   {
-    key: "LLS_MAX_BYTES_PER_IP",
-    label: "Max log bytes per controller",
-    description: "Maximum raw bytes stored per controller before rotation. Default 20971520 (20 MB).",
-    placeholder: "20971520",
+    key: "LLS_MAX_ROWS_PER_IP",
+    label: "Max log rows per controller",
+    description: "Maximum log lines stored per controller before oldest lines are trimmed. Default 10000.",
+    placeholder: "10000",
     type: "number",
   },
   {
