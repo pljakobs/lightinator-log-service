@@ -103,6 +103,21 @@
     .ctrl-fw { font-size: 11px; color: #888; }
     .fw-debug { color: #4ec9b0; }
     .fw-release { color: #888; font-style: italic; }
+    /* ── Global Search ──────────────────────────────────────────────────── */
+    #search-panel { flex: 1; display: none; flex-direction: column; overflow: hidden; }
+    #search-panel.visible { display: flex; }
+    #search-toolbar { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+    #search-results { flex: 1; overflow-y: auto; }
+    #search-results .log-row { grid-template-columns: 130px auto auto 1fr; }
+    #search-results .empty { padding: 24px; color: #666; text-align: center; }
+    .search-group-hdr { padding: 5px 12px 3px; font-size: 11px; color: #888; display: flex; align-items: center; gap: 8px; border-top: 2px solid #3c3c3c; margin-top: 4px; }
+    .search-group-hdr:first-child { border-top: none; margin-top: 0; }
+    .search-ip { color: #9cdcfe; font-weight: 600; font-size: 12px; }
+    .search-sep { display: flex; align-items: center; gap: 8px; padding: 2px 12px; color: #555; font-size: 11px; }
+    .search-sep::before, .search-sep::after { content: ''; flex: 1; height: 1px; background: #2a2a2a; }
+    .log-row.search-match { background: rgba(30, 100, 180, 0.2); }
+    .log-row.search-match:hover { background: rgba(30, 100, 180, 0.32); }
+    mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; padding: 0 1px; }
   </style>
 </head>
 <body>
@@ -124,6 +139,7 @@
     <div class="tab-bar">
       <div class="tab active" data-tab="logs">Logs</div>
       <div class="tab" data-tab="controllers">Controllers</div>
+      <div class="tab" data-tab="search">Search</div>
     </div>
     <div id="log-panel" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
     <div id="log-toolbar">
@@ -154,6 +170,16 @@
         <span id="ctrl-status" style="font-size:11px;color:#888"></span>
       </div>
       <div id="ctrl-grid" class="ctrl-grid"></div>
+    </div>
+    <div id="search-panel">
+      <div id="search-toolbar">
+        <input id="search-query" type="search" placeholder="Search all controllers…" style="background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:5px 8px;font-family:inherit;font-size:13px;flex:1;min-width:160px;max-width:420px" />
+        <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px">Context: <input id="search-context-n" type="number" min="0" max="20" value="3" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
+        <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px">Limit: <select id="search-limit-sel" style="background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="200">200</option></select></label>
+        <button id="search-btn">Search</button>
+        <span id="search-status" style="font-size:12px;color:#888"></span>
+      </div>
+      <div id="search-results"><div class="empty">Enter a search term above and press Search</div></div>
     </div>
   </div>
 </main>
@@ -731,9 +757,10 @@
       tab.classList.add('active');
       const name = tab.dataset.tab;
       document.getElementById('log-panel').style.display = name === 'logs' ? 'flex' : 'none';
-      const cp = document.getElementById('controllers-panel');
-      cp.classList.toggle('visible', name === 'controllers');
+      document.getElementById('controllers-panel').classList.toggle('visible', name === 'controllers');
+      document.getElementById('search-panel').classList.toggle('visible', name === 'search');
       if (name === 'controllers') loadControllers();
+      if (name === 'search') document.getElementById('search-query').focus();
     });
   });
 
@@ -1149,6 +1176,98 @@
 
   document.getElementById('svc-save').addEventListener('click', () => saveSvcSettings(false));
   document.getElementById('svc-restart').addEventListener('click', () => saveSvcSettings(true));
+
+  // ── Global Search ──────────────────────────────────────────────────────
+  const searchQueryEl  = document.getElementById('search-query');
+  const searchCtxEl    = document.getElementById('search-context-n');
+  const searchLimitEl  = document.getElementById('search-limit-sel');
+  const searchBtnEl    = document.getElementById('search-btn');
+  const searchStatusEl = document.getElementById('search-status');
+  const searchResultsEl = document.getElementById('search-results');
+
+  async function runSearch() {
+    const q = (searchQueryEl.value || '').trim();
+    if (!q) return;
+    searchBtnEl.disabled = true;
+    searchStatusEl.textContent = 'Searching…';
+    searchResultsEl.innerHTML = '';
+    try {
+      const limit   = searchLimitEl.value;
+      const context = searchCtxEl.value;
+      const data = await fetchJson(`${BASE}/api/v1/search?q=${encodeURIComponent(q)}&limit=${limit}&context=${context}`);
+      renderSearchResults(data, q);
+      const ipCount = new Set(data.snippets.map(s => s.ip)).size;
+      searchStatusEl.textContent = data.total === 0
+        ? 'No matches'
+        : `${data.total} match${data.total !== 1 ? 'es' : ''} across ${ipCount} controller${ipCount !== 1 ? 's' : ''}`;
+    } catch (e) {
+      searchStatusEl.textContent = 'Error: ' + e.message;
+    } finally {
+      searchBtnEl.disabled = false;
+    }
+  }
+
+  function markMatch(text, q) {
+    if (!q || !text) return escHtml(text || '');
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const parts = [];
+    let lastIdx = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      parts.push(escHtml(text.slice(lastIdx, m.index)));
+      parts.push('<mark>' + escHtml(m[0]) + '</mark>');
+      lastIdx = m.index + m[0].length;
+    }
+    parts.push(escHtml(text.slice(lastIdx)));
+    return parts.join('');
+  }
+
+  function renderSearchResults(data, q) {
+    if (!data.snippets || !data.snippets.length) {
+      searchResultsEl.innerHTML = '<div class="empty">No matches found</div>';
+      return;
+    }
+    // Group snippets by IP, preserving order of first occurrence
+    const groups = new Map();
+    for (const s of data.snippets) {
+      if (!groups.has(s.ip)) groups.set(s.ip, []);
+      groups.get(s.ip).push(s);
+    }
+    const parts = [];
+    for (const [ip, snippets] of groups) {
+      const matchCount = snippets.length;
+      parts.push(`<div class="search-group-hdr"><span class="search-ip">${escHtml(ip)}</span><span style="color:#555">&middot;</span><span>${matchCount} match${matchCount !== 1 ? 'es' : ''}</span><button class="src-link" data-ip="${escHtml(ip)}" style="margin-left:auto;font-size:11px;background:#3c3c3c;padding:2px 8px">View logs</button></div>`);
+      for (let si = 0; si < snippets.length; si++) {
+        const snip = snippets[si];
+        if (si > 0) parts.push('<div class="search-sep">&hellip;</div>');
+        for (const r of snip.rows) {
+          const cls = severityClass(r.priority);
+          const matchCls = r._match ? ' search-match' : ' context';
+          const time = r.receivedAt ? new Date(r.receivedAt).toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3}) : '';
+          const msgHtml = r._match ? markMatch(r.message || r.raw || '', q) : escHtml(r.message || r.raw || '');
+          parts.push(`<div class="log-row${cls ? ' '+cls : ''}${matchCls}">` +
+            `<span class="col-time">${time}</span>` +
+            `<span class="col-tag" title="${escHtml(r.tag||'')}">${escHtml(r.tag||'')}</span>` +
+            `<span class="col-app" title="${escHtml(r.app||'')}">${escHtml(r.app||'')}</span>` +
+            `<span class="col-msg">${msgHtml}</span>` +
+            `</div>`);
+        }
+      }
+    }
+    searchResultsEl.innerHTML = parts.join('');
+    // "View logs" buttons: switch to Logs tab and select the source
+    searchResultsEl.querySelectorAll('.src-link').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ip = btn.dataset.ip;
+        const logsTab = document.querySelector('.tab[data-tab="logs"]');
+        if (logsTab) logsTab.click();
+        selectSource(ip);
+      });
+    });
+  }
+
+  searchBtnEl.addEventListener('click', runSearch);
+  searchQueryEl.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
 </script>
 </body>
 </html>

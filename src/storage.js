@@ -64,6 +64,15 @@ class LogStorage {
     this._stmtCount = db.prepare("SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?");
     this._stmtPurgeIp  = db.prepare("DELETE FROM logs WHERE ip = ?");
     this._stmtPurgeAll = db.prepare("DELETE FROM logs");
+    this._stmtSearch = db.prepare(`
+      SELECT id, ip FROM logs
+      WHERE message LIKE ? OR tag LIKE ? OR app LIKE ?
+      ORDER BY id DESC
+      LIMIT ?
+    `);
+    this._stmtSearchCtx = db.prepare(
+      "SELECT * FROM logs WHERE ip = ? AND id BETWEEN ? AND ? ORDER BY id ASC",
+    );
   }
 
   /**
@@ -184,6 +193,36 @@ class LogStorage {
   purgeAll() {
     this._stmtPurgeAll.run();
     return Promise.resolve();
+  }
+
+  /**
+   * Full-text search across all IPs.
+   * Returns up to `limit` matching rows (newest first), each with `context`
+   * rows of surrounding entries from the same IP.
+   *
+   * @param {object} opts
+   * @param {string} opts.query   Substring to match (case-insensitive via LIKE).
+   * @param {number} [opts.limit=50]   Max matching rows to return (1–200).
+   * @param {number} [opts.context=3]  Rows of context before/after each match (0–20).
+   */
+  search({ query, limit = 50, context = 3 }) {
+    const safeLimit   = Math.max(1, Math.min(200, Number.parseInt(limit,   10) || 50));
+    const safeContext = Math.max(0, Math.min(20,  Number.parseInt(context, 10) || 3));
+    const q = `%${query}%`;
+
+    const matches = this._stmtSearch.all(q, q, q, safeLimit);
+    if (!matches.length) return { query, snippets: [], total: 0 };
+
+    const matchIdSet = new Set(matches.map((m) => m.id));
+    const snippets = matches.map((match) => ({
+      ip:      match.ip,
+      matchId: match.id,
+      rows:    this._stmtSearchCtx
+        .all(match.ip, match.id - safeContext, match.id + safeContext)
+        .map((r) => ({ ...rowToRecord(r), _match: matchIdSet.has(r.id) })),
+    }));
+
+    return { query, snippets, total: matches.length };
   }
 
   /**

@@ -249,6 +249,24 @@ async function main() {
     }
   });
 
+  app.get("/api/v1/search", (req, res, next) => {
+    try {
+      const query = String(req.query.q || "").trim();
+      if (!query) {
+        res.status(400).json({ error: "Missing required query parameter: q" });
+        return;
+      }
+      const result = storage.search({
+        query,
+        limit:   req.query.limit,
+        context: req.query.context,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.get("/api/v1/loki/status", (_req, res) => {
     res.json(loki.getStatus());
   });
