@@ -14,6 +14,7 @@ function rowToRecord(row) {
     tag:         row.tag,
     app:         row.app,
     message:     row.message,
+    boot:        row.boot        != null ? row.boot        : undefined,
     bootNonce:   row.boot_nonce  != null ? row.boot_nonce  : undefined,
     deviceTime:  row.device_time != null ? row.device_time : undefined,
     raw:         row.raw,
@@ -34,8 +35,8 @@ class LogStorage {
 
     // Pre-compile frequently used statements (better-sqlite3 is synchronous)
     this._stmtInsert = db.prepare(`
-      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot_nonce, device_time, raw)
-      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot_nonce, @device_time, @raw)
+      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot, boot_nonce, device_time, raw)
+      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot, @boot_nonce, @device_time, @raw)
     `);
     this._stmtTrimCheck = db.prepare(
       "SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?",
@@ -45,6 +46,9 @@ class LogStorage {
         SELECT id FROM logs WHERE ip = ? ORDER BY id DESC LIMIT 1 OFFSET ?
       )
     `);
+    this._stmtLastBoot = db.prepare(
+      "SELECT boot FROM logs WHERE ip = ? AND boot IS NOT NULL ORDER BY id DESC LIMIT 1",
+    );
     this._stmtSources = db.prepare(`
       SELECT ip, MAX(received_at) AS last_seen, COUNT(*) AS entries
       FROM logs
@@ -103,6 +107,7 @@ class LogStorage {
             tag:         rec.tag        || null,
             app:         rec.app        || null,
             message:     rec.message    || null,
+            boot:        rec.boot       ?? null,
             boot_nonce:  rec.bootNonce  ?? null,
             device_time: rec.deviceTime ?? null,
             raw:         rec.raw        || null,
@@ -126,16 +131,18 @@ class LogStorage {
       tag:         record.tag        || null,
       app:         record.app        || null,
       message:     record.message    || null,
+      boot:        record.boot       ?? null,
       boot_nonce:  record.bootNonce  ?? null,
       device_time: record.deviceTime ?? null,
       raw:         record.raw        || null,
     });
 
-    // Trim to maxRowsPerIp — the sub-SELECT finds the id at position maxRowsPerIp
-    // from the newest end; all older rows are deleted.
+    // Trim to maxRowsPerIp — the sub-SELECT finds the id at position
+    // (maxRowsPerIp - 1) from the newest end (0-based OFFSET); all older rows
+    // are deleted, leaving exactly maxRowsPerIp rows.
     const { cnt } = this._stmtTrimCheck.get(ip);
     if (cnt > this.maxRowsPerIp) {
-      this._stmtTrim.run(ip, ip, this.maxRowsPerIp);
+      this._stmtTrim.run(ip, ip, this.maxRowsPerIp - 1);
     }
 
     return Promise.resolve();
@@ -180,33 +187,13 @@ class LogStorage {
   }
 
   /**
-   * Read the most recent `boot` counter stored for an IP from its ndjson file.
-   * Returns 0 if the file doesn't exist or no record has a boot field.
+   * Return the most recent `boot` counter stored for an IP from SQLite.
+   * Returns 0 if no records exist or no record has a boot value.
    * Called on service startup so the in-memory boot counter resumes correctly.
    */
-  async lastBootFor(ip) {
-    const filePath = this.filePathForIp(ip);
-    try {
-      const stat = await fs.stat(filePath);
-      // Read only the last 512 bytes — enough to find the last record
-      const readLen = Math.min(512, stat.size);
-      const buf = Buffer.alloc(readLen);
-      const handle = await fs.open(filePath, "r");
-      try {
-        await handle.read(buf, 0, readLen, stat.size - readLen);
-      } finally {
-        await handle.close();
-      }
-      const chunk = buf.toString("utf8");
-      const lines = chunk.split("\n").filter(Boolean);
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try {
-          const rec = JSON.parse(lines[i]);
-          if (typeof rec.boot === "number") return rec.boot;
-        } catch {}
-      }
-    } catch {}
-    return 0;
+  lastBootFor(ip) {
+    const row = this._stmtLastBoot.get(ip);
+    return Promise.resolve(row ? row.boot : 0);
   }
 }
 

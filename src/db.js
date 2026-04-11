@@ -38,6 +38,7 @@ function openDatabase(dbPath) {
       tag         TEXT,
       app         TEXT,
       message     TEXT,
+      boot        INTEGER,
       boot_nonce  INTEGER,
       device_time INTEGER,
       raw         TEXT
@@ -60,6 +61,12 @@ function openDatabase(dbPath) {
       git_version       TEXT
     );
   `);
+
+  // Migrate existing databases that pre-date the `boot` column.
+  const cols = db.pragma("table_info(logs)").map((c) => c.name);
+  if (!cols.includes("boot")) {
+    db.exec("ALTER TABLE logs ADD COLUMN boot INTEGER");
+  }
 
   return db;
 }
