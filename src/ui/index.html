@@ -52,6 +52,8 @@
     .reboot-marker::before, .reboot-marker::after { content: ''; flex: 1; height: 1px; background: #666; }
     .reboot-marker-label { background: #ccc; color: #111; padding: 1px 8px; border-radius: 3px; letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
     .loading-older { padding: 8px 12px; color: #666; font-size: 11px; text-align: center; }
+    .context-divider { display: flex; align-items: center; gap: 8px; padding: 4px 12px; color: #666; font-size: 11px; }
+    .context-divider::before, .context-divider::after { content: ''; flex: 1; height: 1px; background: #3c3c3c; }
     .log-row.context { opacity: 0.45; }
     #pager { background: #252526; border-top: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #888; }
     #auto-scroll-label { margin-left: auto; }
@@ -97,6 +99,10 @@
     .ctrl-status { font-size: 10px; }
     .ctrl-status.ok { color: #4ec9b0; }
     .ctrl-status.unreachable { color: #666; }
+    .ctrl-log-received { font-size: 10px; color: #888; }
+    .ctrl-fw { font-size: 11px; color: #888; }
+    .fw-debug { color: #4ec9b0; }
+    .fw-release { color: #888; font-style: italic; }
   </style>
 </head>
 <body>
@@ -124,6 +130,8 @@
       <span id="log-title" style="color:#9cdcfe">Select a source</span>
       <button id="load-older-btn" style="display:none">Load older</button>
       <span id="log-count" style="font-size:11px;color:#888"></span>
+      <button id="boot-prev-btn" title="Jump to previous boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Previous boot">&#x21bb;&#x25B4;</button>
+      <button id="boot-next-btn" title="Jump to next boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Next boot">&#x21bb;&#x25BE;</button>
       <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
       <button id="col-picker-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">Columns &#9660;</button>
       <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px"><input type="checkbox" id="raw-mode-toggle" /> Raw</label>
@@ -239,7 +247,9 @@
   const logTitle = document.getElementById('log-title');
   const logCount = document.getElementById('log-count');
   const pagerInfo = document.getElementById('pager-info');
-  const loadOlderBtn = document.getElementById('load-older-btn');
+  const loadOlderBtn  = document.getElementById('load-older-btn');
+  const bootPrevBtn   = document.getElementById('boot-prev-btn');
+  const bootNextBtn   = document.getElementById('boot-next-btn');
   const purgeBtn = document.getElementById('purge-btn');
   const filterInput = document.getElementById('filter-input');
   const autoRefresh = document.getElementById('auto-refresh');
@@ -285,7 +295,7 @@
       el.className = 'source-item' + (src.ip === currentIp ? ' active' : '');
       const label = src.name && src.name !== src.ip ? `<span class="source-ip">${escHtml(src.name)}</span><span class="source-meta">${escHtml(src.ip)}</span>` :
         `<span class="source-ip">${escHtml(src.ip)}</span>`;
-      const meta = (src.bytes ? Math.ceil(src.bytes/1024)+'KB ' : '') + (src.lastSeen ? new Date(src.lastSeen).toLocaleDateString() : '');
+      const meta = (src.bytes ? Math.ceil(src.bytes/1024)+'KB ' : '') + (src.lastSeen ? timeAgo(src.lastSeen) : '');
       el.innerHTML = label + `<span class="source-meta">${meta}</span>`;
       el.addEventListener('click', () => selectSource(src.ip));
       sourcesList.appendChild(el);
@@ -329,6 +339,7 @@
       pagerInfo.textContent = nextBefore ? `Showing last ${allRows.length} of ${data.total}` : `All ${allRows.length} entries`;
       loadOlderBtn.style.display = nextBefore != null ? '' : 'none';
       renderLogs();
+      updateBootNavButtons();
     } catch (e) {
       logList.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
     }
@@ -445,7 +456,12 @@
           for (let j = Math.max(0, idx - ctxN); j <= Math.min(bootRows.length - 1, idx + ctxN); j++)
             included.add(j);
         }
-        displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: bootRows[i], isContext: !matchIndices.has(i) }));
+        displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: bootRows[i], isContext: !matchIndices.has(i), srcIdx: i }));
+        // Mark gap boundaries before any re-sort so the flag survives reordering.
+        for (let di = 1; di < displayRows.length; di++) {
+          if (displayRows[di].srcIdx !== displayRows[di - 1].srcIdx + 1)
+            displayRows[di].hasGapBefore = true;
+        }
       }
     } else {
       displayRows = bootRows.map(r => ({ row: r, isContext: false }));
@@ -485,7 +501,12 @@
     const rawMode = document.getElementById('raw-mode-toggle').checked;
     const parts = [];
     let lastBoot = undefined;
-    for (const { row: r, isContext } of displayRows) {
+    for (const { row: r, isContext, hasGapBefore } of displayRows) {
+      // Insert a gap divider wherever lines were omitted between context groups.
+      // hasGapBefore is computed before any re-sort so it is always correct.
+      if (!rawMode && hasGapBefore) {
+        parts.push('<div class="context-divider">&hellip;</div>');
+      }
       // Insert a boot divider whenever the boot number changes (and we're not in raw mode)
       if (!rawMode && r.boot !== undefined && r.boot !== lastBoot) {
         if (lastBoot !== undefined || bootFilter === null) {
@@ -512,9 +533,12 @@
 
     if (autoScroll.checked && wasAtBottom) {
       logList.scrollTop = logList.scrollHeight;
-    } else {
-      // preserve position when prepending older rows
+    } else if (_loadingOlder) {
+      // preserve position when prepending older rows (items added at top)
       logList.scrollTop = prevScrollTop + (logList.scrollHeight - prevScrollHeight);
+    } else {
+      // items appended at bottom or filter change — keep scroll position exactly as-is
+      logList.scrollTop = prevScrollTop;
     }
   }
 
@@ -543,6 +567,24 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  function timeAgo(isoString) {
+    if (!isoString) return 'never';
+    const diffMs = Date.now() - new Date(isoString).getTime();
+    if (diffMs < 0) return 'just now';
+    const seconds = Math.floor(diffMs / 1000);
+    if (seconds < 30) return 'just now';
+    if (seconds < 60) return 'within one minute';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes === 1) return '1 minute ago';
+    if (minutes < 60) return minutes + ' minutes ago';
+    const hours = Math.floor(minutes / 60);
+    if (hours === 1) return '1 hour ago';
+    if (hours < 24) return hours + ' hours ago';
+    const days = Math.floor(hours / 24);
+    if (days === 1) return '1 day ago';
+    return days + ' days ago';
+  }
+
   loadOlderBtn.addEventListener('click', () => {
     if (nextBefore != null) fetchLogs(nextBefore, true);
   });
@@ -556,11 +598,59 @@
     await loadSources();
   });
 
-  filterInput.addEventListener('input', renderLogs);
-  document.getElementById('context-input').addEventListener('input', renderLogs);
+  filterInput.addEventListener('input', () => { renderLogs(); updateBootNavButtons(); });
+  document.getElementById('context-input').addEventListener('input', () => { renderLogs(); updateBootNavButtons(); });
 
-  document.getElementById('raw-mode-toggle').addEventListener('change', () => { updateGridTemplate(); renderLogs(); });
-  document.getElementById('sort-device-time').addEventListener('change', renderLogs);
+  document.getElementById('raw-mode-toggle').addEventListener('change', () => { updateGridTemplate(); renderLogs(); updateBootNavButtons(); });
+  document.getElementById('sort-device-time').addEventListener('change', () => { renderLogs(); updateBootNavButtons(); });
+
+  // ── Boot navigation ──────────────────────────────────────────────────────
+  function hasBootFilter() {
+    return /(?:^|\s)boot:-?\d+(?:\s|$)/i.test(filterInput.value.trim());
+  }
+
+  function updateBootNavButtons() {
+    const markers = logList.querySelectorAll('.reboot-marker');
+    const show = currentIp && (hasBootFilter() || markers.length > 0);
+    bootPrevBtn.style.display = show ? '' : 'none';
+    bootNextBtn.style.display = show ? '' : 'none';
+  }
+
+  bootPrevBtn.addEventListener('click', () => {
+    if (hasBootFilter()) {
+      // Within a single boot: jump to top of the list
+      logList.scrollTop = 0;
+      return;
+    }
+    // No filter: find the reboot marker closest above the current viewport top
+    const markers = [...logList.querySelectorAll('.reboot-marker')];
+    if (!markers.length) return;
+    const threshold = logList.scrollTop - 4;
+    // Search from the bottom up for the last marker above the threshold
+    const target = [...markers].reverse().find(m => m.offsetTop < threshold);
+    if (target) {
+      logList.scrollTop = target.offsetTop - 4;
+    } else {
+      // Already above the first marker — scroll to very top
+      logList.scrollTop = 0;
+    }
+  });
+
+  bootNextBtn.addEventListener('click', () => {
+    if (hasBootFilter()) {
+      // Within a single boot: jump to bottom of the list
+      logList.scrollTop = logList.scrollHeight;
+      return;
+    }
+    // No filter: find the reboot marker closest below the current viewport top
+    const markers = [...logList.querySelectorAll('.reboot-marker')];
+    if (!markers.length) return;
+    const threshold = logList.scrollTop + 4;
+    const target = markers.find(m => m.offsetTop > threshold);
+    if (target) {
+      logList.scrollTop = target.offsetTop - 4;
+    }
+  });
 
   const colPickerBtn = document.getElementById('col-picker-btn');
   const colPickerEl  = document.getElementById('col-picker');
@@ -677,13 +767,18 @@
       const cardClass = ['ctrl-card', logOn ? '' : 'logging-off', sb ? 'split-brain' : '', isDebug ? '' : 'release-build'].filter(Boolean).join(' ');
       const buildBadge = isDebug ? '' : `<span class="release-badge" title="Release build — detailed crash decode unavailable">release</span>`;
       const toggleDisabled = !isDebug ? 'disabled title="Release build — logging not useful without debug symbols"' : '';
+      const toggleBtnClass = isDebug ? 'on' : 'off';
+      const displayVersion = c.gitVersion ? escHtml(c.gitVersion) : '–';
+      const displayBuildType = c.buildType ? escHtml(c.buildType) : '–';
       return `<div class="${cardClass}" data-ip="${escHtml(c.ip)}">
         <div class="ctrl-name"><a href="http://${escHtml(c.ip)}/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none" title="Open controller UI">${escHtml(c.name || c.hostname || c.ip)}</a>${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}${buildBadge}</div>
         <div class="ctrl-ip">${escHtml(c.ip)} · ${escHtml(c.hostname||'')} · id:${escHtml(String(c.deviceId||''))}</div>
+        <div class="ctrl-fw">fw: <span class="${isDebug ? 'fw-debug' : 'fw-release'}">${displayBuildType}</span> · ${displayVersion}</div>
         <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>
         <div class="ctrl-actions">
-          <button class="toggle-btn ${logOn?'on':'off'}" ${toggleDisabled} onclick="${isDebug ? `toggleLogging('${escHtml(c.ip)}',${!logOn})` : 'void 0'}">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
-          <span class="ctrl-status ${reachable?'ok':'unreachable'}">${reachable ? '● online' : '● last seen ' + (c.lastSeen ? new Date(c.lastSeen).toLocaleDateString() : 'unknown')}</span>
+          <button class="toggle-btn ${toggleBtnClass}" ${toggleDisabled} onclick="${isDebug ? `toggleLogging('${escHtml(c.ip)}',${!logOn})` : 'void 0'}">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
+          <span class="ctrl-status ${reachable?'ok':'unreachable'}">${reachable ? '● online' : '● offline'}</span>
+          <span class="ctrl-log-received">last log received: ${timeAgo(c.lastLogReceived)}</span>
         </div>
       </div>`;
     }).join('');

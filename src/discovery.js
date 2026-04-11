@@ -81,7 +81,7 @@ class ControllerDiscovery {
     this.statePath = statePath;
     this.onUpdate = onUpdate;
 
-    /** ip → { hostname, ip, deviceId, name, groups:[{id,name}], loggingEnabled, reachable, lastSeen } */
+    /** ip → { hostname, ip, deviceId, name, groups:[{id,name}], loggingEnabled, reachable, lastSeen, lastLogReceived } */
     this.controllers = new Map();
 
     /** IPs seen via syslog that we haven't resolved yet */
@@ -95,6 +95,14 @@ class ControllerDiscovery {
     if (!this.controllers.has(ip) && !this.extraSeeds.has(ip)) {
       this.extraSeeds.add(ip);
       this.refresh().catch(() => {});
+    }
+  }
+
+  /** Called by UDP ingest to record when a log message was received from a controller */
+  recordLogReceived(ip) {
+    const c = this.controllers.get(ip);
+    if (c) {
+      this.controllers.set(ip, { ...c, lastLogReceived: new Date().toISOString() });
     }
   }
 
@@ -114,7 +122,11 @@ class ControllerDiscovery {
   }
 
   async refresh() {
-    const allSeeds = [...this.seedHosts, ...this.extraSeeds];
+    const allSeeds = [
+      ...this.seedHosts,
+      ...this.extraSeeds,
+      ...[...this.controllers.keys()],
+    ];
 
     let hostsData = null;
     let appData = null;
@@ -179,6 +191,12 @@ class ControllerDiscovery {
         reachable: true,
         splitBrain: false,
         lastSeen: new Date().toISOString(),
+        lastLogReceived: existing.lastLogReceived || null,
+        // Preserve fields fetched from /info?v=2 so they survive refresh cycles
+        // where the per-controller /info fetch might be slow or temporarily fail.
+        soc:        existing.soc,
+        buildType:  existing.buildType,
+        gitVersion: existing.gitVersion,
       });
       updatedIps.add(ip);
       this.extraSeeds.delete(ip); // promoted to known
@@ -235,22 +253,29 @@ class ControllerDiscovery {
       reachableIps.map(async (ip) => {
         try {
           const [cfg, info] = await Promise.all([
-            fetchJson(ip, this.controllerPort, "/config").catch(() => null),
-            fetchJson(ip, this.controllerPort, "/info?v=2").catch(() => null),
+            fetchJson(ip, this.controllerPort, "/config").catch((e) => { console.debug(`Discovery: /config failed for ${ip}: ${e.message}`); return null; }),
+            fetchJson(ip, this.controllerPort, "/info?v=2").catch((e) => { console.debug(`Discovery: /info?v=2 failed for ${ip}: ${e.message}`); return null; }),
           ]);
           const entry = this.controllers.get(ip);
           if (!entry) return;
           const updates = {};
           const enabled = cfg?.network?.rsyslog?.enabled ?? null;
           if (enabled !== null) updates.loggingEnabled = enabled;
-          if (info?.device?.soc)     updates.soc        = info.device.soc;
-          if (info?.app?.build_type) updates.buildType  = info.app.build_type;
-          if (info?.app?.git_version) updates.gitVersion = info.app.git_version;
+          // /info?v=2 returns nested structure: { device: { soc }, app: { build_type, git_version } }
+          // Older firmware that doesn't recognise the v param returns a flat structure:
+          // { soc, build_type, git_version } — fall back to root-level fields in that case.
+          if (info?.device?.soc)       updates.soc        = info.device.soc;
+          else if (info?.soc)          updates.soc        = info.soc;
+          if (info?.app?.build_type)   updates.buildType  = info.app.build_type;
+          else if (info?.build_type)   updates.buildType  = info.build_type;
+          if (info?.app?.git_version)  updates.gitVersion = info.app.git_version;
+          else if (info?.git_version)  updates.gitVersion = info.git_version;
+          console.debug(`Discovery: /info?v=2 for ${ip}: ${info ? `soc=${info.device?.soc ?? info.soc} build=${info.app?.build_type ?? info.build_type} ver=${info.app?.git_version ?? info.git_version}` : "null"}`);
           if (Object.keys(updates).length) {
             this.controllers.set(ip, { ...entry, ...updates });
           }
-        } catch {
-          // best-effort — keep existing value if unreachable
+        } catch (e) {
+          console.debug(`Discovery: per-controller fetch error for ${ip}: ${e.message}`);
         }
       }),
     );
