@@ -267,6 +267,8 @@
   let nextBefore = null;
   let allRows = [];
   let refreshTimer = null;
+  let _lastRenderFilter = '';
+  let _lastRenderIp = null;
 
   const sourcesList = document.getElementById('sources-list');
   const logList = document.getElementById('log-list');
@@ -458,6 +460,7 @@
       const maxBoot = allRows.reduce((m, r) => Math.max(m, r.boot ?? 0), 0);
       bootFilter = maxBoot + 1 + bootFilter; // e.g. -1 → maxBoot
     }
+    const shouldAnchorBootHead = bootFilter !== null && (rawFilter !== _lastRenderFilter || currentIp !== _lastRenderIp);
 
     const ctxRaw = parseInt(document.getElementById('context-input').value, 10);
     const ctxUnlimited = ctxRaw === -1;
@@ -535,9 +538,7 @@
       }
       // Insert a boot divider whenever the boot number changes (and we're not in raw mode)
       if (!rawMode && r.boot !== undefined && r.boot !== lastBoot) {
-        if (lastBoot !== undefined || bootFilter === null) {
-          parts.push(`<div class="reboot-marker"><span class="reboot-marker-label">&#x21bb; boot ${r.boot}</span></div>`);
-        }
+        parts.push(`<div class="reboot-marker"><span class="reboot-marker-label">&#x21bb; boot ${r.boot}</span></div>`);
         lastBoot = r.boot;
       }
       const cls = severityClass(r.priority);
@@ -557,7 +558,9 @@
     }
     logList.innerHTML = parts.join('');
 
-    if (autoScroll.checked && wasAtBottom) {
+    if (shouldAnchorBootHead) {
+      logList.scrollTop = 0;
+    } else if (autoScroll.checked && wasAtBottom) {
       logList.scrollTop = logList.scrollHeight;
     } else if (_loadingOlder) {
       // preserve position when prepending older rows (items added at top)
@@ -566,6 +569,8 @@
       // items appended at bottom or filter change — keep scroll position exactly as-is
       logList.scrollTop = prevScrollTop;
     }
+    _lastRenderFilter = rawFilter;
+    _lastRenderIp = currentIp;
   }
 
   // Infinite scroll: load older entries when reaching the top
@@ -655,7 +660,7 @@
     // Search from the bottom up for the last marker above the threshold
     const target = [...markers].reverse().find(m => m.offsetTop < threshold);
     if (target) {
-      logList.scrollTop = target.offsetTop - 4;
+      logList.scrollTop = Math.max(0, target.offsetTop);
     } else {
       // Already above the first marker — scroll to very top
       logList.scrollTop = 0;
@@ -674,7 +679,7 @@
     const threshold = logList.scrollTop + 4;
     const target = markers.find(m => m.offsetTop > threshold);
     if (target) {
-      logList.scrollTop = target.offsetTop - 4;
+      logList.scrollTop = Math.max(0, target.offsetTop);
     }
   });
 
