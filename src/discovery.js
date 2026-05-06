@@ -26,6 +26,7 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs/promises");
 const path = require("path");
+const { Bonjour } = require("bonjour-service");
 
 // ── SQLite helpers ────────────────────────────────────────────────────────────
 
@@ -68,6 +69,52 @@ function controllerToRow(c) {
 
 const DEFAULT_PORT = 80;
 const REQUEST_TIMEOUT_MS = 5000;
+
+function isIpv4Address(value) {
+  return /^\d+\.\d+\.\d+\.\d+$/.test(String(value || ""));
+}
+
+async function discoverWallPanelSeeds(timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    const discovered = new Set();
+    let done = false;
+
+    const finish = (bonjour, browser) => {
+      if (done) return;
+      done = true;
+      try {
+        if (browser) browser.stop();
+      } catch {
+        // ignore
+      }
+      try {
+        if (bonjour) bonjour.destroy();
+      } catch {
+        // ignore
+      }
+      resolve([...discovered]);
+    };
+
+    let bonjour;
+    let browser;
+    try {
+      bonjour = new Bonjour();
+      browser = bonjour.find({ type: "wall_panel_api", protocol: "tcp" }, (service) => {
+        for (const addr of service?.addresses || []) {
+          if (isIpv4Address(addr)) {
+            discovered.add(addr);
+          }
+        }
+        if (service?.host) {
+          discovered.add(String(service.host).replace(/\.local\.?$/i, ""));
+        }
+      });
+      setTimeout(() => finish(bonjour, browser), timeoutMs);
+    } catch {
+      finish(bonjour, browser);
+    }
+  });
+}
 
 function fetchJson(host, port, path) {
   return new Promise((resolve, reject) => {
@@ -175,10 +222,14 @@ class ControllerDiscovery {
   }
 
   async refresh() {
+    const mdnsSeeds = await discoverWallPanelSeeds();
+    const mdnsWallPanelIps = new Set(mdnsSeeds.filter(isIpv4Address));
+
     const allSeeds = [
       ...this.seedHosts,
       ...this.extraSeeds,
       ...[...this.controllers.keys()],
+      ...mdnsSeeds,
     ];
 
     let hostsData = null;
@@ -233,13 +284,16 @@ class ControllerDiscovery {
       const groups = dataId ? (groupsByControllerId.get(dataId) || []) : [];
       const name = ipToDataName.get(ip) || h.hostname;
       const existing = this.controllers.get(ip) || {};
+      const deviceClass = (existing.deviceClass === "wall_panel" || mdnsWallPanelIps.has(ip))
+        ? "wall_panel"
+        : "swarm_controller";
 
       this.controllers.set(ip, {
         hostname: h.hostname,
         ip,
         deviceId: String(h.id),
         name,
-        deviceClass: "swarm_controller",
+        deviceClass,
         groups,
         loggingEnabled: existing.loggingEnabled !== undefined ? existing.loggingEnabled : true,
         reachable: true,
