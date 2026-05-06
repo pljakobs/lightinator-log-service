@@ -88,6 +88,7 @@
     .ctrl-card.release-build { opacity: 0.45; filter: grayscale(40%); }
     .release-badge { font-size: 10px; color: #888; font-style: italic; margin-left: 6px; }
     .split-brain-badge { font-size: 10px; color: #c8a000; font-weight: 600; margin-left: 6px; }
+    .class-badge { font-size: 10px; color: #111; background: #dcdcaa; border-radius: 3px; padding: 1px 6px; margin-left: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
     .ctrl-name { color: #9cdcfe; font-size: 13px; font-weight: 600; }
     .ctrl-name a:hover { text-decoration: underline; }
     .ctrl-ip { color: #888; font-size: 11px; }
@@ -163,7 +164,7 @@
     </div>
     <div id="controllers-panel">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-        <span style="color:#ccc;font-size:13px;font-weight:600">Discovered Controllers</span>
+        <span style="color:#ccc;font-size:13px;font-weight:600">Discovered Devices</span>
         <button id="refresh-ctrl-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">&#8635; Refresh</button>
         <button id="log-all-on-btn" style="background:#1e4d2b;font-size:11px;padding:3px 10px">Log All ON</button>
         <button id="log-all-off-btn" style="background:#4d1e1e;font-size:11px;padding:3px 10px">Log All OFF</button>
@@ -790,6 +791,8 @@
     }
     grid.innerHTML = items.map(c => {
       const groups = (c.groups||[]).map(g => g.name).join(', ') || '—';
+      const deviceClass = c.deviceClass || 'swarm_controller';
+      const classLabel = deviceClass === 'wall_panel' ? 'Wall Panel' : 'Swarm';
       const reachable = c.reachable !== false;
       const logOn = c.loggingEnabled !== false;
       const sb = !!c.splitBrain;
@@ -803,7 +806,7 @@
       const displayVersion = c.gitVersion ? escHtml(c.gitVersion) : '–';
       const displayBuildType = c.buildType ? escHtml(c.buildType) : '–';
       return `<div class="${cardClass}" data-ip="${escHtml(c.ip)}">
-        <div class="ctrl-name"><a href="http://${escHtml(c.ip)}/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none" title="Open controller UI">${escHtml(c.name || c.hostname || c.ip)}</a>${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}${buildBadge}</div>
+        <div class="ctrl-name"><a href="http://${escHtml(c.ip)}/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none" title="Open device UI">${escHtml(c.name || c.hostname || c.ip)}</a><span class="class-badge">${escHtml(classLabel)}</span>${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}${buildBadge}</div>
         <div class="ctrl-ip">${escHtml(c.ip)} · ${escHtml(c.hostname||'')} · id:${escHtml(String(c.deviceId||''))}</div>
         <div class="ctrl-fw">fw: <span class="${isDebug ? 'fw-debug' : 'fw-release'}">${displayBuildType}</span> · ${displayVersion}</div>
         <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>

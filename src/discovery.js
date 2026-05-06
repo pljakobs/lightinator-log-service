@@ -44,6 +44,7 @@ function rowToController(row) {
     soc:              row.soc,
     buildType:        row.build_type,
     gitVersion:       row.git_version,
+    deviceClass:      "swarm_controller",
   };
 }
 
@@ -96,6 +97,18 @@ function fetchJson(host, port, path) {
     req.on("timeout", () => { req.destroy(); reject(new Error(`Timeout: ${host}${path}`)); });
     req.on("error", reject);
   });
+}
+
+async function fetchFirstJson(host, port, paths) {
+  for (const p of paths) {
+    try {
+      const body = await fetchJson(host, port, p);
+      return { body, path: p };
+    } catch {
+      // try next path
+    }
+  }
+  return null;
 }
 
 class ControllerDiscovery {
@@ -226,6 +239,7 @@ class ControllerDiscovery {
         ip,
         deviceId: String(h.id),
         name,
+        deviceClass: "swarm_controller",
         groups,
         loggingEnabled: existing.loggingEnabled !== undefined ? existing.loggingEnabled : true,
         reachable: true,
@@ -242,6 +256,55 @@ class ControllerDiscovery {
       this.extraSeeds.delete(ip); // promoted to known
     }
 
+    // Fallback discovery for standalone wall panels:
+    // probe all seeds not discovered via /hosts + /data.
+    const fallbackCandidates = allSeeds.filter((host) => {
+      if (!host) return false;
+      if (updatedIps.has(host)) return false;
+      const existing = this.controllers.get(host);
+      return !(existing && existing.deviceClass === "swarm_controller");
+    });
+
+    for (const host of fallbackCandidates) {
+      const infoResult = await fetchFirstJson(host, this.controllerPort, ["/info?v=2", "/info"]);
+      if (!infoResult) {
+        continue;
+      }
+
+      const cfgResult = await fetchFirstJson(host, this.controllerPort, ["/config"]);
+      const info = infoResult.body || {};
+      const cfg = cfgResult?.body || {};
+
+      const ip = host;
+      const existing = this.controllers.get(ip) || {};
+      const detectedName = info?.device?.name || info?.name || info?.hostname || existing.name || ip;
+      const detectedSoc = info?.device?.soc || info?.soc || existing.soc;
+      const detectedBuildType = info?.app?.build_type || info?.build_type || existing.buildType;
+      const detectedGitVersion = info?.app?.git_version || info?.git_version || existing.gitVersion;
+      const loggingEnabled = cfg?.network?.rsyslog?.enabled;
+
+      this.controllers.set(ip, {
+        hostname: existing.hostname || ip,
+        ip,
+        deviceId: existing.deviceId || null,
+        name: detectedName,
+        deviceClass: "wall_panel",
+        groups: existing.groups || [],
+        loggingEnabled: loggingEnabled !== undefined
+          ? !!loggingEnabled
+          : (existing.loggingEnabled !== undefined ? existing.loggingEnabled : true),
+        reachable: true,
+        splitBrain: false,
+        lastSeen: new Date().toISOString(),
+        lastLogReceived: existing.lastLogReceived || null,
+        soc: detectedSoc,
+        buildType: detectedBuildType,
+        gitVersion: detectedGitVersion,
+      });
+      updatedIps.add(ip);
+      this.extraSeeds.delete(ip);
+    }
+
     // Mark controllers no longer in /hosts?all=true as unreachable (keep for history)
     for (const [ip, entry] of this.controllers) {
       if (!updatedIps.has(ip)) {
@@ -250,7 +313,7 @@ class ControllerDiscovery {
     }
 
     console.log(
-      `Discovery: ${updatedIps.size} controller(s) via ${sourceHost}: ` +
+      `Discovery: ${updatedIps.size} node(s) via ${sourceHost || "fallback"}: ` +
       [...updatedIps].join(", "),
     );
 
