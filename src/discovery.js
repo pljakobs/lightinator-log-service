@@ -26,6 +26,7 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs/promises");
 const path = require("path");
+const dns = require("dns").promises;
 const { Bonjour } = require("bonjour-service");
 
 // ── SQLite helpers ────────────────────────────────────────────────────────────
@@ -106,7 +107,10 @@ async function discoverWallPanelSeeds(timeoutMs = 1200) {
           }
         }
         if (service?.host) {
-          discovered.add(String(service.host).replace(/\.local\.?$/i, ""));
+          discovered.add(String(service.host));
+        }
+        if (isIpv4Address(service?.referer?.address)) {
+          discovered.add(service.referer.address);
         }
       });
       setTimeout(() => finish(bonjour, browser), timeoutMs);
@@ -114,6 +118,17 @@ async function discoverWallPanelSeeds(timeoutMs = 1200) {
       finish(bonjour, browser);
     }
   });
+}
+
+async function resolveSeedToIpv4(seed) {
+  if (!seed) return null;
+  if (isIpv4Address(seed)) return String(seed);
+  try {
+    const result = await dns.lookup(String(seed), { family: 4 });
+    return result?.address || null;
+  } catch {
+    return null;
+  }
 }
 
 function fetchJson(host, port, path) {
@@ -223,7 +238,11 @@ class ControllerDiscovery {
 
   async refresh() {
     const mdnsSeeds = await discoverWallPanelSeeds();
-    const mdnsWallPanelIps = new Set(mdnsSeeds.filter(isIpv4Address));
+    const resolvedMdnsIps = await Promise.all(mdnsSeeds.map((s) => resolveSeedToIpv4(s)));
+    const mdnsWallPanelIps = new Set([
+      ...mdnsSeeds.filter(isIpv4Address),
+      ...resolvedMdnsIps.filter(Boolean),
+    ]);
 
     const allSeeds = [
       ...this.seedHosts,
@@ -250,64 +269,92 @@ class ControllerDiscovery {
     }
 
     if (!hostsData || !appData) {
-      console.debug("Discovery: no reachable seed found");
-      return;
+      console.debug("Discovery: no reachable swarm seed found, using mDNS/syslog-only mode");
     }
 
     // Build group membership: data.controller id → [{id,name}]
     const groupsByControllerId = new Map();
-    for (const g of appData.groups || []) {
-      for (const cid of g.controller_ids || []) {
-        const key = String(cid);
-        if (!groupsByControllerId.has(key)) groupsByControllerId.set(key, []);
-        groupsByControllerId.get(key).push({ id: g.id, name: g.name });
+    if (appData) {
+      for (const g of appData.groups || []) {
+        for (const cid of g.controller_ids || []) {
+          const key = String(cid);
+          if (!groupsByControllerId.has(key)) groupsByControllerId.set(key, []);
+          groupsByControllerId.get(key).push({ id: g.id, name: g.name });
+        }
       }
     }
 
     // Build ip → data.controller.id map using the "ip-address" field
     const ipToDataId = new Map();
     const ipToDataName = new Map();
-    for (const c of appData.controllers || []) {
-      const ip = c["ip-address"];
-      if (ip) {
-        ipToDataId.set(ip, String(c.id));
-        ipToDataName.set(ip, c.name);
+    if (appData) {
+      for (const c of appData.controllers || []) {
+        const ip = c["ip-address"];
+        if (ip) {
+          ipToDataId.set(ip, String(c.id));
+          ipToDataName.set(ip, c.name);
+        }
       }
     }
 
     const updatedIps = new Set();
-    for (const h of hostsData.hosts || []) {
-      const ip = h.ip_address;
-      if (!ip) continue;
+    if (hostsData) {
+      for (const h of hostsData.hosts || []) {
+        const ip = h.ip_address;
+        if (!ip) continue;
 
-      const dataId = ipToDataId.get(ip);
-      const groups = dataId ? (groupsByControllerId.get(dataId) || []) : [];
-      const name = ipToDataName.get(ip) || h.hostname;
+        const dataId = ipToDataId.get(ip);
+        const groups = dataId ? (groupsByControllerId.get(dataId) || []) : [];
+        const name = ipToDataName.get(ip) || h.hostname;
+        const existing = this.controllers.get(ip) || {};
+        const deviceClass = (existing.deviceClass === "wall_panel" || mdnsWallPanelIps.has(ip))
+          ? "wall_panel"
+          : "swarm_controller";
+
+        this.controllers.set(ip, {
+          hostname: h.hostname,
+          ip,
+          deviceId: String(h.id),
+          name,
+          deviceClass,
+          groups,
+          loggingEnabled: existing.loggingEnabled !== undefined ? existing.loggingEnabled : true,
+          reachable: true,
+          splitBrain: false,
+          lastSeen: new Date().toISOString(),
+          lastLogReceived: existing.lastLogReceived || null,
+          // Preserve fields fetched from /info?v=2 so they survive refresh cycles
+          // where the per-controller /info fetch might be slow or temporarily fail.
+          soc:        existing.soc,
+          buildType:  existing.buildType,
+          gitVersion: existing.gitVersion,
+        });
+        updatedIps.add(ip);
+        this.extraSeeds.delete(ip); // promoted to known
+      }
+    }
+
+    // mDNS-only wall panel upsert: no HTTP API required.
+    for (const ip of mdnsWallPanelIps) {
       const existing = this.controllers.get(ip) || {};
-      const deviceClass = (existing.deviceClass === "wall_panel" || mdnsWallPanelIps.has(ip))
-        ? "wall_panel"
-        : "swarm_controller";
-
       this.controllers.set(ip, {
-        hostname: h.hostname,
+        hostname: existing.hostname || ip,
         ip,
-        deviceId: String(h.id),
-        name,
-        deviceClass,
-        groups,
+        deviceId: existing.deviceId || null,
+        name: existing.name || `wall-panel-${ip.split(".").pop()}`,
+        deviceClass: "wall_panel",
+        groups: existing.groups || [],
         loggingEnabled: existing.loggingEnabled !== undefined ? existing.loggingEnabled : true,
         reachable: true,
         splitBrain: false,
         lastSeen: new Date().toISOString(),
         lastLogReceived: existing.lastLogReceived || null,
-        // Preserve fields fetched from /info?v=2 so they survive refresh cycles
-        // where the per-controller /info fetch might be slow or temporarily fail.
-        soc:        existing.soc,
-        buildType:  existing.buildType,
+        soc: existing.soc,
+        buildType: existing.buildType,
         gitVersion: existing.gitVersion,
       });
       updatedIps.add(ip);
-      this.extraSeeds.delete(ip); // promoted to known
+      this.extraSeeds.delete(ip);
     }
 
     // Fallback discovery for standalone wall panels:
