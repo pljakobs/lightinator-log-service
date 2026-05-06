@@ -79,12 +79,15 @@ async function discoverWallPanelSeeds(timeoutMs = 1200) {
   return new Promise((resolve) => {
     const discovered = new Set();
     let done = false;
+    const browsers = [];
 
-    const finish = (bonjour, browser) => {
+    const finish = (bonjour) => {
       if (done) return;
       done = true;
       try {
-        if (browser) browser.stop();
+        for (const browser of browsers) {
+          if (browser) browser.stop();
+        }
       } catch {
         // ignore
       }
@@ -97,25 +100,28 @@ async function discoverWallPanelSeeds(timeoutMs = 1200) {
     };
 
     let bonjour;
-    let browser;
     try {
       bonjour = new Bonjour();
-      browser = bonjour.find({ type: "wall_panel_api", protocol: "tcp" }, (service) => {
-        for (const addr of service?.addresses || []) {
-          if (isIpv4Address(addr)) {
-            discovered.add(addr);
+      const wallPanelTypes = ["wall_panel_api", "wall-panel-api"];
+      for (const type of wallPanelTypes) {
+        const browser = bonjour.find({ type, protocol: "tcp" }, (service) => {
+          for (const addr of service?.addresses || []) {
+            if (isIpv4Address(addr)) {
+              discovered.add(addr);
+            }
           }
-        }
-        if (service?.host) {
-          discovered.add(String(service.host));
-        }
-        if (isIpv4Address(service?.referer?.address)) {
-          discovered.add(service.referer.address);
-        }
-      });
-      setTimeout(() => finish(bonjour, browser), timeoutMs);
+          if (service?.host) {
+            discovered.add(String(service.host));
+          }
+          if (isIpv4Address(service?.referer?.address)) {
+            discovered.add(service.referer.address);
+          }
+        });
+        browsers.push(browser);
+      }
+      setTimeout(() => finish(bonjour), timeoutMs);
     } catch {
-      finish(bonjour, browser);
+      finish(bonjour);
     }
   });
 }
@@ -249,6 +255,7 @@ class ControllerDiscovery {
       ...this.extraSeeds,
       ...[...this.controllers.keys()],
       ...mdnsSeeds,
+      ...resolvedMdnsIps.filter(Boolean),
     ];
 
     let hostsData = null;
