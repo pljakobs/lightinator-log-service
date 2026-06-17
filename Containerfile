@@ -4,8 +4,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm install ansi-up && \
-    npm install --omit=dev --no-audit --no-fund
+RUN  npm install --omit=dev --no-audit --no-fund
 
 COPY src ./src
 
