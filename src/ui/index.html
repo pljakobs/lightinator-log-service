@@ -262,8 +262,11 @@
   </div>
 </div>
 
-<script>
+<script type="module">
   import {AnsiUp} from 'ansi_up.js';
+
+  const ansi_up = new AnsiUp();
+
   const BASE = '';
   let currentIp = null;
   let nextBefore = null;
@@ -730,7 +733,10 @@
   loadColState();
   updateGridTemplate();
   loadSources();
+  fetchLogs();
   loadControllers();
+  window.toggleLogging = toggleLogging;
+  window.fetchLogs = fetchLogs;
   refreshTimer = setInterval(async () => { await loadSources(); if (currentIp) await fetchLogs(); }, 5000);
 
   // Loki status indicator
