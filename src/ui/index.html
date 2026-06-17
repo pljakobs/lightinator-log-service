@@ -557,7 +557,7 @@
         time: `<span class="col-time">${time}</span>`,
         tag:  `<span class="col-tag" title="${escHtml(r.tag||'')}">${escHtml(r.tag||'')}</span>`,
         app:  `<span class="col-app" title="${escHtml(r.app||'')}">${escHtml(r.app||'')}</span>`,
-        msg:  `<span class="col-msg">${escHtml(ansi_up.ansi_to_html(r.message)||r.raw||'')}</span>`,
+        msg:  `<span class="col-msg">${ansi_up.ansi_to_html(escHtml(r.message)||r.raw||'')}</span>`,
       };
       parts.push(`<div class="log-row${cls?' '+cls:''}${extraCls}">${columns.filter(c => c.visible).map(c => cellMap[c.id]||'').join('')}</div>`);
     }
