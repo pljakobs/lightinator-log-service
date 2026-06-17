@@ -119,7 +119,21 @@
     .log-row.search-match { background: rgba(30, 100, 180, 0.2); }
     .log-row.search-match:hover { background: rgba(30, 100, 180, 0.32); }
     mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; padding: 0 1px; }
-  </style>
+
+  .ansi-black-fg   { color: #1a1a1a; }
+  .ansi-red-fg     { color: #f44336; }
+  .ansi-green-fg   { color: #4caf50; }
+  .ansi-yellow-fg  { color: #ffeb3b; }
+  .ansi-magenta-fg { color: #e91e63; }
+  .ansi-cyan-fg    { color: #00bcd4; }
+  .ansi-white-fg   { color: #d4d4d4; }
+  .ansi-blue-fg {
+      color: #4da6ff !important; /* A crisp, readable neon/sky blue */
+  }
+  .ansi-bright-blue-fg {
+      color: #99ccff !important; /* An even lighter pastel blue */
+  }
+</style>
 </head>
 <body>
 <header>
@@ -266,7 +280,8 @@
   import {AnsiUp} from 'https://cdn.jsdelivr.net/npm/ansi_up@6.0.2/+esm';
 
   const ansi_up = new AnsiUp();
-
+  ansi_up.use_classes = true; // <-- Add this line
+  
   const BASE = '';
   let currentIp = null;
   let nextBefore = null;
@@ -557,7 +572,7 @@
         time: `<span class="col-time">${time}</span>`,
         tag:  `<span class="col-tag" title="${escHtml(r.tag||'')}">${escHtml(r.tag||'')}</span>`,
         app:  `<span class="col-app" title="${escHtml(r.app||'')}">${escHtml(r.app||'')}</span>`,
-        msg:  `<span class="col-msg">${ansi_up.ansi_to_html(escHtml(r.message)||r.raw||'')}</span>`,
+        msg:  `<span class="col-msg">${ansi_up.ansi_to_html(r.message||r.raw||'')}</span>`,
       };
       parts.push(`<div class="log-row${cls?' '+cls:''}${extraCls}">${columns.filter(c => c.visible).map(c => cellMap[c.id]||'').join('')}</div>`);
     }
