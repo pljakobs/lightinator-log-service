@@ -61,6 +61,20 @@ function openDatabase(dbPath) {
       build_type        TEXT,
       git_version       TEXT
     );
+    
+    CREATE TABLE IF NOT EXISTS crash_reports (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      fingerprint  TEXT    NOT NULL UNIQUE,
+      log_id       INTEGER NOT NULL,
+      issue_url    TEXT    NOT NULL,
+      issue_number INTEGER NOT NULL,
+      soc          TEXT,
+      git_version  TEXT,
+      created_at   TEXT    NOT NULL,
+      FOREIGN KEY (log_id) REFERENCES logs (id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_crash_reports_fingerprint ON crash_reports (fingerprint);
   `);
 
   // Migrate existing databases that pre-date newer columns.
