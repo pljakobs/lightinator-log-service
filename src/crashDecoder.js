@@ -209,7 +209,16 @@ class CrashDecoder {
       const msg = `[Crash decode skipped: target metadata missing for ${ip}]`;
       console.warn(`CrashDecoder [${ip}]: target metadata missing (git_version/soc) — skipping decode`);
       if (this.storage && triggerRecordId) {
-        await this.storage.updateCrashDecode(triggerRecordId, msg).catch(() => {});
+        await this.storage.updateCrashDecode(triggerRecordId, msg);
+        // Write status message as a new log entry
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 4,
+          tag: "crash-decoder",
+          message: msg,
+          sourceIp: ip,
+        });
       }
       return;
     }
@@ -222,12 +231,19 @@ class CrashDecoder {
       const msg = `[Crash decode skipped: unsupported SOC "${soc}"]`;
       console.warn(`CrashDecoder [${ip}]: unsupported SOC "${soc}" — skipping decode`);
       if (this.storage && triggerRecordId) {
-        await this.storage.updateCrashDecode(triggerRecordId, msg).catch(() => {});
+        await this.storage.updateCrashDecode(triggerRecordId, msg);
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 4,
+          tag: "crash-decoder",
+          message: msg,
+          sourceIp: ip,
+        });
       }
       return;
     }
 
-    // Parse branch from version string: "V5.0-{build}-{branch}" or "V5.0.0-{build}-{branch}"
     const vMatch = git_version.match(/^V[\d.]+-\d+-(.+)$/i);
     const branch = vMatch ? vMatch[1] : "develop";
     const type   = build_type || "debug";
@@ -245,7 +261,15 @@ class CrashDecoder {
       const msg = `[Crash decode error: failed downloading ELF from ${elfUrl}: ${err.message}]`;
       console.warn(`CrashDecoder [${ip}]: ${msg}`);
       if (this.storage && triggerRecordId) {
-        await this.storage.updateCrashDecode(triggerRecordId, msg).catch(() => {});
+        await this.storage.updateCrashDecode(triggerRecordId, msg);
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 3,
+          tag: "crash-decoder",
+          message: msg,
+          sourceIp: ip,
+        });
       }
       return;
     }
@@ -255,9 +279,29 @@ class CrashDecoder {
     let decoded;
     try {
       decoded = await this._runDecode(cfg, elfPath, lines);
+      if (this.storage) {
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 6,
+          tag: "crash-decoder",
+          message: `[Crash decode completed successfully for ${git_version}]`,
+          sourceIp: ip,
+        });
+      }
     } catch (err) {
       console.warn(`CrashDecoder [${ip}]: decode failed — ${err.message}`);
       decoded = `[Crash decode error: ${err.message}]\n\nRaw dump:\n` + lines.join("\n");
+      if (this.storage) {
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 3,
+          tag: "crash-decoder",
+          message: `[Crash decode execution failed: ${err.message}]`,
+          sourceIp: ip,
+        });
+      }
     }
 
     if (this.storage && triggerRecordId) {
@@ -283,7 +327,7 @@ class CrashDecoder {
       });
     }
   }
-
+  
   _fetchFirmwareInfo(ip) {
     return new Promise((resolve) => {
       const req = http.get(
