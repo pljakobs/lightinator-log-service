@@ -135,10 +135,10 @@ async function main() {
     elfCacheDir: config.elfCacheDir,
     elfBaseUrl:  config.elfBaseUrl,
     discovery,
-    onDecoded: (syntheticRecord) => {
-      // Store and forward decoded crash output as a separate log entry
-      storage.append(syntheticRecord.sourceIp, syntheticRecord).catch(() => {});
-      loki.forward({ ...syntheticRecord, tag: (syntheticRecord.tag || "") + ":crash-decode" });
+    db,
+    storage,
+    onDecoded: (record) => {
+      loki.forward({ ...record, tag: (record.tag || "") + ":crash-decode" });
     },
   });
 
@@ -224,6 +224,24 @@ async function main() {
       const before = req.query.before;
       const result = await storage.getLogs({ ip, limit, before });
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/logs/:id/crash-decode", async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!id) {
+        res.status(400).json({ error: "Invalid log id" });
+        return;
+      }
+      const crashDecode = await storage.getCrashDecode(id);
+      if (!crashDecode) {
+        res.status(404).json({ error: "No crash decode found for this log entry" });
+        return;
+      }
+      res.json({ id, crashDecode });
     } catch (err) {
       next(err);
     }

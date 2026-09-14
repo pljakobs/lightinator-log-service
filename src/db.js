@@ -41,7 +41,8 @@ function openDatabase(dbPath) {
       boot        INTEGER,
       boot_nonce  INTEGER,
       device_time INTEGER,
-      raw         TEXT
+      raw         TEXT,
+      crash_decode TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_logs_ip_id ON logs (ip, id);
 
@@ -62,10 +63,13 @@ function openDatabase(dbPath) {
     );
   `);
 
-  // Migrate existing databases that pre-date the `boot` column.
+  // Migrate existing databases that pre-date newer columns.
   const cols = db.pragma("table_info(logs)").map((c) => c.name);
   if (!cols.includes("boot")) {
     db.exec("ALTER TABLE logs ADD COLUMN boot INTEGER");
+  }
+  if (!cols.includes("crash_decode")) {
+    db.exec("ALTER TABLE logs ADD COLUMN crash_decode TEXT");
   }
 
   return db;

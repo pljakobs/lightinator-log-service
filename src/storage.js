@@ -18,6 +18,7 @@ function rowToRecord(row) {
     bootNonce:   row.boot_nonce  != null ? row.boot_nonce  : undefined,
     deviceTime:  row.device_time != null ? row.device_time : undefined,
     raw:         row.raw,
+    crashDecode: row.crash_decode || null,
   };
 }
 
@@ -35,8 +36,14 @@ class LogStorage {
 
     // Pre-compile frequently used statements (better-sqlite3 is synchronous)
     this._stmtInsert = db.prepare(`
-      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot, boot_nonce, device_time, raw)
-      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot, @boot_nonce, @device_time, @raw)
+      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot, boot_nonce, device_time, raw, crash_decode)
+      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot, @boot_nonce, @device_time, @raw, @crash_decode)
+    `);
+    this._stmtUpdateCrashDecode = db.prepare(`
+      UPDATE logs SET crash_decode = ? WHERE id = ?
+    `);
+    this._stmtGetCrashDecode = db.prepare(`
+      SELECT crash_decode FROM logs WHERE id = ?
     `);
     this._stmtTrimCheck = db.prepare(
       "SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?",
@@ -132,19 +139,24 @@ class LogStorage {
   }
 
   append(ip, record) {
-    this._stmtInsert.run({
+    const info = this._stmtInsert.run({
       ip,
-      received_at: record.receivedAt  || new Date().toISOString(),
-      source_ip:   record.sourceIp   || ip,
-      priority:    record.priority   ?? null,
-      tag:         record.tag        || null,
-      app:         record.app        || null,
-      message:     record.message    || null,
-      boot:        record.boot       ?? null,
-      boot_nonce:  record.bootNonce  ?? null,
-      device_time: record.deviceTime ?? null,
-      raw:         record.raw        || null,
+      received_at:  record.receivedAt  || new Date().toISOString(),
+      source_ip:    record.sourceIp   || ip,
+      priority:     record.priority   ?? null,
+      tag:          record.tag        || null,
+      app:          record.app        || null,
+      message:      record.message    || null,
+      boot:         record.boot       ?? null,
+      boot_nonce:   record.bootNonce  ?? null,
+      device_time:  record.deviceTime ?? null,
+      raw:          record.raw        || null,
+      crash_decode: record.crashDecode || null,
     });
+
+    if (info && info.lastInsertRowid) {
+      record.id = info.lastInsertRowid;
+    }
 
     // Trim to maxRowsPerIp — the sub-SELECT finds the id at position
     // (maxRowsPerIp - 1) from the newest end (0-based OFFSET); all older rows
@@ -154,7 +166,17 @@ class LogStorage {
       this._stmtTrim.run(ip, ip, this.maxRowsPerIp - 1);
     }
 
+    return Promise.resolve(record.id);
+  }
+
+  updateCrashDecode(logId, decodedText) {
+    this._stmtUpdateCrashDecode.run(decodedText, logId);
     return Promise.resolve();
+  }
+
+  getCrashDecode(logId) {
+    const row = this._stmtGetCrashDecode.get(logId);
+    return Promise.resolve(row ? row.crash_decode : null);
   }
 
   listSources() {
