@@ -1,11 +1,68 @@
 # Lightinator Log Service
 
-Local-first UDP log collector for Lightinator controllers.
+Local-first UDP log collector and diagnostic viewer for Lightinator controllers.
+
+## Web Interface & Key Features
+
+The browser UI is accessible at `http://<host>:4821/` in a browser[cite: 18]. No build step or CDN dependency required — the UI is a single self-contained HTML file served directly from the container[cite: 18].
+
+### Log Viewer
+
+The primary log interface provides real-time log stream inspection per controller with configurable layout options and instant filtering.
+
+![Log Viewer Interface](logView.jpg)
+
+* **Paginated Log Stream:** Paginated, newest-first log list with time / tag / application / message columns[cite: 18].
+* **Real-time Auto-Refresh:** Auto-refresh every 5 s (toggle off to pause)[cite: 18].
+* **Free-Text Search & Filtering:** Instant free-text filter for matching log text[cite: 18].
+* **Severity Bolding & Highlighting:** Severity colouring (error = red, warning = yellow)[cite: 18].
+* **Source Selection & Maintenance:** Sidebar for source navigation, load-older pagination, and per-controller log purge functionality[cite: 18].
+
+---
+
+### Automated Crash Decoding
+
+When a controller experiences a hardware panic or exception, the log service captures the crash payload and displays an interactive modal for diagnostic evaluation.
+
+![Decoded Crash Dump View](crashDecode.jpg)
+
+* **Automatic Panic Detection:** Ingests raw stack dumps and presents decoded register details and call stacks.
+* **Symbolicated Stack Traces:** Displays calculated stack traces with function names, line numbers, and file paths.
+* **Raw & Decoded Toggles:** Action buttons to easily switch between raw log output and symbolicated stack traces.
+* **One-Click Export:** Features action buttons to copy formatted backtraces or raw crash payloads directly to your clipboard.
+
+---
+
+### Controller Management
+
+The controllers interface maintains a live view of discovered devices across your network deployment.
+
+![Controller Management Interface](controllerView.jpg)
+
+* **Network Discovery Grid:** Card grid of all discovered Lightinator controllers showing name, IP, hostname, device ID, and group memberships[cite: 18].
+* **Online/Offline Telemetry:** Green online indicator or last-seen timestamp when unreachable[cite: 18].
+* **Per-Device Logging Toggles:** Per-controller Logging ON/OFF toggle[cite: 18].
+* **Global Overrides & Refresh:** Global control buttons (`Log All ON` / `Log All OFF`) and manual Refresh button[cite: 18].
+
+---
+
+### Service Configuration & Loki Settings
+
+Configure Loki forwarding and service integrations without restarting the container[cite: 18].
+
+![Service & Loki Settings Panel](config.jpg)
+
+* **Loki Forwarding Settings:** Connection URL, username, and password (masked)[cite: 18].
+* **Dynamic Tagging Hierarchy:** Set global labels applied to every log entry, group label overrides (matched by group name from controller discovery), and per-controller extra labels[cite: 18].
+* **Connection Testing & Advanced Settings:** Features connection testing alongside advanced batch size and flush interval configuration[cite: 18].
+* **Persistent Storage:** Settings are persisted to `data/loki.json` (the already-mounted data volume)[cite: 18].
+
+---
 
 ## One-Command User Setup (No make required)
 
 ```bash
-git clone https://github.com/pljakobs/lightinator-log-service.git
+git clone [https://github.com/pljakobs/lightinator-log-service.git](https://github.com/pljakobs/lightinator-log-service.git)
 cd lightinator-log-service
 ./scripts/run-container.sh
 ```
@@ -70,8 +127,8 @@ make podman-manifest-push IMAGE=ghcr.io/<owner>/lightinator-log-service TAG=late
 
 ## Runtime Ports
 
-- HTTP API: `4821/tcp`
-- Syslog ingest: `5514/udp`
+- HTTP API: `4821/tcp`[cite: 18]
+- Syslog ingest: `5514/udp`[cite: 18]
 
 ## Quick Start (Docker)
 
@@ -115,121 +172,6 @@ podman manifest create lightinator-log-service:latest
 podman build --platform linux/amd64 --manifest lightinator-log-service:latest -f Containerfile .
 podman build --platform linux/arm64 --manifest lightinator-log-service:latest -f Containerfile .
 podman manifest push --all lightinator-log-service:latest docker://ghcr.io/your-org/lightinator-log-service:latest
-```
 
-## GitHub Actions CI
 
-Workflow file: `.github/workflows/container-image.yml`
 
-Behavior:
-- On pull requests: build multi-arch image (`linux/amd64`, `linux/arm64`) without push.
-- On pushes to `main`, `master`, or `develop`: build and publish to GHCR.
-- On tags matching `v*`: build and publish to GHCR.
-
-Published image name:
-- `ghcr.io/<owner>/<repo>`
-
-## Browser UI
-
-Open `http://<host>:4821/` in a browser. No build step or CDN dependency required — the UI is a single self-contained HTML file served directly from the container.
-
-### Logs tab
-
-- Paginated, newest-first log list with time / tag / application / message columns
-- Severity colouring (error = red, warning = yellow)
-- Free-text filter
-- Auto-refresh every 5 s (toggle off to pause)
-- Load-older pagination
-- Per-controller log purge
-
-### Controllers tab
-
-- Card grid of all discovered Lightinator controllers
-- Shows: name, IP, hostname, device ID, group memberships
-- Green online indicator or last-seen timestamp when unreachable
-- Per-controller **Logging ON/OFF** toggle
-- Manual **Refresh** button
-
-### Loki settings panel (⚙ button)
-
-Configure Loki forwarding without restarting the container:
-
-- Connection URL, username, password (masked)
-- Global labels applied to every log entry
-- Group label overrides (matched by group name from controller discovery)
-- Per-controller extra labels
-- Advanced: batch size and flush interval
-
-Settings are persisted to `data/loki.json` (the already-mounted data volume).
-
-## Controller Discovery
-
-When the service receives a UDP log packet from an unknown IP, or on its 5-minute refresh cycle, it:
-
-1. Queries `/hosts` on a seed controller to enumerate all known hostnames + IPs.
-2. Queries `/data` to retrieve the groups and controller list.
-3. Cross-joins the two responses to build a full controller inventory including group memberships.
-4. Feeds discovered group names into the Loki label pipeline automatically.
-
-Configure seeds via the `LLS_DISCOVERY_SEEDS` environment variable (comma-separated hostnames or IPs). The service attempts `lightinator.local` by default.
-
-## Loki Forwarding
-
-Log entries are buffered and pushed to a Loki-compatible endpoint in batches. Label resolution order is:
-
-1. Global labels
-2. Group-level label overrides (for the controller's group)
-3. Per-controller label overrides
-
-To enable the bundled Loki + Grafana stack (for local development):
-
-```bash
-docker compose --profile monitoring up -d
-```
-
-The Grafana datasource for Loki is provisioned automatically. Visit `http://localhost:3000` (admin/admin).
-
-## API
-
-### Core
-
-- `GET /health`
-- `GET /api/v1/health`
-- `GET /api/v1/service-info`
-- `GET /api/v1/sources`
-- `GET /api/v1/logs?ip=<controller-ip>&limit=200&before=0`
-- `DELETE /api/v1/logs?ip=<controller-ip>`
-- `DELETE /api/v1/logs?all=true`
-
-`before` is a paging offset from newest backwards.
-
-### Controllers
-
-- `GET /api/v1/controllers` — list all discovered controllers with group memberships and logging state
-- `POST /api/v1/controllers/refresh` — trigger immediate re-discovery
-- `PATCH /api/v1/controllers/:ip/logging` — `{ "enabled": true|false }`
-
-### Loki
-
-- `GET /api/v1/loki/config` — current Loki configuration (password masked)
-- `PUT /api/v1/loki/config` — update Loki configuration
-- `POST /api/v1/loki/test` — push a test log entry to verify connectivity
-
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `LLS_HTTP_HOST` | `0.0.0.0` | HTTP bind address |
-| `LLS_HTTP_PORT` | `4821` | HTTP port |
-| `LLS_UDP_HOST` | `0.0.0.0` | UDP syslog bind address |
-| `LLS_UDP_PORT` | `5514` | UDP syslog port |
-| `LLS_DATA_DIR` | `/app/data/logs` | Log storage directory |
-| `LLS_MAX_BYTES_PER_IP` | `20971520` (20 MB) | Per-controller storage cap |
-| `LLS_RETENTION_DAYS` | `7` | Log retention period |
-| `LLS_CORS_ORIGIN` | `*` | CORS allowed origin |
-| `LLS_SERVICE_NAME` | `LightinatorLogService` | Service name in logs |
-| `LLS_MDNS_HOST` | `lightinator-logservice.local` | mDNS hostname |
-| `LLS_LOKI_CONFIG` | `data/loki.json` | Path to Loki config file |
-| `LLS_DISCOVERY_SEEDS` | `lightinator.local` | Comma-separated seed hosts for controller discovery |
-| `LLS_DISCOVERY_PORT` | `80` | HTTP port used to query controllers |
-| `LLS_DISCOVERY_REFRESH_MS` | `300000` (5 min) | Controller discovery refresh interval |
