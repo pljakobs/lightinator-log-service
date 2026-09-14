@@ -6,6 +6,8 @@
  * runs the Sming stacktrace decoder, and emits the decoded log record.
  */
 
+const STACK_LINE_RE = /^[0-9a-f]{8}:\s+[0-9a-f]{8}/i;
+
 "use strict";
 
 const { spawn } = require("child_process");
@@ -56,37 +58,45 @@ class CrashDecoder {
     this._collecting = new Map();
   }
 
-  feed(record) {
-    const msg = (record.message || "").trimEnd();
-    const ip  = record.sourceIp;
+ feed(record) {
+  const msg = (record.message || "").trim();
+  const ip  = record.sourceIp;
 
-    if (CRASH_TRIGGER_RE.test(msg)) {
-      this._collecting.set(ip, { lines: [], inStack: false });
-    }
+  if (CRASH_TRIGGER_RE.test(msg)) {
+    this._collecting.set(ip, { lines: [], inStack: false });
+  }
 
-    const state = this._collecting.get(ip);
-    if (!state) return false;
+  const state = this._collecting.get(ip);
+  if (!state) return false;
 
+  if (msg === "Stack dump:") {
     state.lines.push(msg);
-
-    if (msg === "Stack dump:") {
-      state.inStack = true;
-      return true;
-    }
-
-    if (state.inStack && msg.trim() === "") {
-      this._collecting.delete(ip);
-      const capturedLines = state.lines;
-      setImmediate(() => {
-        this._decode(ip, record, capturedLines).catch(e => {
-          console.warn(`CrashDecoder [${ip}]: decode failed — ${e.message}`);
-        });
-      });
-      return true;
-    }
-
+    state.inStack = true;
     return true;
   }
+
+  if (state.inStack) {
+    // If the line matches standard stack trace format (e.g. "3ffff010: 656d006f ...")
+    if (STACK_LINE_RE.test(msg)) {
+      state.lines.push(msg);
+      return true;
+    }
+
+    // Non-stack line encountered or blank line -> finalize & decode
+    this._collecting.delete(ip);
+    const capturedLines = state.lines;
+    setImmediate(() => {
+      this._decode(ip, record, capturedLines).catch(e => {
+        console.warn(`CrashDecoder [${ip}]: decode failed — ${e.message}`);
+      });
+    });
+
+    return false;
+  }
+
+  state.lines.push(msg);
+  return true;
+}
 
   // ── Private Methods ────────────────────────────────────────────────────────
 
