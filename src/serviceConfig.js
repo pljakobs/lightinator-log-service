@@ -70,6 +70,20 @@ const SETTINGS_SCHEMA = [
     placeholder: "lightinator-logservice.local",
     type: "text",
   },
+  {
+    key: "LLS_GITHUB_TOKEN",
+    label: "GitHub Personal Access Token",
+    type: "password",
+    category: "GitHub Integration",
+    description: "Personal access token with 'repo' or 'public_repo' scope to create crash issues."
+  },
+  {
+    key: "LLS_GITHUB_REPO",
+    label: "GitHub Repository",
+    type: "text",
+    category: "GitHub Integration",
+    description: "Target repository in owner/repo format (e.g. owner/lightinator)."
+  },
 ];
 
 /**

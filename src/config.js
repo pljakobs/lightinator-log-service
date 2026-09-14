@@ -37,6 +37,8 @@ const config = {
   elfCacheDir: process.env.LLS_ELF_CACHE_DIR || path.join(process.cwd(), "data", "elfs"),
   // Base URL where firmware ELF files are published by the CI deploy workflow
   elfBaseUrl: process.env.LLS_ELF_BASE_URL || "http://lightinator.de/download",
+  githubToken: process.env.LLS_GITHUB_TOKEN || "",
+  githubRepo:  process.env.LLS_GITHUB_REPO || "",
 };
 
 module.exports = { config };
