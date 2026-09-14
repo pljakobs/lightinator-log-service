@@ -1,25 +1,9 @@
 /**
  * crashDecoder.js
  *
- * Detects crash dump lines arriving via syslog (from esp_rgbww_firmware's
- * reportCrashDump()), downloads the matching ELF from lightinator.de, runs
- * the Sming decode-stacktrace.py script, and emits a decoded log record.
- *
- * Expected syslog line sequence (decode-stacktrace.py compatible):
- *
- *   pc=0x40201234 sp=0x3ffff350 excvaddr=0x00000000   ← triggers collection
- *   epc2=0x... epc3=0x... exccause=3 depc=0x...        ← pass-through
- *   Stack dump:
- *   3ffff350:  40201234 3ffef888 00000001 3ffef8c0
- *   ...
- *   <blank line>                                       ← ends collection
- *
- * ELF URL pattern (built by CI):
- *   http://lightinator.de/download/{branch}/{version}/{soc}/{type}/app_0.out
- *   http://lightinator.de/download/{branch}/{version}/{soc}/{type}/app.out
- *
- * Firmware /info?v=2 response:
- *   { device: { soc: "Esp8266" }, app: { git_version: "V5.0-123-develop", build_type: "debug" } }
+ * Detects crash dump lines arriving via syslog, resolves matching target ELF
+ * using version metadata registered from alive controllers (or live HTTP fallback),
+ * runs the Sming stacktrace decoder, and emits the decoded log record.
  */
 
 "use strict";
@@ -31,27 +15,24 @@ const path = require("path");
 const http = require("http");
 const https = require("https");
 
-// Regex that identifies the first line of a crash dump
 const CRASH_TRIGGER_RE = /pc=0x[0-9a-f]+ +sp=0x[0-9a-f]+ +excvaddr=0x[0-9a-f]+/i;
 
-// Per-SOC configuration: which decode script, addr2line binary, ELF filename,
-// and SMING_SOC value to set when invoking the ESP32 script.
 const SOC_CONFIG = {
   esp8266: {
-    script:   path.join(__dirname, "../tools/decode-esp8266.py"),
-    elfFile:  "app_0.out",
+    script:    path.join(__dirname, "../tools/decode-esp8266.py"),
+    elfFile:   "app_0.out",
     smingArch: "Esp8266",
     smingSOC:  "esp8266",
   },
   esp32: {
-    script:   path.join(__dirname, "../tools/decode-esp32.py"),
-    elfFile:  "app.out",
+    script:    path.join(__dirname, "../tools/decode-esp32.py"),
+    elfFile:   "app.out",
     smingArch: "Esp32",
     smingSOC:  "esp32",
   },
   esp32c3: {
-    script:   path.join(__dirname, "../tools/decode-esp32.py"),
-    elfFile:  "app.out",
+    script:    path.join(__dirname, "../tools/decode-esp32.py"),
+    elfFile:   "app.out",
     smingArch: "Esp32",
     smingSOC:  "esp32c3",
   },
@@ -60,31 +41,25 @@ const SOC_CONFIG = {
 class CrashDecoder {
   /**
    * @param {object} opts
-   * @param {string}   opts.elfCacheDir  Directory where ELF files are cached
-   * @param {string}   opts.elfBaseUrl   Base URL for ELF downloads
-   *                                     e.g. "http://lightinator.de/download"
-   * @param {Function} opts.onDecoded    Called with a synthetic log record
-   *                                     containing the decoded stack output.
+   * @param {string}              opts.elfCacheDir Directory where ELF files are cached
+   * @param {string}              opts.elfBaseUrl  Base URL for ELF downloads
+   * @param {ControllerDiscovery} [opts.discovery] ControllerDiscovery instance tracking active nodes
+   * @param {Function}            opts.onDecoded   Called with decoded log record
    */
-  constructor({ elfCacheDir, elfBaseUrl, onDecoded }) {
+  constructor({ elfCacheDir, elfBaseUrl, discovery = null, onDecoded }) {
     this.elfCacheDir = elfCacheDir;
     this.elfBaseUrl  = elfBaseUrl;
+    this.discovery   = discovery;
     this.onDecoded   = onDecoded;
 
     // ip → { lines: string[], inStack: boolean }
     this._collecting = new Map();
   }
 
-  /**
-   * Feed a parsed syslog record.
-   * Returns true if the line is part of a crash dump (caller may still store
-   * it normally; this is non-exclusive).
-   */
   feed(record) {
     const msg = (record.message || "").trimEnd();
     const ip  = record.sourceIp;
 
-    // Start of crash dump
     if (CRASH_TRIGGER_RE.test(msg)) {
       this._collecting.set(ip, { lines: [], inStack: false });
     }
@@ -99,7 +74,6 @@ class CrashDecoder {
       return true;
     }
 
-    // Blank line after stack data = end of dump
     if (state.inStack && msg.trim() === "") {
       this._collecting.delete(ip);
       const capturedLines = state.lines;
@@ -114,12 +88,29 @@ class CrashDecoder {
     return true;
   }
 
-  // ── Private ────────────────────────────────────────────────────────────────
+  // ── Private Methods ────────────────────────────────────────────────────────
+
+  async _resolveTargetInfo(ip) {
+    // 1. Try resolving target version from Discovery memory cache
+    if (this.discovery) {
+      const known = this.discovery.controllers.get(ip);
+      if (known?.gitVersion && known?.soc) {
+        return {
+          git_version: known.gitVersion,
+          soc:         known.soc,
+          build_type:  known.buildType || "debug",
+        };
+      }
+    }
+
+    // 2. Fall back to live /info?v=2 endpoint directly if node is reachable
+    return await this._fetchFirmwareInfo(ip);
+  }
 
   async _decode(ip, triggerRecord, lines) {
-    const info = await this._fetchFirmwareInfo(ip);
+    const info = await this._resolveTargetInfo(ip);
     if (!info || !info.git_version || !info.soc) {
-      console.warn(`CrashDecoder [${ip}]: could not fetch /info?v=2 — skipping decode`);
+      console.warn(`CrashDecoder [${ip}]: target metadata missing (git_version/soc) — skipping decode`);
       return;
     }
 
@@ -132,7 +123,7 @@ class CrashDecoder {
       return;
     }
 
-    // Parse git_version: "V5.0-{build}-{branch}"
+    // Parse branch from version string: "V5.0-{build}-{branch}"
     const vMatch = git_version.match(/^V[\d.]+-\d+-(.+)$/);
     const branch = vMatch ? vMatch[1] : "develop";
     const type   = build_type || "debug";
@@ -143,10 +134,9 @@ class CrashDecoder {
       `${git_version}-${socKey}-${type}.elf`,
     );
 
-    console.log(`CrashDecoder [${ip}]: fetching ELF from ${elfUrl}`);
+    console.log(`CrashDecoder [${ip}]: using firmware ${git_version} (${socKey}/${type})`);
     await this._ensureElf(elfUrl, elfPath);
 
-    console.log(`CrashDecoder [${ip}]: running decode-stacktrace.py`);
     const decoded = await this._runDecode(cfg, elfPath, lines);
 
     if (this.onDecoded) {
@@ -155,9 +145,11 @@ class CrashDecoder {
         receivedAt: triggerRecord.receivedAt,
         tag:        triggerRecord.tag,
         app:        triggerRecord.app,
+        gitVersion: git_version,
+        soc:        socKey,
+        buildType:  type,
         message:    decoded,
         raw:        lines.join("\n"),
-        // Tell loki.js to use a distinct label
         _crashDecode: true,
       });
     }
@@ -185,9 +177,9 @@ class CrashDecoder {
             try {
               const j = JSON.parse(body);
               resolve({
-                git_version: j?.app?.git_version ?? null,
-                soc:         j?.device?.soc       ?? null,
-                build_type:  j?.app?.build_type   ?? "debug",
+                git_version: j?.app?.git_version ?? j?.git_version ?? null,
+                soc:         j?.device?.soc       ?? j?.soc         ?? null,
+                build_type:  j?.app?.build_type   ?? j?.build_type   ?? "debug",
               });
             } catch {
               resolve(null);
@@ -203,11 +195,10 @@ class CrashDecoder {
   async _ensureElf(url, localPath) {
     await fsp.mkdir(path.dirname(localPath), { recursive: true });
 
-    // Return immediately if already cached
     try {
       await fsp.access(localPath);
       return;
-    } catch { /* not cached */}
+    } catch { /* file not cached */ }
 
     const tmpPath = localPath + ".tmp";
     await new Promise((resolve, reject) => {
@@ -255,7 +246,6 @@ class CrashDecoder {
         }
       });
 
-      // Feed crash lines then a blank line to signal end-of-input to the script
       proc.stdin.write(lines.join("\n") + "\n\n");
       proc.stdin.end();
     });

@@ -99,16 +99,6 @@ async function main() {
   const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
   await loki.loadConfig();
 
-  const crashDecoder = new CrashDecoder({
-    elfCacheDir: config.elfCacheDir,
-    elfBaseUrl:  config.elfBaseUrl,
-    onDecoded: (syntheticRecord) => {
-      // Store and forward decoded crash output as a separate log entry
-      storage.append(syntheticRecord.sourceIp, syntheticRecord).catch(() => {});
-      loki.forward({ ...syntheticRecord, tag: (syntheticRecord.tag || "") + ":crash-decode" });
-    },
-  });
-
   // Resolve the IP to advertise to controllers for syslog delivery
   const advertiseHost = resolveAdvertiseHost(config.discoverySeedHosts);
   if (advertiseHost) {
@@ -140,6 +130,18 @@ async function main() {
       loki.config.controllers = { ...lokiControllers, ...(loki.config.controllers || {}) };
     },
   });
+
+  const crashDecoder = new CrashDecoder({
+    elfCacheDir: config.elfCacheDir,
+    elfBaseUrl:  config.elfBaseUrl,
+    discovery,
+    onDecoded: (syntheticRecord) => {
+      // Store and forward decoded crash output as a separate log entry
+      storage.append(syntheticRecord.sourceIp, syntheticRecord).catch(() => {});
+      loki.forward({ ...syntheticRecord, tag: (syntheticRecord.tag || "") + ":crash-decode" });
+    },
+  });
+
   discovery.start();
 
   const app = express();
@@ -480,3 +482,4 @@ main().catch((err) => {
   console.error("Fatal startup error:", err);
   process.exit(1);
 });
+
