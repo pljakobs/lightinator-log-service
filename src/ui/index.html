@@ -17,6 +17,7 @@
     button:hover { background: #1177bb; }
     button.danger { background: #8b1c1c; }
     button.danger:hover { background: #a02424; }
+    .build-badge { font-size: 11px; color: #888; background: #2d2d2d; border: 1px solid #444; border-radius: 3px; padding: 2px 6px; font-family: ui-monospace, monospace; cursor: help; }
     #status { margin-left: auto; font-size: 11px; color: #888; }
     main { display: flex; flex: 1; overflow: hidden; }
     #sources-panel { width: 200px; flex-shrink: 0; background: #252526; border-right: 1px solid #3c3c3c; overflow-y: auto; display: flex; flex-direction: column; }
@@ -120,92 +121,41 @@
     .log-row.search-match:hover { background: rgba(30, 100, 180, 0.32); }
     mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; padding: 0 1px; }
 
-  .ansi-black-fg   { color: #1a1a1a; }
-  .ansi-red-fg     { color: #f44336; }
-  .ansi-green-fg   { color: #4caf50; }
-  .ansi-yellow-fg  { color: #ffeb3b; }
-  .ansi-magenta-fg { color: #e91e63; }
-  .ansi-cyan-fg    { color: #00bcd4; }
-  .ansi-white-fg   { color: #d4d4d4; }
-  .ansi-blue-fg {
-      color: #4da6ff !important; /* A crisp, readable neon/sky blue */
-  }
-  .ansi-bright-blue-fg {
-      color: #99ccff !important; /* An even lighter pastel blue */
-  }
+    .ansi-black-fg   { color: #1a1a1a; }
+    .ansi-red-fg     { color: #f44336; }
+    .ansi-green-fg   { color: #4caf50; }
+    .ansi-yellow-fg  { color: #ffeb3b; }
+    .ansi-magenta-fg { color: #e91e63; }
+    .ansi-cyan-fg    { color: #00bcd4; }
+    .ansi-white-fg   { color: #d4d4d4; }
+    .ansi-blue-fg { color: #4da6ff !important; }
+    .ansi-bright-blue-fg { color: #99ccff !important; }
 
-  .crash-btn {
-    background: #d9534f;
-    color: #fff;
-    border: 1px solid #c9302c;
-    border-radius: 3px;
-    padding: 1px 7px;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    margin-right: 6px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    vertical-align: middle;
-    line-height: 1.3;
-    user-select: none;
-  }
-  .crash-btn:hover {
-    background: #c9302c;
-  }
-  .crash-btn.pending {
-    background: #e67e22;
-    border-color: #d35400;
-    cursor: wait;
-  }
-  #crash-modal-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.7);
-    z-index: 200;
-    align-items: center;
-    justify-content: center;
-  }
-  #crash-modal-overlay.open {
-    display: flex;
-  }
-  #crash-modal {
-    background: #1e1e1e;
-    border: 1px solid #444;
-    border-radius: 6px;
-    width: 900px;
-    max-width: 95vw;
-    height: 80vh;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
-  }
-  #crash-modal-header {
-    background: #252526;
-    border-bottom: 1px solid #3c3c3c;
-    padding: 10px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-  }
-  #crash-modal-body {
-    flex: 1;
-    overflow: auto;
-    padding: 14px 16px;
-    background: #141414;
-    color: #d4d4d4;
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-</style>
+    .crash-btn {
+      background: #d9534f;
+      color: #fff;
+      border: 1px solid #c9302c;
+      border-radius: 3px;
+      padding: 1px 7px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-right: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      vertical-align: middle;
+      line-height: 1.3;
+      user-select: none;
+    }
+    .crash-btn:hover { background: #c9302c; }
+    .crash-btn.pending { background: #e67e22; border-color: #d35400; cursor: wait; }
+    #crash-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); z-index: 200; align-items: center; justify-content: center; }
+    #crash-modal-overlay.open { display: flex; }
+    #crash-modal { background: #1e1e1e; border: 1px solid #444; border-radius: 6px; width: 900px; max-width: 95vw; height: 80vh; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8); }
+    #crash-modal-header { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+    #crash-modal-body { flex: 1; overflow: auto; padding: 14px 16px; background: #141414; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+  </style>
 </head>
 <body>
 <header>
@@ -213,6 +163,7 @@
   <input id="filter-input" type="search" placeholder="Filter messages…" />
   <label title="Lines of context around each search hit. -1 = show all lines (matches highlighted, rest dimmed)">Context: <input id="context-input" type="number" min="-1" max="50" value="0" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
   <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
+  <span id="build-info" class="build-badge">Build #--</span>
   <span id="status">Loading…</span>
   <span id="loki-dot" title="Loki: checking…" style="font-size:16px;line-height:1;color:#555;cursor:default" aria-label="Loki status">&#9679;</span>
   <button id="settings-btn" style="background:#3c3c3c;margin-left:4px" title="Settings">&#9881; Settings</button>
@@ -229,24 +180,24 @@
       <div class="tab" data-tab="search">Search</div>
     </div>
     <div id="log-panel" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
-    <div id="log-toolbar">
-      <span id="log-title" style="color:#9cdcfe">Select a source</span>
-      <button id="load-older-btn" style="display:none">Load older</button>
-      <span id="log-count" style="font-size:11px;color:#888"></span>
-      <button id="boot-prev-btn" title="Jump to previous boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Previous boot">&#x21bb;&#x25B4;</button>
-      <button id="boot-next-btn" title="Jump to next boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Next boot">&#x21bb;&#x25BE;</button>
-      <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
-      <button id="col-picker-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">Columns &#9660;</button>
-      <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px"><input type="checkbox" id="raw-mode-toggle" /> Raw</label>
-      <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px" title="Sort displayed rows by the device uptime timestamp embedded in each message"><input type="checkbox" id="sort-device-time" /> Sort by device time</label>
-      <div id="col-picker"></div>
-    </div>
-    <div id="log-header-row"></div>
-    <div id="log-list"><div class="empty">Select a source on the left</div></div>
-    <div id="pager">
-      <span id="pager-info"></span>
-      <label id="auto-scroll-label"><input type="checkbox" id="auto-scroll" checked /> Stick to bottom</label>
-    </div>
+      <div id="log-toolbar">
+        <span id="log-title" style="color:#9cdcfe">Select a source</span>
+        <button id="load-older-btn" style="display:none">Load older</button>
+        <span id="log-count" style="font-size:11px;color:#888"></span>
+        <button id="boot-prev-btn" title="Jump to previous boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Previous boot">&#x21bb;&#x25B4;</button>
+        <button id="boot-next-btn" title="Jump to next boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Next boot">&#x21bb;&#x25BE;</button>
+        <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
+        <button id="col-picker-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">Columns &#9660;</button>
+        <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px"><input type="checkbox" id="raw-mode-toggle" /> Raw</label>
+        <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px" title="Sort displayed rows by the device uptime timestamp embedded in each message"><input type="checkbox" id="sort-device-time" /> Sort by device time</label>
+        <div id="col-picker"></div>
+      </div>
+      <div id="log-header-row"></div>
+      <div id="log-list"><div class="empty">Select a source on the left</div></div>
+      <div id="pager">
+        <span id="pager-info"></span>
+        <label id="auto-scroll-label"><input type="checkbox" id="auto-scroll" checked /> Stick to bottom</label>
+      </div>
     </div>
     <div id="controllers-panel">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
@@ -282,7 +233,6 @@
       <button class="stab" data-stab="svc">Service</button>
     </div>
     <div id="stab-loki" class="stab-content">
-      <!-- Connection -->
       <div class="section-title" style="margin-top:0">Connection</div>
       <label style="color:#aaa;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer">
         <input type="checkbox" id="loki-enabled" /> Enable Loki forwarding
@@ -296,14 +246,12 @@
         <div class="field-row"><label>Password <span style="color:#555">(optional)</span></label><input id="loki-pass" type="password" autocomplete="new-password" /></div>
       </div>
 
-      <!-- Global labels -->
       <div class="section-title">Global Labels <span style="color:#555;text-transform:none;font-size:10px">applied to every log entry</span></div>
       <div class="field-row">
         <label>Labels <span style="color:#555">comma-separated key=value</span></label>
         <input id="loki-labels" type="text" placeholder="job=lightinator, env=local" />
       </div>
 
-      <!-- Groups -->
       <div class="section-title">Groups <span style="color:#555;text-transform:none;font-size:10px">named sets of labels for controller groups</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-bottom:2px">
         <span style="font-size:10px;color:#555">Group name</span>
@@ -313,7 +261,6 @@
       <div id="groups-list"></div>
       <button class="add-btn" id="add-group-btn">+ Add group</button>
 
-      <!-- Controllers -->
       <div class="section-title">Controllers <span style="color:#555;text-transform:none;font-size:10px">per-controller group + extra labels</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;margin-bottom:2px">
         <span style="font-size:10px;color:#555">Controller IP</span>
@@ -324,7 +271,6 @@
       <div id="controllers-extra"></div>
       <button class="add-btn" id="add-controller-btn">+ Add controller</button>
 
-      <!-- Advanced -->
       <div class="section-title">Advanced</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="field-row"><label>Batch size</label><input id="loki-batch" type="number" min="1" max="1000" /></div>
@@ -365,11 +311,22 @@
   </div>
 </div>
 
+<script>
+  fetch('/api/info')
+    .then(res => res.json())
+    .then(data => {
+      if (data.buildNumber) {
+        document.getElementById('build-info').textContent = `Build #${data.buildNumber}`;
+        document.getElementById('build-info').title = `Version: ${data.gitVersion || 'unknown'}`;
+      }
+    })
+    .catch(() => {});
+</script>
 <script type="module">
   import {AnsiUp} from 'https://cdn.jsdelivr.net/npm/ansi_up@6.0.2/+esm';
 
   const ansi_up = new AnsiUp();
-  ansi_up.use_classes = true; // <-- Add this line
+  ansi_up.use_classes = true;
   
   const BASE = '';
   let currentIp = null;
@@ -405,7 +362,6 @@
         fetchJson(`${BASE}/api/v1/sources`),
         fetchJson(`${BASE}/api/v1/controllers`).catch(() => ({ items: [] })),
       ]);
-      // Merge: start with discovered controllers, overlay real syslog stats
       const byIp = new Map();
       for (const c of (ctrlData.items || [])) {
         byIp.set(c.ip, { ip: c.ip, name: c.name || c.hostname || c.ip, bytes: 0, lastSeen: null });
@@ -440,7 +396,6 @@
   }
 
   async function selectSource(ip) {
-    // ensure Logs tab is visible
     const logsTab = document.querySelector('.tab[data-tab="logs"]');
     if (logsTab && !logsTab.classList.contains('active')) logsTab.click();
     currentIp = ip;
@@ -465,7 +420,6 @@
       if (prepend) {
         allRows = [...data.items, ...allRows];
       } else {
-        // merge new tail — avoid duplicates by id
         const existingIds = new Set(allRows.map(r => r.id));
         const newItems = data.items.filter(r => !existingIds.has(r.id));
         allRows = [...allRows, ...newItems];
@@ -490,7 +444,6 @@
     return '';
   }
 
-  // ── Column state ───────────────────────────────────────────────
   const columns = [
     { id: 'time', label: 'Time',    width: 160, visible: true },
     { id: 'tag',  label: 'Tag',     width: 90,  visible: true },
@@ -556,18 +509,16 @@
   let _loadingOlder = false;
   function renderLogs() {
     const rawFilter = filterInput.value.trim();
-    // Parse optional boot:N / boot:-1 prefix out of the filter string
-    let bootFilter = null; // null = no boot filter
+    let bootFilter = null;
     let textFilter = rawFilter.toLowerCase();
     const bootMatch = rawFilter.match(/(?:^|\s)boot:(-?\d+)(?:\s|$)/i);
     if (bootMatch) {
       bootFilter = parseInt(bootMatch[1], 10);
       textFilter = rawFilter.replace(bootMatch[0], ' ').trim().toLowerCase();
     }
-    // Resolve negative boot index like journald: -1 = latest, -2 = one before, …
     if (bootFilter !== null && bootFilter < 0) {
       const maxBoot = allRows.reduce((m, r) => Math.max(m, r.boot ?? 0), 0);
-      bootFilter = maxBoot + 1 + bootFilter; // e.g. -1 → maxBoot
+      bootFilter = maxBoot + 1 + bootFilter;
     }
     const shouldAnchorBootHead = bootFilter !== null && (rawFilter !== _lastRenderFilter || currentIp !== _lastRenderIp);
 
@@ -575,10 +526,9 @@
     const ctxUnlimited = ctxRaw === -1;
     const ctxN = ctxUnlimited ? 0 : Math.max(0, ctxRaw || 0);
 
-    // Pre-filter by boot number if specified
     const bootRows = bootFilter !== null ? allRows.filter(r => (r.boot ?? 0) === bootFilter) : allRows;
 
-    let displayRows; // array of { row, isContext }
+    let displayRows;
     if (textFilter) {
       const matchIndices = new Set();
       bootRows.forEach((r, i) => {
@@ -586,7 +536,6 @@
           matchIndices.add(i);
       });
       if (ctxUnlimited) {
-        // Show every row; non-matching rows are dimmed as context
         displayRows = bootRows.map((row, i) => ({ row, isContext: !matchIndices.has(i) }));
       } else {
         const included = new Set();
@@ -595,7 +544,6 @@
             included.add(j);
         }
         displayRows = [...included].sort((a,b) => a-b).map(i => ({ row: bootRows[i], isContext: !matchIndices.has(i), srcIdx: i }));
-        // Mark gap boundaries before any re-sort so the flag survives reordering.
         for (let di = 1; di < displayRows.length; di++) {
           if (displayRows[di].srcIdx !== displayRows[di - 1].srcIdx + 1)
             displayRows[di].hasGapBefore = true;
@@ -606,13 +554,6 @@
     }
 
     if (document.getElementById('sort-device-time').checked) {
-      // Sort by boot ascending first, then by deviceTime ascending within each
-      // boot. Without the boot-first key, pre-net buffer messages from boot N+1
-      // (tiny deviceTime values) interleave with boot N regular messages that
-      // cover the same uptime range, causing boot dividers to flip back and
-      // forth and the same section to appear repeated in the UI.
-      // Entries without a deviceTime sort after all timed entries in their boot,
-      // preserving original receive order among themselves.
       displayRows = displayRows
         .map((r, i) => ({ r, i }))
         .sort((a, b) => {
@@ -622,7 +563,7 @@
           const ta = a.r.row.deviceTime ?? Infinity;
           const tb = b.r.row.deviceTime ?? Infinity;
           if (ta !== tb) return ta - tb;
-          return a.i - b.i; // stable: preserve receive order for ties (including all nulls)
+          return a.i - b.i;
         })
         .map(({ r }) => r);
     }
@@ -640,12 +581,9 @@
     const parts = [];
     let lastBoot = undefined;
     for (const { row: r, isContext, hasGapBefore } of displayRows) {
-      // Insert a gap divider wherever lines were omitted between context groups.
-      // hasGapBefore is computed before any re-sort so it is always correct.
       if (!rawMode && hasGapBefore) {
         parts.push('<div class="context-divider">&hellip;</div>');
       }
-      // Insert a boot divider whenever the boot number changes (and we're not in raw mode)
       if (!rawMode && r.boot !== undefined && r.boot !== lastBoot) {
         parts.push(`<div class="reboot-marker"><span class="reboot-marker-label">&#x21bb; boot ${r.boot}</span></div>`);
         lastBoot = r.boot;
@@ -674,17 +612,14 @@
     } else if (autoScroll.checked && wasAtBottom) {
       logList.scrollTop = logList.scrollHeight;
     } else if (_loadingOlder) {
-      // preserve position when prepending older rows (items added at top)
       logList.scrollTop = prevScrollTop + (logList.scrollHeight - prevScrollHeight);
     } else {
-      // items appended at bottom or filter change — keep scroll position exactly as-is
       logList.scrollTop = prevScrollTop;
     }
     _lastRenderFilter = rawFilter;
     _lastRenderIp = currentIp;
   }
 
-  // Infinite scroll: load older entries when reaching the top
   logList.addEventListener('scroll', async () => {
     if (_loadingOlder) return;
     if (nextBefore == null) return;
@@ -699,7 +634,6 @@
       await fetchLogs(nextBefore, true);
     } finally {
       sentinel.remove();
-      // restore position so the view doesn't jump to top
       logList.scrollTop += logList.scrollHeight - prevHeight;
       _loadingOlder = false;
     }
@@ -746,7 +680,6 @@
   document.getElementById('raw-mode-toggle').addEventListener('change', () => { updateGridTemplate(); renderLogs(); updateBootNavButtons(); });
   document.getElementById('sort-device-time').addEventListener('change', () => { renderLogs(); updateBootNavButtons(); });
 
-  // ── Boot navigation ──────────────────────────────────────────────────────
   function hasBootFilter() {
     return /(?:^|\s)boot:-?\d+(?:\s|$)/i.test(filterInput.value.trim());
   }
@@ -760,31 +693,25 @@
 
   bootPrevBtn.addEventListener('click', () => {
     if (hasBootFilter()) {
-      // Within a single boot: jump to top of the list
       logList.scrollTop = 0;
       return;
     }
-    // No filter: find the reboot marker closest above the current viewport top
     const markers = [...logList.querySelectorAll('.reboot-marker')];
     if (!markers.length) return;
     const threshold = logList.scrollTop - 4;
-    // Search from the bottom up for the last marker above the threshold
     const target = [...markers].reverse().find(m => m.offsetTop < threshold);
     if (target) {
       logList.scrollTop = Math.max(0, target.offsetTop);
     } else {
-      // Already above the first marker — scroll to very top
       logList.scrollTop = 0;
     }
   });
 
   bootNextBtn.addEventListener('click', () => {
     if (hasBootFilter()) {
-      // Within a single boot: jump to bottom of the list
       logList.scrollTop = logList.scrollHeight;
       return;
     }
-    // No filter: find the reboot marker closest below the current viewport top
     const markers = [...logList.querySelectorAll('.reboot-marker')];
     if (!markers.length) return;
     const threshold = logList.scrollTop + 4;
@@ -821,7 +748,6 @@
     }
   });
 
-  // Ctrl+A inside the log area selects log content only (not the whole page UI)
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
       const active = document.activeElement;
@@ -835,7 +761,6 @@
     }
   });
 
-  // Init
   loadColState();
   updateGridTemplate();
   loadSources();
@@ -845,7 +770,6 @@
   window.fetchLogs = fetchLogs;
   refreshTimer = setInterval(async () => { await loadSources(); if (currentIp) await fetchLogs(); }, 5000);
 
-  // Loki status indicator
   async function pollLokiStatus() {
     const dot = document.getElementById('loki-dot');
     try {
@@ -869,7 +793,6 @@
   pollLokiStatus();
   setInterval(pollLokiStatus, 15000);
 
-  // ── Tab switching
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -883,7 +806,6 @@
     });
   });
 
-  // ── Controllers dashboard
   async function loadControllers() {
     const st = document.getElementById('ctrl-status');
     st.textContent = 'Loading…';
@@ -909,8 +831,6 @@
       const reachable = c.reachable !== false;
       const logOn = c.loggingEnabled !== false;
       const sb = !!c.splitBrain;
-      // Nodes not running a debug build cannot produce useful decoded stack traces;
-      // grey them out permanently. buildType is absent until discovery fetches /info?v=2.
       const isDebug = !c.buildType || c.buildType === 'debug';
       const cardClass = ['ctrl-card', logOn ? '' : 'logging-off', sb ? 'split-brain' : '', isDebug ? '' : 'release-build'].filter(Boolean).join(' ');
       const buildBadge = isDebug ? '' : `<span class="release-badge" title="Release build — detailed crash decode unavailable">release</span>`;
@@ -998,9 +918,8 @@
   document.getElementById('log-all-on-btn').addEventListener('click', () => setAllLogging(true));
   document.getElementById('log-all-off-btn').addEventListener('click', () => setAllLogging(false));
 
-  // ── Settings panel ──────────────────────────────────────────────
   const settingsOverlay = document.getElementById('settings-overlay');
-  let _lokiCfg = {};   // live in-memory draft
+  let _lokiCfg = {};
 
   document.getElementById('settings-btn').addEventListener('click', async () => {
     settingsOverlay.classList.add('open');
@@ -1042,7 +961,6 @@
     return Object.entries(obj || {}).map(([k,v]) => `${k}=${v}`).join(', ');
   }
 
-  // ── Groups ───────────────────────────────────────────────────────
   function renderGroups() {
     const list = document.getElementById('groups-list');
     list.innerHTML = '';
@@ -1056,7 +974,6 @@
         <button class="remove-btn" title="Remove group">&times;</button>`;
       row.querySelector('.remove-btn').addEventListener('click', () => {
         delete _lokiCfg.groups[name];
-        // remove any controller assignments pointing to this group
         for (const c of Object.values(_lokiCfg.controllers || {})) {
           if (c.group === name) c.group = '';
         }
@@ -1086,7 +1003,6 @@
     renderControllers();
   });
 
-  // ── Controllers ──────────────────────────────────────────────────
   function groupOptions(selected) {
     const groups = collectGroups();
     const opts = ['<option value="">(none)</option>'];
@@ -1135,7 +1051,6 @@
     appendControllerRow(document.getElementById('controllers-list'), '', '', {});
   });
 
-  // ── Load / Save ──────────────────────────────────────────────────
   async function loadLokiConfig() {
     const st = document.getElementById('loki-status');
     try {
@@ -1147,7 +1062,6 @@
       _lokiCfg.groups = cfg.groups || {};
       _lokiCfg.controllers = cfg.controllers || {};
 
-      // Auto-populate controllers from discovered sources (without overwriting)
       for (const src of sources) {
         if (!_lokiCfg.controllers[src.ip]) {
           _lokiCfg.controllers[src.ip] = { group: '', labels: {} };
@@ -1221,7 +1135,6 @@
     }
   });
 
-  // ── Service Settings ─────────────────────────────────────────────────────
   let _svcSchema = [];
 
   async function loadSvcSettings() {
@@ -1298,7 +1211,6 @@
   document.getElementById('svc-save').addEventListener('click', () => saveSvcSettings(false));
   document.getElementById('svc-restart').addEventListener('click', () => saveSvcSettings(true));
 
-  // ── Global Search ──────────────────────────────────────────────────────
   const searchQueryEl  = document.getElementById('search-query');
   const searchCtxEl    = document.getElementById('search-context-n');
   const searchLimitEl  = document.getElementById('search-limit-sel');
@@ -1348,7 +1260,6 @@
       searchResultsEl.innerHTML = '<div class="empty">No matches found</div>';
       return;
     }
-    // Group snippets by IP, preserving order of first occurrence
     const groups = new Map();
     for (const s of data.snippets) {
       if (!groups.has(s.ip)) groups.set(s.ip, []);
@@ -1378,7 +1289,6 @@
       }
     }
     searchResultsEl.innerHTML = parts.join('');
-    // "View logs" buttons: switch to Logs tab and select the source
     searchResultsEl.querySelectorAll('.src-link').forEach(btn => {
       btn.addEventListener('click', () => {
         const ip = btn.dataset.ip;
@@ -1392,7 +1302,6 @@
   searchBtnEl.addEventListener('click', runSearch);
   searchQueryEl.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
 
-  // ── Crash Decode Modal ──────────────────────────────────────────
   let _currentCrashDecode = '';
 
   function openCrashModal(record) {
@@ -1449,7 +1358,6 @@
       openCrashModal(row);
       return;
     }
-    // Fallback: fetch from API
     try {
       const data = await fetchJson(`${BASE}/api/v1/logs/${logId}/crash-decode`);
       openCrashModal({ id: logId, crashDecode: data.crashDecode });

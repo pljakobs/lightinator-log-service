@@ -69,7 +69,9 @@ jobs:
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: GIT_VERSION=${{ github.ref_name }}-${{ steps.sha.outputs.short }}
+          build-args: |
+            GIT_VERSION=${{ github.ref_name }}-${{ steps.sha.outputs.short }}
+            BUILD_NUMBER=${{ github.run_number }}
 
       - name: Build and push
         if: github.event_name != 'pull_request'
@@ -83,4 +85,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: GIT_VERSION=${{ github.ref_name }}-${{ steps.sha.outputs.short }}
+          build-args: |
+            GIT_VERSION=${{ github.ref_name }}-${{ steps.sha.outputs.short }}
+            BUILD_NUMBER=${{ github.run_number }}

@@ -18,6 +18,9 @@ const { version: pkgVersion } = require("../package.json");
 const version = process.env.APP_VERSION || pkgVersion;
 const { SETTINGS_SCHEMA, readServiceEnv, writeServiceEnv } = require("./serviceConfig");
 
+const buildNumber = process.env.BUILD_NUMBER || 'dev';
+const gitVersion = process.env.GIT_VERSION || 'local';
+
 function listCollectorIpv4Addresses() {
   const interfaces = os.networkInterfaces();
   const ips = [];
@@ -307,6 +310,10 @@ async function main() {
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  app.get('/api/info', (req, res) => {
+    res.json({ buildNumber, gitVersion });
   });
 
   app.patch("/api/v1/controllers/:ip/logging", async (req, res) => {

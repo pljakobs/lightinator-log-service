@@ -27,9 +27,13 @@ FROM node:22 AS base
 
 ENV NODE_ENV=production
 WORKDIR /app
-# Injected at build time by CI: e.g. develop-a1b2c3d
+
+# Injected at build time by CI
 ARG GIT_VERSION=dev
+ARG BUILD_NUMBER=dev
+
 ENV APP_VERSION=$GIT_VERSION
+ENV BUILD_NUMBER=$BUILD_NUMBER
 
 # Python3 is required to run decode-stacktrace.py
 RUN apt-get update \
@@ -50,6 +54,10 @@ RUN npm install --omit=dev --no-audit --no-fund
 COPY src ./src
 
 RUN mkdir -p /app/data/logs /app/data/elfs
+
+# Persist build metadata into runtime env file
+RUN echo "BUILD_NUMBER=${BUILD_NUMBER}" > /app/data/build.env && \
+    echo "GIT_VERSION=${GIT_VERSION}" >> /app/data/build.env
 
 EXPOSE 4821/tcp
 EXPOSE 5514/udp
