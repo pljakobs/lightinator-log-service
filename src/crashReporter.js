@@ -15,7 +15,7 @@ function stripAnsi(text) {
  */
 function extractExccauseFallback(rawText) {
   if (!rawText) return "unknown";
-  const match = rawText.match(/\bexccause=(\d+|0x[0-9a-fa-f]+)\b/i);
+  const match = rawText.match(/(?:Fatal exception|Guru Meditation Error)[^\d\n]*\(?(\d+|0x[0-9a-fa-f]+)\)?/i);
   return match ? match[1] : "unknown";
 }
 

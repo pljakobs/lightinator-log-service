@@ -182,7 +182,7 @@ async function main() {
   app.get("/api/v1/logs/:id/crash-decode", async (req, res, next) => {
     try {
       const id = Number.parseInt(req.params.id, 10);
-      if (!id) {
+      if (!id || Number.isNaN(id)) {
         res.status(400).json({ error: "Invalid log id" });
         return;
       }
@@ -312,7 +312,7 @@ async function main() {
     }
   });
 
-  app.get('/api/info', (req, res) => {
+  app.get('/api/info', (_req, res) => {
     res.json({ buildNumber, gitVersion });
   });
 
@@ -375,39 +375,30 @@ async function main() {
     db,
     storage,
     onDecoded: (record) => {
+      const decodedContent = record.crashDecode || record.message || "";
       loki.forward({ ...record, tag: (record.tag || "") + ":crash-decode" });
 
       crashReporter
         .processCrash({
           logId: record.id,
           record,
-          decodedText: record.crashDecode,
+          decodedText: decodedContent,
+          fingerprint: record.fingerprint || "",
+          exccause: record.exccause || "",
+          pcFrame: record.pcFrame || "",
+          tosFrame: record.tosFrame || "",
         })
-        .then(async (result) => {
-          const issueUrl = result?.html_url || result?.url;
-          if (!issueUrl) return;
-
-          const msg = `GitHub issue generated for crash in log #${record.id}: ${issueUrl}`;
-
-          // 1. Container console log
-          console.log(`[CrashReporter] ${msg}`);
-
-          // 2. Internal log storage
-          await storage.append(record.sourceIp || record.ip || "127.0.0.1", {
-            timestamp: new Date().toISOString(),
-            facility: 1,
-            severity: 6,
-            tag: "crash-reporter",
-            message: msg,
-            boot: record.boot || 0,
-          });
+        .then((result) => {
+          if (result?.issueUrl) {
+            console.log(`[CrashReporter] Created/updated GitHub issue: ${result.issueUrl}`);
+          }
         })
         .catch((err) => {
           console.warn(`[CrashReporter] Crash reporting failed: ${err.message}`);
         });
     },
   });
-  
+
   app.use((err, _req, res, _next) => {
     console.error("Unhandled error:", err);
     res.status(500).json({ error: "Internal server error" });

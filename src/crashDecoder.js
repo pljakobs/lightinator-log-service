@@ -19,21 +19,51 @@ function stripAnsi(str) {
   return String(str || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").trim();
 }
 
+/**
+ * Parses decoded crash text to extract exception cause, PC frame, top-of-stack frame,
+ * and builds a deterministic fingerprint string.
+ * @param {string} decodedText
+ * @returns {{ exccause: string, pcFrame: string, tosFrame: string, fingerprint: string }}
+ */
+function extractCrashFingerprint(decodedText) {
+  if (!decodedText || typeof decodedText !== "string") {
+    return { exccause: "", pcFrame: "", tosFrame: "", fingerprint: "" };
+  }
+
+  let exccause = "";
+  let pcFrame = "";
+  let tosFrame = "";
+
+  // 1. Extract exccause (e.g. "Fatal exception (28):" or "excvaddr=...")
+  const excMatch = decodedText.match(/(?:Fatal exception\s*\(([^)]+)\)|Guru Meditation Error:\s*([^\r\n]+))/i);
+  if (excMatch) {
+    exccause = (excMatch[1] || excMatch[2] || "").trim();
+  }
+
+  // 2. Extract PC / Top-of-stack frames from decoded stack traces
+  const lines = decodedText.split("\n");
+  for (const line of lines) {
+    const trimmed = stripAnsi(line);
+    if (!pcFrame && /(?:pc=|->\s*0x[0-9a-f]+)/i.test(trimmed)) {
+      pcFrame = trimmed;
+    } else if (!tosFrame && /0x[0-9a-f]{8}\s+in\s+/i.test(trimmed)) {
+      tosFrame = trimmed;
+    }
+  }
+
+  const rawFingerprint = `${exccause}|${pcFrame}|${tosFrame}`;
+  const fingerprint = rawFingerprint !== "||" ? rawFingerprint : "";
+
+  return { exccause, pcFrame, tosFrame, fingerprint };
+}
+
 // Regex matching the initial trigger line of a crash
-// Covers:
-// - "Fatal exception (28):"
-// - "***** Fatal exception 28 (LoadProhibitedCause)"
-// - "Guru Meditation Error: Core 0 panic'ed..."
-// - "pc=0x4025a123 sp=0x3ffefb20 excvaddr=0x00000000"
-// - "epc1=0x40..."
 const CRASH_TRIGGER_RE = /(?:Fatal exception|Guru Meditation Error|pc=0x[0-9a-f]+\s+sp=0x[0-9a-f]+\s+excvaddr=0x[0-9a-f]+|epc1=0x[0-9a-f]+)/i;
 
 // Regex matching stack header lines
 const STACK_HEADER_RE = /(?:[Ss]tack dump:|[Ss]tack memory:|Backtrace:)/i;
 
-// Regex matching individual stack trace lines:
-// - ESP8266/ESP32 stack memory: "3ffff010: 656d006f 00000000 ..." or "3ffb1230: 0x400d1234 0x3ffb..."
-// - ESP32 backtrace lines: "Backtrace: 0x400d1234:0x3ffb1230 0x..."
+// Regex matching individual stack trace lines
 const STACK_LINE_RE = /^[0-9a-f]{8}:\s+(?:0x)?[0-9a-f]{8}/i;
 const BACKTRACE_LINE_RE = /(?:Backtrace:\s*)?(?:0x[0-9a-f]{8}:0x[0-9a-f]{8}\s*)+/i;
 
@@ -210,7 +240,6 @@ class CrashDecoder {
       console.warn(`CrashDecoder [${ip}]: target metadata missing (git_version/soc) — skipping decode`);
       if (this.storage && triggerRecordId) {
         await this.storage.updateCrashDecode(triggerRecordId, msg);
-        // Write status message as a new log entry
         await this.storage.append(ip, {
           receivedAt: new Date().toISOString(),
           facility: 1,
@@ -311,6 +340,8 @@ class CrashDecoder {
     }
 
     if (this.onDecoded) {
+      const fingerprintData = extractCrashFingerprint(decoded);
+
       this.onDecoded({
         id:          triggerRecordId,
         sourceIp:    ip,
@@ -323,11 +354,15 @@ class CrashDecoder {
         message:     decoded,
         raw:         lines.join("\n"),
         crashDecode: decoded,
+        fingerprint: fingerprintData.fingerprint,
+        exccause:    fingerprintData.exccause,
+        pcFrame:     fingerprintData.pcFrame,
+        tosFrame:    fingerprintData.tosFrame,
         _crashDecode: true,
       });
     }
   }
-  
+
   _fetchFirmwareInfo(ip) {
     return new Promise((resolve) => {
       const req = http.get(
@@ -493,4 +528,4 @@ class CrashDecoder {
   }
 }
 
-module.exports = { CrashDecoder, stripAnsi };
+module.exports = { CrashDecoder, stripAnsi, extractCrashFingerprint };

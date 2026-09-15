@@ -28,30 +28,30 @@ function extractCrashFingerprint(decodedText) {
   let pcFrame = "";
   let tosFrame = "";
 
-  // 1. Extract cause/exception type
-  const causeMatch = decodedText.match(/(?:Fatal exception|Guru Meditation Error)[:\s]+(\d+|\w+)/i);
+  if (!decodedText) {
+    return { exccause, pcFrame, tosFrame, fingerprint: "unknown::00000000::00000000" };
+  }
+
+  // 1. Extract exception cause (supports "Fatal exception (4):", "Fatal exception 4", etc.)
+  const causeMatch = decodedText.match(/(?:Fatal exception|Guru Meditation Error)[^\d\n]*\(?(\d+|\w+)\)?/i);
   if (causeMatch) {
     exccause = causeMatch[1].trim();
   }
 
-  // 2. Extract top frame (PC) and top-of-stack calling frame from decoded stacktrace lines
-  // Standard Sming decoded lines contain pattern: "0x40... at filename:line"
+  // 2. Extract call frames matching file:line patterns (e.g. "path/file.c:124")
   const lines = decodedText.split("\n");
   const decodedFrames = [];
 
   for (const line of lines) {
-    const frameMatch = line.match(/(?:at\s+|in\s+)(.+:\d+)/i);
+    // Match optional 'at/in' OR lines containing source file paths with line numbers
+    const frameMatch = line.match(/(?:(?:at|in)\s+)?([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+:\d+)/i);
     if (frameMatch) {
       decodedFrames.push(normalizeFrame(frameMatch[1]));
     }
   }
 
-  if (decodedFrames.length > 0) {
-    pcFrame = decodedFrames[0];
-  }
-  if (decodedFrames.length > 1) {
-    tosFrame = decodedFrames[1];
-  }
+  if (decodedFrames.length > 0) pcFrame = decodedFrames[0];
+  if (decodedFrames.length > 1) tosFrame = decodedFrames[1];
 
   const hashPc = hashToken(pcFrame);
   const hashTos = hashToken(tosFrame);
@@ -59,5 +59,4 @@ function extractCrashFingerprint(decodedText) {
 
   return { exccause, pcFrame, tosFrame, fingerprint };
 }
-
 module.exports = { extractCrashFingerprint };
