@@ -361,37 +361,45 @@ async function main() {
     autoCreateIssues: config.autoCreateIssues,
   });
 
-  onDecoded: (record) => {
-    loki.forward({ ...record, tag: (record.tag || "") + ":crash-decode" });
+  const crashDecoder = new CrashDecoder({
+    elfCacheDir: config.elfCacheDir,
+    elfBaseUrl: config.elfBaseUrl,
+    discovery,
+    db,
+    storage,
+    onDecoded: (record) => {
+      loki.forward({ ...record, tag: (record.tag || "") + ":crash-decode" });
 
-    crashReporter.processCrash({
-      logId: record.id,
-      record,
-      decodedText: record.crashDecode,
-    })
-    .then(async (result) => {
-      const issueUrl = result?.html_url || result?.url;
-      if (!issueUrl) return;
+      crashReporter
+        .processCrash({
+          logId: record.id,
+          record,
+          decodedText: record.crashDecode,
+        })
+        .then(async (result) => {
+          const issueUrl = result?.html_url || result?.url;
+          if (!issueUrl) return;
 
-      const msg = `GitHub issue generated for crash in log #${record.id}: ${issueUrl}`;
+          const msg = `GitHub issue generated for crash in log #${record.id}: ${issueUrl}`;
 
-      // 1. Container console log (docker logs / journalctl)
-      console.log(`[CrashReporter] ${msg}`);
+          // 1. Container console log
+          console.log(`[CrashReporter] ${msg}`);
 
-      // 2. Our internal log facility (SQLite / Web UI)
-      await storage.append(record.ip || "127.0.0.1", {
-        timestamp: new Date().toISOString(),
-        facility: "daemon",
-        severity: "info",
-        tag: "crash-reporter",
-        message: msg,
-        boot: record.boot || 0,
-      });
-    })
-    .catch(err => {
-      console.warn(`[CrashReporter] Crash reporting failed: ${err.message}`);
-    });
-  },
+          // 2. Internal log storage
+          await storage.append(record.sourceIp || record.ip || "127.0.0.1", {
+            timestamp: new Date().toISOString(),
+            facility: 1,
+            severity: 6,
+            tag: "crash-reporter",
+            message: msg,
+            boot: record.boot || 0,
+          });
+        })
+        .catch((err) => {
+          console.warn(`[CrashReporter] Crash reporting failed: ${err.message}`);
+        });
+    },
+  });
   
   app.use((err, _req, res, _next) => {
     console.error("Unhandled error:", err);
