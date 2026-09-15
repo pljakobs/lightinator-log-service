@@ -39,6 +39,7 @@ const config = {
   elfBaseUrl: process.env.LLS_ELF_BASE_URL || "http://lightinator.de/download",
   githubToken: process.env.LLS_GITHUB_TOKEN || "",
   githubRepo:  process.env.LLS_GITHUB_REPO || "",
+  autoCreateIssues: process.env.LLS_AUTO_CREATE_ISSUES === "true",
 };
 
 module.exports = { config };
