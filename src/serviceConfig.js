@@ -84,6 +84,13 @@ const SETTINGS_SCHEMA = [
     category: "GitHub Integration",
     description: "Target repository in owner/repo format (e.g. owner/lightinator)."
   },
+  {
+    key: "LLS_AUTO_CREATE_ISSUES",
+    label: "Auto-create GitHub issues on crash",
+    type: "boolean",
+    default: "false",
+    description: "Automatically log a GitHub issue when a firmware crash is decoded",
+  },
 ];
 
 /**
