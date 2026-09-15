@@ -318,8 +318,9 @@ ensure_gh_cli() {
     # Fedora / RHEL / CentOS
     local sudo_cmd=""
     is_root || sudo_cmd="sudo"
+    $sudo_cmd wget https://cli.github.com/packages/rpm/gh-cli.repo -O /tmp/gh-cli.repo
     $sudo_cmd dnf install -y 'dnf-command(config-manager)' 2>/dev/null || true
-    $sudo_cmd dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo 2>/dev/null || true
+    $sudo_cmd dnf config-manager addrepo --from-repofile /tmp/gh-cli.repo 2>/dev/null || true
     $sudo_cmd dnf install -y gh
   elif has pacman; then
     # Arch Linux
