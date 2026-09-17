@@ -79,13 +79,12 @@ for (const p of ["/", "/styles.css", "/js/app.js", "/js/logs.js", "/js/changelog
   }
 });
 
-<<<<<<< HEAD
 test("crashes endpoint is empty on a fresh server", async () => {
   const res = await api("/api/v1/crashes?limit=10");
   assert.deepEqual(res, { items: [], total: 0 });
   const filtered = await api(`/api/v1/crashes?ip=${ip}`);
   assert.deepEqual(filtered, { items: [], total: 0 });
-=======
+});
 test("changelog endpoint returns build info and a builds array", async () => {
   const data = await api("/api/v1/changelog");
   assert.ok(data.buildNumber);
@@ -95,5 +94,4 @@ test("changelog endpoint returns build info and a builds array", async () => {
     assert.equal(typeof b.build, "string");
     assert.ok(Array.isArray(b.commits));
   }
->>>>>>> feat/changelog
 });

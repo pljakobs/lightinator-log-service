@@ -99,6 +99,7 @@ test("controllers panel has removal controls and renders cards", async ({ page }
       { ip: "127.0.0.3", name: "beta", last_seen: new Date(Date.now() - 40 * 86_400_000).toISOString() },
     ],
   });
+
   try {
     await page.goto(ctrlSrv.baseUrl + "/");
     await page.locator('.tab[data-tab="controllers"]').click();
@@ -124,20 +125,21 @@ test("controllers panel has removal controls and renders cards", async ({ page }
     await expect(removeSelected).toBeDisabled();
 
     // cancelled confirm must not call the API
-    page.once("dialog", (d) => d.dismiss());
+    page.once("dialog", (dialog) => dialog.dismiss());
     await page.locator("#remove-stale-btn").click();
     await expect(cards).toHaveCount(2);
 
-    // accepting both confirms removes the 40-day-old controller
-    page.on("dialog", (d) => d.accept());
+    // auto-accept any native confirm dialogs that pop up during removal
+    page.on("dialog", (dialog) => dialog.accept());
     await page.locator("#remove-stale-btn").click();
+
     await expect(page.locator("#ctrl-status")).toHaveText(/Removed 1 stale controller\(s\) incl\. logs: 127\.0\.0\.3/);
     await expect(cards).toHaveCount(1);
     await expect(cards.first()).toHaveAttribute("data-ip", "127.0.0.2");
   } finally {
     await ctrlSrv.stop();
   }
-)};
+});
 
 test("build badge opens the what's-new modal; Escape closes it", async ({ page }) => {
   const badge = page.locator("#build-info");

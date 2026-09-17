@@ -447,6 +447,8 @@ async function main() {
     } catch (err) {
       next(err);
     }
+  }); // <-- ADD THIS
+
   app.get("/api/v1/changelog", async (_req, res) => {
     const { generatedAt, builds } = await loadChangelog();
     res.json({ buildNumber, gitVersion, generatedAt, builds });
@@ -609,3 +611,4 @@ main().catch((err) => {
   console.error("Fatal startup error:", err);
   process.exit(1);
 });
+  
