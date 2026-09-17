@@ -12,7 +12,7 @@
   <input id="filter-input" type="search" placeholder="Filter messages…" />
   <label title="Lines of context around each search hit. -1 = show all lines (matches highlighted, rest dimmed)">Context: <input id="context-input" type="number" min="-1" max="50" value="0" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
   <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
-  <span id="build-info" class="build-badge">Build #--</span>
+  <span id="build-info" class="build-badge" role="button" tabindex="0" title="What's new">Build #--</span>
   <span id="status">Loading…</span>
   <span id="loki-dot" title="Loki: checking…" style="font-size:16px;line-height:1;color:#555;cursor:default" aria-label="Loki status">&#9679;</span>
   <button id="settings-btn" style="background:#3c3c3c;margin-left:4px" title="Settings">&#9881; Settings</button>
@@ -172,6 +172,19 @@
       </div>
     </div>
     <div id="crash-modal-body"></div>
+  </div>
+</div>
+
+<div id="changelog-overlay">
+  <div id="changelog-modal">
+    <div id="changelog-header">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:14px;font-weight:600;color:#ccc">&#10024; What's new</span>
+        <span id="changelog-meta" style="font-size:11px;color:#888"></span>
+      </div>
+      <button id="changelog-close-btn" style="background:none;border:none;color:#aaa;font-size:18px;cursor:pointer;line-height:1;padding:0 4px" aria-label="Close">&#x2715;</button>
+    </div>
+    <div id="changelog-body"><div class="empty">Loading…</div></div>
   </div>
 </div>
 

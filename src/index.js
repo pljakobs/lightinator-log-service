@@ -22,6 +22,22 @@ const { SETTINGS_SCHEMA, readServiceEnv, writeServiceEnv } = require("./serviceC
 const buildNumber = process.env.BUILD_NUMBER || 'dev';
 const gitVersion = process.env.GIT_VERSION || 'local';
 
+const changelogPath = path.join(__dirname, "changelog.json");
+let changelogCache = null;
+
+async function loadChangelog() {
+  if (changelogCache) return changelogCache;
+  try {
+    const parsed = JSON.parse(await fs.readFile(changelogPath, "utf8"));
+    const builds = Array.isArray(parsed.builds) ? parsed.builds : [];
+    changelogCache = { generatedAt: parsed.generatedAt || null, builds };
+    return changelogCache;
+  } catch (err) {
+    if (err.code !== "ENOENT") console.warn(`Could not read changelog: ${err.message}`);
+    return { generatedAt: null, builds: [] };
+  }
+}
+
 function listCollectorIpv4Addresses() {
   const interfaces = os.networkInterfaces();
   const ips = [];
@@ -431,6 +447,9 @@ async function main() {
     } catch (err) {
       next(err);
     }
+  app.get("/api/v1/changelog", async (_req, res) => {
+    const { generatedAt, builds } = await loadChangelog();
+    res.json({ buildNumber, gitVersion, generatedAt, builds });
   });
 
   app.patch("/api/v1/controllers/:ip/logging", async (req, res) => {

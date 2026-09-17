@@ -6,3 +6,4 @@ npm-debug.log*
 *.elf
 test-results/
 playwright-report/
+src/changelog.json

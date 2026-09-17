@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # needed to push build/<run_number> tags after a successful image push
   packages: write
 
 jobs:
@@ -79,10 +79,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + build/* tags for the changelog
 
       - name: Get short SHA
         id: sha
         run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Generate changelog (src/changelog.json)
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          GIT_VERSION: ${{ github.ref_name }}-${{ steps.sha.outputs.short }}
+        run: npm run changelog
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -139,4 +152,14 @@ jobs:
           build-args: |
             GIT_VERSION=${{ github.ref_name }}-${{ steps.sha.outputs.short }}
             BUILD_NUMBER=${{ github.run_number }}
+
+      # Marks the built commit so later changelogs know what shipped in this build.
+      # `on.push.tags` only matches v*, so pushing build/* does not retrigger CI.
+      - name: Tag commit as build/${{ github.run_number }}
+        if: github.event_name != 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "build/${{ github.run_number }}"
+          git push origin "build/${{ github.run_number }}"
 
