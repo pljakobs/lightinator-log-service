@@ -64,6 +64,13 @@ const SETTINGS_SCHEMA = [
     type: "number",
   },
   {
+    key: "LLS_CONTROLLER_STALE_DAYS",
+    label: "Auto-remove controllers not seen for (days)",
+    description: "Controllers with no discovery contact and no log message for this many days are removed automatically once per hour — their stored logs are deleted too. Default 30, 0 disables.",
+    placeholder: "30",
+    type: "number",
+  },
+  {
     key: "LLS_MDNS_HOST",
     label: "mDNS hostname",
     description: "Hostname announced via mDNS so browsers can find the UI at http://<name>:<port>.",

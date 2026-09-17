@@ -23,6 +23,8 @@ const config = {
   discoverySeedHosts: (process.env.LLS_DISCOVERY_SEEDS || "lightinator.local").split(",").map(s => s.trim()).filter(Boolean),
   discoveryControllerPort: envInt("LLS_DISCOVERY_PORT", 80),
   discoveryRefreshMs: envInt("LLS_DISCOVERY_REFRESH_MS", 300_000),
+  // Auto-remove controllers (and their logs) not seen for this many days; 0 disables
+  controllerStaleDays: envInt("LLS_CONTROLLER_STALE_DAYS", 30),
   // Path to persist the controller list so it survives restarts
   controllerStatePath: process.env.LLS_CONTROLLER_STATE || path.join(process.cwd(), "data", "controllers.json"),
   dbPath: process.env.LLS_DB_PATH || path.join(process.cwd(), "data", "db.sqlite"),

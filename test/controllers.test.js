@@ -101,3 +101,24 @@ test("remove-stale with days=0 removes every remaining controller", async () => 
   assert.deepEqual(r.body.removed.sort(), ["127.0.0.3", "127.0.0.7"]);
   assert.deepEqual(await listIps(), []);
 });
+
+test("stale auto-purge setting is exposed in the service config and enabled by default", async () => {
+  const { body } = await api("/api/v1/service-config");
+  const entry = body.schema.find((s) => s.key === "LLS_CONTROLLER_STALE_DAYS");
+  assert.ok(entry, "schema entry present");
+  assert.equal(entry.type, "number");
+  assert.match(entry.description, /logs/);
+  assert.equal(body.liveValues.LLS_CONTROLLER_STALE_DAYS, "30");
+  assert.match(srv.getOutput(), /Stale purge: controllers not seen for 30 day\(s\) are removed hourly/);
+});
+
+test("LLS_CONTROLLER_STALE_DAYS=0 disables the auto-purge job", async () => {
+  const off = await startServer({ env: { LLS_CONTROLLER_STALE_DAYS: "0" } });
+  try {
+    const r = await fetch(`${off.baseUrl}/api/v1/service-config`).then((x) => x.json());
+    assert.equal(r.liveValues.LLS_CONTROLLER_STALE_DAYS, "0");
+    assert.match(off.getOutput(), /Stale purge: disabled/);
+  } finally {
+    await off.stop();
+  }
+});
