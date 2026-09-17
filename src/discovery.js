@@ -593,6 +593,38 @@ class ControllerDiscovery {
     return true;
   }
 
+  /** Remove a controller from memory and the DB. Returns false if unknown. */
+  remove(ip) {
+    const existed = this.controllers.delete(ip);
+    this.extraSeeds.delete(ip);
+    if (this.db) {
+      try {
+        this.db.prepare("DELETE FROM controllers WHERE ip = ?").run(ip);
+      } catch (e) {
+        console.warn(`Discovery: failed to delete ${ip} from SQLite: ${e.message}`);
+      }
+    }
+    return existed;
+  }
+
+  /**
+   * IPs of controllers whose last activity (max of lastSeen and lastLogReceived,
+   * null counts as never) is older than `days` days.
+   */
+  listStale(days) {
+    const cutoff = Date.now() - Number(days) * 86_400_000;
+    const toTime = (iso) => {
+      const t = iso ? new Date(iso).getTime() : NaN;
+      return Number.isFinite(t) ? t : -Infinity;
+    };
+    const stale = [];
+    for (const [ip, c] of this.controllers) {
+      const last = Math.max(toTime(c.lastSeen), toTime(c.lastLogReceived));
+      if (last < cutoff) stale.push(ip);
+    }
+    return stale;
+  }
+
   /** Returns false only when we explicitly know this IP has logging disabled */
   isLoggingEnabled(ip) {
     const c = this.controllers.get(ip);

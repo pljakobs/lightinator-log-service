@@ -93,8 +93,11 @@ button.add-btn:hover { background: #1e3a3a; }
 .release-badge { font-size: 10px; color: #888; font-style: italic; margin-left: 6px; }
 .split-brain-badge { font-size: 10px; color: #c8a000; font-weight: 600; margin-left: 6px; }
 .class-badge { font-size: 10px; color: #111; background: #dcdcaa; border-radius: 3px; padding: 1px 6px; margin-left: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
-.ctrl-name { color: #9cdcfe; font-size: 13px; font-weight: 600; }
+.ctrl-name { color: #9cdcfe; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ctrl-name a:hover { text-decoration: underline; }
+.ctrl-select { margin: 0; accent-color: #0e639c; cursor: pointer; }
+.ctrl-remove-btn { margin-left: auto; font-size: 10px; padding: 2px 6px; border-radius: 3px; border: 1px solid #5a2a2a; background: transparent; color: #c97a7a; cursor: pointer; }
+.ctrl-remove-btn:hover { background: #4d1e1e; color: #fff; }
 .ctrl-ip { color: #888; font-size: 11px; }
 .ctrl-groups { font-size: 11px; color: #4ec9b0; }
 .ctrl-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }

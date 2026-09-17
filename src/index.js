@@ -346,6 +346,55 @@ async function main() {
     res.json({ buildNumber, gitVersion });
   });
 
+  function removeControllers(ips, purgeLogs) {
+    const removed = [];
+    for (const ip of ips) {
+      if (!discovery.remove(ip)) continue;
+      if (purgeLogs) storage.purgeIp(ip);
+      removed.push(ip);
+    }
+    return removed;
+  }
+
+  app.delete("/api/v1/controllers/:ip", (req, res, next) => {
+    try {
+      const ip = req.params.ip;
+      const purgeLogs = String(req.query.purgeLogs || "").toLowerCase() === "true";
+      const removed = removeControllers([ip], purgeLogs);
+      if (!removed.length) return res.status(404).json({ error: "Controller not found" });
+      res.json({ ok: true, ip, purgedLogs: purgeLogs });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/controllers/remove", (req, res, next) => {
+    try {
+      const { ips, purgeLogs } = req.body || {};
+      if (!Array.isArray(ips) || !ips.every((ip) => typeof ip === "string" && ip)) {
+        return res.status(400).json({ error: "ips must be a non-empty array of strings" });
+      }
+      const removed = removeControllers(ips, purgeLogs === true);
+      res.json({ ok: true, removed, purgedLogs: purgeLogs === true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/controllers/remove-stale", (req, res, next) => {
+    try {
+      const { days, purgeLogs } = req.body || {};
+      const n = Number(days);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ error: "days must be a non-negative number" });
+      }
+      const removed = removeControllers(discovery.listStale(n), purgeLogs === true);
+      res.json({ ok: true, removed, purgedLogs: purgeLogs === true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.patch("/api/v1/controllers/:ip/logging", async (req, res) => {
     const ip = req.params.ip;
     const { enabled } = req.body;

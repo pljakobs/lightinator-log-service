@@ -90,3 +90,51 @@ test("tabs, settings and search panel are wired", async ({ page }) => {
   await page.locator("#settings-close").click();
   await expect(page.locator("#settings-overlay")).not.toHaveClass(/open/);
 });
+
+test("controllers panel has removal controls and renders cards", async ({ page }) => {
+  // own server instance: seeded controllers would also show up in the sources sidebar
+  const ctrlSrv = await startServer({
+    controllers: [
+      { ip: "127.0.0.2", name: "alpha", last_seen: new Date().toISOString() },
+      { ip: "127.0.0.3", name: "beta", last_seen: new Date(Date.now() - 40 * 86_400_000).toISOString() },
+    ],
+  });
+  try {
+    await page.goto(ctrlSrv.baseUrl + "/");
+    await page.locator('.tab[data-tab="controllers"]').click();
+    await expect(page.locator("#controllers-panel")).toHaveClass(/visible/);
+
+    const removeSelected = page.locator("#remove-selected-btn");
+    await expect(removeSelected).toBeVisible();
+    await expect(removeSelected).toBeDisabled();
+    await expect(page.locator("#stale-days")).toHaveValue("30");
+    await expect(page.locator("#remove-stale-btn")).toBeVisible();
+
+    const cards = page.locator(".ctrl-card");
+    await expect(cards).toHaveCount(2);
+    await expect(page.locator("#ctrl-status")).toHaveText("2 controller(s)");
+    await expect(cards.locator(".ctrl-remove-btn")).toHaveCount(2);
+    await expect(cards.first().locator(".ctrl-log-received")).toContainText("last seen:");
+
+    // selecting a card enables the bulk button
+    await cards.first().locator(".ctrl-select").check();
+    await expect(removeSelected).toBeEnabled();
+    await expect(removeSelected).toHaveText(/\(1\)/);
+    await cards.first().locator(".ctrl-select").uncheck();
+    await expect(removeSelected).toBeDisabled();
+
+    // cancelled confirm must not call the API
+    page.once("dialog", (d) => d.dismiss());
+    await page.locator("#remove-stale-btn").click();
+    await expect(cards).toHaveCount(2);
+
+    // accepting both confirms removes the 40-day-old controller
+    page.on("dialog", (d) => d.accept());
+    await page.locator("#remove-stale-btn").click();
+    await expect(page.locator("#ctrl-status")).toHaveText(/Removed 1 stale controller\(s\) incl\. logs: 127\.0\.0\.3/);
+    await expect(cards).toHaveCount(1);
+    await expect(cards.first()).toHaveAttribute("data-ip", "127.0.0.2");
+  } finally {
+    await ctrlSrv.stop();
+  }
+});
