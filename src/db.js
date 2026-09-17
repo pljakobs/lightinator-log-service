@@ -85,6 +85,7 @@ function openDatabase(dbPath) {
   if (!cols.includes("crash_decode")) {
     db.exec("ALTER TABLE logs ADD COLUMN crash_decode TEXT");
   }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_logs_ip_boot ON logs (ip, boot)");
 
   return db;
 }

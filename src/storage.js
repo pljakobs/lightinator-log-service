@@ -56,6 +56,9 @@ class LogStorage {
     this._stmtLastBoot = db.prepare(
       "SELECT boot FROM logs WHERE ip = ? AND boot IS NOT NULL ORDER BY id DESC LIMIT 1",
     );
+    this._stmtLastBootNonce = db.prepare(
+      "SELECT boot_nonce FROM logs WHERE ip = ? AND boot_nonce IS NOT NULL ORDER BY id DESC LIMIT 1",
+    );
     this._stmtSources = db.prepare(`
       SELECT ip, MAX(received_at) AS last_seen, COUNT(*) AS entries
       FROM logs
@@ -67,6 +70,24 @@ class LogStorage {
       WHERE ip = ? AND (? = 0 OR id < ?)
       ORDER BY id DESC
       LIMIT ?
+    `);
+    this._stmtLogsFrom = db.prepare(`
+      SELECT * FROM logs
+      WHERE ip = ? AND id >= ?
+      ORDER BY id ASC
+      LIMIT ?
+    `);
+    this._stmtRowBefore = db.prepare(
+      "SELECT id, boot FROM logs WHERE ip = ? AND id < ? ORDER BY id DESC LIMIT 1",
+    );
+    this._stmtBootRowBefore = db.prepare(
+      "SELECT id, boot FROM logs WHERE ip = ? AND id < ? AND boot IS NOT NULL ORDER BY id DESC LIMIT 1",
+    );
+    this._stmtBootOfRow = db.prepare("SELECT boot FROM logs WHERE ip = ? AND id = ?");
+    this._stmtFirstIdOfBoot = db.prepare("SELECT MIN(id) AS id FROM logs WHERE ip = ? AND boot = ?");
+    this._stmtNextBootStart = db.prepare(`
+      SELECT MIN(id) AS id FROM logs
+      WHERE ip = ? AND id > ? AND boot IS NOT NULL AND (? IS NULL OR boot != ?)
     `);
     this._stmtCount = db.prepare("SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?");
     this._stmtPurgeIp  = db.prepare("DELETE FROM logs WHERE ip = ?");
@@ -188,23 +209,48 @@ class LogStorage {
     }));
   }
 
-  getLogs({ ip, limit = 200, before = 0 }) {
+  /**
+   * Page through logs of one IP in chronological order.
+   *  - `before`: window of the newest `limit` rows with id < before (0 = tail)
+   *  - `from`:   window of `limit` rows with id >= from (takes precedence)
+   * `nextBefore` / `nextAfter` are the cursor values to pass for older / newer
+   * rows (null = none). Every item carries `bootStart` = true when its boot
+   * differs from the row immediately preceding it in the database.
+   */
+  getLogs({ ip, limit = 200, before = 0, from = 0 }) {
     const safeLimit  = Math.max(1, Math.min(2000, Number.parseInt(limit, 10)  || 200));
     const safeBefore = Math.max(0,               Number.parseInt(before, 10)  || 0);
+    const safeFrom   = Math.max(0,               Number.parseInt(from, 10)    || 0);
 
-    // Fetch one extra row to detect whether older records exist
-    const rows = this._stmtLogs.all(ip, safeBefore, safeBefore, safeLimit + 1);
+    let items, prevRow, nextBefore, nextAfter;
+    if (safeFrom > 0) {
+      const rows = this._stmtLogsFrom.all(ip, safeFrom, safeLimit + 1);
+      const extra = rows.length > safeLimit ? rows.pop() : null;
+      prevRow = this._stmtRowBefore.get(ip, safeFrom) || null;
+      items = rows.map(rowToRecord);
+      nextBefore = prevRow && items.length ? items[0].id : null;
+      nextAfter = extra ? extra.id : null;
+    } else {
+      // Fetch one extra row to detect whether older records exist
+      const rows = this._stmtLogs.all(ip, safeBefore, safeBefore, safeLimit + 1);
+      prevRow = rows.length > safeLimit ? rows.pop() : null;
+      // rows are newest-first; reverse to chronological order for the UI
+      items = rows.reverse().map(rowToRecord);
+      nextBefore = prevRow && items.length ? items[0].id : null;
+      nextAfter = safeBefore > 0 ? safeBefore : null;
+    }
 
-    const hasMore = rows.length > safeLimit;
-    if (hasMore) rows.pop();
-
-    // rows are newest-first; reverse to chronological order for the UI
-    const items = rows.reverse().map(rowToRecord);
-    const nextBefore = hasMore ? rows[0].id : null;
+    let hasPrev = prevRow != null;
+    let prevBoot = prevRow ? prevRow.boot : null;
+    for (const it of items) {
+      it.bootStart = it.boot !== undefined && (!hasPrev || prevBoot !== it.boot);
+      hasPrev = true;
+      prevBoot = it.boot ?? null;
+    }
 
     const { cnt: total } = this._stmtCount.get(ip);
 
-    return Promise.resolve({ items, total, before: safeBefore, nextBefore });
+    return Promise.resolve({ items, total, before: safeBefore, from: safeFrom, nextBefore, nextAfter });
   }
 
   purgeIp(ip) {
@@ -257,49 +303,36 @@ class LogStorage {
     return Promise.resolve(row ? row.boot : 0);
   }
 
+  /** Most recent boot nonce seen for an IP, or undefined. */
+  lastBootNonceFor(ip) {
+    const row = this._stmtLastBootNonce.get(ip);
+    return row ? row.boot_nonce : undefined;
+  }
+
   /**
-   * Resolves the absolute ID of the first log entry following a reboot transition.
+   * Resolve the id of the first row of a neighbouring boot session.
+   *  - prev: first row of the boot that the row just before `currentId` belongs to
+   *          (i.e. the start of the current boot if `currentId` is mid-boot,
+   *          otherwise the start of the preceding boot)
+   *  - next: first row after `currentId` whose boot differs from `currentId`'s
    * @param {string} ip
-   * @param {number} currentLogId
-   * @param {number} currentNonce
+   * @param {number} currentId
    * @param {'prev' | 'next'} direction
-   * @returns {number|null}
+   * @returns {{ id: number, boot: number } | null}
    */
-  getAbsoluteNonceChangeLogId(ip, currentLogId, currentNonce, direction = 'prev') {
+  getBootJumpTarget(ip, currentId, direction = 'prev') {
     if (direction === 'prev') {
-      // Locate the last log entry belonging to the preceding nonce section
-      const targetBoundary = this.db.prepare(`
-        SELECT id, boot_nonce 
-        FROM logs 
-        WHERE ip = ? AND id < ? AND boot_nonce IS NOT NULL AND boot_nonce != ?
-        ORDER BY id DESC 
-        LIMIT 1
-      `).get(ip, currentLogId, currentNonce);
-
-      if (!targetBoundary) return null;
-
-      // Retrieve the first log entry of that boot session
-      const firstLogOfBoot = this.db.prepare(`
-        SELECT id 
-        FROM logs 
-        WHERE ip = ? AND boot_nonce = ?
-        ORDER BY id ASC 
-        LIMIT 1
-      `).get(ip, targetBoundary.boot_nonce);
-
-      return firstLogOfBoot ? firstLogOfBoot.id : targetBoundary.id;
-    } else {
-      // Locate the first log entry where the nonce changes in ascending order
-      const nextBootLog = this.db.prepare(`
-        SELECT id 
-        FROM logs 
-        WHERE ip = ? AND id > ? AND boot_nonce IS NOT NULL AND boot_nonce != ?
-        ORDER BY id ASC 
-        LIMIT 1
-      `).get(ip, currentLogId, currentNonce);
-
-      return nextBootLog ? nextBootLog.id : null;
+      const ref = this._stmtBootRowBefore.get(ip, currentId);
+      if (!ref) return null;
+      const first = this._stmtFirstIdOfBoot.get(ip, ref.boot);
+      return first && first.id != null ? { id: first.id, boot: ref.boot } : null;
     }
+    const cur = this._stmtBootOfRow.get(ip, currentId);
+    const curBoot = cur && cur.boot != null ? cur.boot : null;
+    const next = this._stmtNextBootStart.get(ip, currentId, curBoot, curBoot);
+    if (!next || next.id == null) return null;
+    const boot = this._stmtBootOfRow.get(ip, next.id);
+    return { id: next.id, boot: boot ? boot.boot : null };
   }
 }
 

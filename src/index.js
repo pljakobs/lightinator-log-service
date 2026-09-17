@@ -7,6 +7,7 @@ const os = require("os");
 
 const { config } = require("./config");
 const { parseSyslogLine } = require("./syslogParser");
+const { BootTracker } = require("./bootTracker");
 const { LogStorage } = require("./storage");
 const { openDatabase } = require("./db");
 const { advertiseMdns } = require("./mdns");
@@ -77,11 +78,9 @@ async function main() {
   });
   await storage.init();
 
-  const bootCounters = new Map();
-  const bootNonces = new Map();
+  const bootTracker = new BootTracker();
   for (const src of storage.listSources()) {
-    const last = await storage.lastBootFor(src.ip);
-    bootCounters.set(src.ip, last);
+    bootTracker.restore(src.ip, await storage.lastBootFor(src.ip), storage.lastBootNonceFor(src.ip));
   }
 
   const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
@@ -172,7 +171,8 @@ async function main() {
       }
       const limit = req.query.limit;
       const before = req.query.before;
-      const result = await storage.getLogs({ ip, limit, before });
+      const from = req.query.from;
+      const result = await storage.getLogs({ ip, limit, before, from });
       res.json(result);
     } catch (err) {
       next(err);
@@ -197,23 +197,22 @@ async function main() {
     }
   });
 
-  app.get("/api/v1/logs/nonce-jump", (req, res, next) => {
-  try {
-    const ip = String(req.query.ip || "").trim();
-    const currentId = Number.parseInt(req.query.currentId, 10);
-    const nonce = Number.parseInt(req.query.nonce, 10);
-    const direction = req.query.direction === "next" ? "next" : "prev";
+  app.get("/api/v1/logs/boot-jump", (req, res, next) => {
+    try {
+      const ip = String(req.query.ip || "").trim();
+      const currentId = Number.parseInt(req.query.currentId, 10);
+      const direction = req.query.direction === "next" ? "next" : "prev";
 
-    if (!ip || Number.isNaN(currentId) || Number.isNaN(nonce)) {
-      return res.status(400).json({ error: "Missing or invalid parameters" });
+      if (!ip || Number.isNaN(currentId)) {
+        return res.status(400).json({ error: "Missing or invalid parameters" });
+      }
+
+      const target = storage.getBootJumpTarget(ip, currentId, direction);
+      res.json({ targetId: target ? target.id : null, boot: target ? target.boot : null });
+    } catch (err) {
+      next(err);
     }
-
-    const targetId = storage.getAbsoluteNonceChangeLogId(ip, currentId, nonce, direction);
-    res.json({ targetId });
-  } catch (err) {
-    next(err);
-  }
-});
+  });
 
   app.delete("/api/v1/logs", async (req, res, next) => {
     try {
@@ -435,18 +434,7 @@ async function main() {
     try {
       const raw = msg.toString("utf8");
       const record = parseSyslogLine(raw, rinfo.address);
-
-      const nonce = record.bootNonce;
-      const lastNonce = bootNonces.get(rinfo.address);
-      if (nonce !== undefined) {
-        if (nonce !== lastNonce) {
-          bootNonces.set(rinfo.address, nonce);
-          bootCounters.set(rinfo.address, (bootCounters.get(rinfo.address) || 0) + 1);
-        } else if (record.isRestartMarker) {
-          return;
-        }
-      }
-      record.boot = bootCounters.get(rinfo.address) || 0;
+      if (!bootTracker.assign(rinfo.address, record)) return;
 
       await storage.append(rinfo.address, record);
       discovery.addSeenIp(rinfo.address);

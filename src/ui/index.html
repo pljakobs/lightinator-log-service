@@ -29,7 +29,7 @@
     .source-meta { font-size: 10px; color: #666; }
     #log-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
     #log-toolbar { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; }
-    #log-list { flex: 1; overflow-y: auto; padding: 0; }
+    #log-list { flex: 1; overflow-y: auto; padding: 0; position: relative; }
     .log-row { display: grid; gap: 8px; padding: 3px 12px; border-bottom: 1px solid #2a2a2a; align-items: baseline; }
     .log-row:hover { background: #2d2d2d; }
     .log-row.err { color: #f48771; }
@@ -331,6 +331,8 @@
   const BASE = '';
   let currentIp = null;
   let nextBefore = null;
+  // cursor for newer rows; null = window ends at the live tail
+  let nextAfter = null;
   let allRows = [];
   let refreshTimer = null;
   let _lastRenderFilter = '';
@@ -401,6 +403,7 @@
     currentIp = ip;
     allRows = [];
     nextBefore = null;
+    nextAfter = null;
     logTitle.textContent = ip;
     loadOlderBtn.style.display = 'none';
     purgeBtn.style.display = '';
@@ -410,26 +413,41 @@
     await fetchLogs();
   }
 
-  async function fetchLogs(before = null, prepend = false) {
+  // mode: 'tail' (live refresh, no-op while viewing history), 'older' (prepend),
+  //       'newer' (append), 'jump' (replace window, starting at `from`)
+  async function fetchLogs({ before = null, from = null, mode = 'tail' } = {}) {
     if (!currentIp) return;
+    if (mode === 'tail' && nextAfter != null) return;
     try {
       let url = `${BASE}/api/v1/logs?ip=${encodeURIComponent(currentIp)}&limit=200`;
-      if (before != null) url += `&before=${before}`;
+      if (from != null) url += `&from=${from}`;
+      else if (before != null) url += `&before=${before}`;
       const data = await fetchJson(url);
 
-      if (prepend) {
-        allRows = [...data.items, ...allRows];
-      } else {
-        const existingIds = new Set(allRows.map(r => r.id));
-        const newItems = data.items.filter(r => !existingIds.has(r.id));
+      const existingIds = new Set(allRows.map(r => r.id));
+      const newItems = data.items.filter(r => !existingIds.has(r.id));
+      if (mode === 'jump') {
+        allRows = data.items;
+        nextBefore = data.nextBefore;
+        nextAfter = data.nextAfter;
+      } else if (mode === 'older') {
+        allRows = [...newItems, ...allRows];
+        nextBefore = data.nextBefore;
+      } else if (mode === 'newer') {
         allRows = [...allRows, ...newItems];
+        nextAfter = data.nextAfter;
+      } else {
+        const wasEmpty = allRows.length === 0;
+        allRows = [...allRows, ...newItems];
+        if (wasEmpty) nextBefore = data.nextBefore;
+        nextAfter = null;
       }
 
-      nextBefore = data.nextBefore;
       logCount.textContent = `${data.total} entries`;
-      pagerInfo.textContent = nextBefore ? `Showing last ${allRows.length} of ${data.total}` : `All ${allRows.length} entries`;
+      pagerInfo.textContent = nextAfter != null ? `Showing ${allRows.length} of ${data.total} (history)` :
+        nextBefore != null ? `Showing last ${allRows.length} of ${data.total}` : `All ${allRows.length} entries`;
       loadOlderBtn.style.display = nextBefore != null ? '' : 'none';
-      renderLogs();
+      renderLogs(mode === 'tail' ? 'keep' : mode === 'jump' ? 'top' : mode);
       updateBootNavButtons();
     } catch (e) {
       logList.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
@@ -506,8 +524,9 @@
     document.addEventListener('mouseup', onUp);
   }
 
-  let _loadingOlder = false;
-  function renderLogs() {
+  // scrollMode: 'keep' (stick to bottom if already there), 'top', 'older' (keep
+  // viewport anchored on the same rows after prepending), 'newer' (keep position)
+  function renderLogs(scrollMode = 'keep') {
     const rawFilter = filterInput.value.trim();
     let bootFilter = null;
     let textFilter = rawFilter.toLowerCase();
@@ -580,14 +599,19 @@
     const rawMode = document.getElementById('raw-mode-toggle').checked;
     const parts = [];
     let lastBoot = undefined;
+    const markedBoots = new Set();
     for (const { row: r, isContext, hasGapBefore } of displayRows) {
       if (!rawMode && hasGapBefore) {
         parts.push('<div class="context-divider">&hellip;</div>');
       }
-      if (!rawMode && r.boot !== undefined && r.boot !== lastBoot) {
-        parts.push(`<div class="reboot-marker"><span class="reboot-marker-label">&#x21bb; boot ${r.boot}</span></div>`);
-        lastBoot = r.boot;
+      // bootStart is set by the server (row's boot differs from the preceding stored row);
+      // the second clause covers filtered views where the actual boot-start row is hidden
+      if (!rawMode && r.boot !== undefined && !markedBoots.has(r.boot) &&
+          (r.bootStart || (lastBoot !== undefined && r.boot !== lastBoot))) {
+        parts.push(`<div class="reboot-marker" data-boot="${r.boot}"><span class="reboot-marker-label">&#x21bb; boot ${r.boot}</span></div>`);
+        markedBoots.add(r.boot);
       }
+      if (r.boot !== undefined) lastBoot = r.boot;
       const cls = severityClass(r.priority);
       const extraCls = isContext ? ' context' : '';
       const isPending = r.crashDecode && r.crashDecode.includes('decoding in progress');
@@ -607,12 +631,12 @@
     }
     logList.innerHTML = parts.join('');
 
-    if (shouldAnchorBootHead) {
+    if (shouldAnchorBootHead || scrollMode === 'top') {
       logList.scrollTop = 0;
-    } else if (autoScroll.checked && wasAtBottom) {
-      logList.scrollTop = logList.scrollHeight;
-    } else if (_loadingOlder) {
+    } else if (scrollMode === 'older') {
       logList.scrollTop = prevScrollTop + (logList.scrollHeight - prevScrollHeight);
+    } else if (scrollMode === 'keep' && autoScroll.checked && wasAtBottom) {
+      logList.scrollTop = logList.scrollHeight;
     } else {
       logList.scrollTop = prevScrollTop;
     }
@@ -620,22 +644,20 @@
     _lastRenderIp = currentIp;
   }
 
+  let _loadingOlder = false;
+  let _loadingNewer = false;
   logList.addEventListener('scroll', async () => {
-    if (_loadingOlder) return;
-    if (nextBefore == null) return;
-    if (logList.scrollTop > 80) return;
-    _loadingOlder = true;
-    const sentinel = document.createElement('div');
-    sentinel.className = 'loading-older';
-    sentinel.textContent = 'Loading older entries…';
-    logList.prepend(sentinel);
-    const prevHeight = logList.scrollHeight;
-    try {
-      await fetchLogs(nextBefore, true);
-    } finally {
-      sentinel.remove();
-      logList.scrollTop += logList.scrollHeight - prevHeight;
-      _loadingOlder = false;
+    if (!_loadingOlder && nextBefore != null && logList.scrollTop <= 80) {
+      _loadingOlder = true;
+      try { await fetchLogs({ before: nextBefore, mode: 'older' }); }
+      finally { _loadingOlder = false; }
+      return;
+    }
+    if (!_loadingNewer && nextAfter != null &&
+        logList.scrollHeight - logList.scrollTop - logList.clientHeight <= 80) {
+      _loadingNewer = true;
+      try { await fetchLogs({ from: nextAfter, mode: 'newer' }); }
+      finally { _loadingNewer = false; }
     }
   });
 
@@ -662,7 +684,7 @@
   }
 
   loadOlderBtn.addEventListener('click', () => {
-    if (nextBefore != null) fetchLogs(nextBefore, true);
+    if (nextBefore != null) fetchLogs({ before: nextBefore, mode: 'older' });
   });
 
   purgeBtn.addEventListener('click', async () => {
@@ -690,28 +712,35 @@
     bootNextBtn.style.display = show ? '' : 'none';
   }
 
-  async function jumpToReboot(direction) {
-    if (!currentIp || !allRows.length) return;
-    
-    // Select boundary row based on direction
-    const referenceLog = direction === 'prev' ? allRows[0] : allRows[allRows.length - 1];
-    const currentNonce = referenceLog.boot_nonce ?? referenceLog.bootNonce;
+  async function jumpToTail() {
+    allRows = [];
+    nextBefore = null;
+    nextAfter = null;
+    await fetchLogs();
+    logList.scrollTop = logList.scrollHeight;
+  }
 
-    if (referenceLog.id == null || currentNonce == null) return;
+  // Server-side jump for boot boundaries outside the loaded window.
+  async function jumpToBoot(direction) {
+    if (!currentIp || !allRows.length) return;
+    const ref = direction === 'prev' ? allRows[0] : allRows[allRows.length - 1];
+    if (ref.id == null) return;
 
     try {
       const data = await fetchJson(
-        `${BASE}/api/v1/logs/nonce-jump?ip=${encodeURIComponent(currentIp)}` +
-        `&currentId=${referenceLog.id}` +
-        `&nonce=${currentNonce}` +
-        `&direction=${direction}`
+        `${BASE}/api/v1/logs/boot-jump?ip=${encodeURIComponent(currentIp)}` +
+        `&currentId=${ref.id}&direction=${direction}`
       );
-
       if (data.targetId != null) {
-        await fetchLogs(data.targetId + 1, false);
+        await fetchLogs({ from: data.targetId, mode: 'jump' });
+      } else if (direction === 'next') {
+        if (nextAfter != null) await jumpToTail();
+        else logList.scrollTop = logList.scrollHeight;
+      } else {
+        logList.scrollTop = 0;
       }
     } catch (e) {
-      console.error('Failed to jump to reboot boundary:', e);
+      console.error('Failed to jump to boot boundary:', e);
     }
   }
 
@@ -721,15 +750,13 @@
       return;
     }
     const markers = [...logList.querySelectorAll('.reboot-marker')];
-    if (markers.length > 0) {
-      const threshold = logList.scrollTop - 4;
-      const target = [...markers].reverse().find(m => m.offsetTop < threshold);
-      if (target) {
-        logList.scrollTop = Math.max(0, target.offsetTop);
-        return;
-      }
+    const threshold = logList.scrollTop - 4;
+    const target = markers.reverse().find(m => m.offsetTop < threshold);
+    if (target) {
+      logList.scrollTop = Math.max(0, target.offsetTop);
+      return;
     }
-    await jumpToReboot('prev');
+    await jumpToBoot('prev');
   });
 
   bootNextBtn.addEventListener('click', async () => {
@@ -738,15 +765,13 @@
       return;
     }
     const markers = [...logList.querySelectorAll('.reboot-marker')];
-    if (markers.length > 0) {
-      const threshold = logList.scrollTop + 4;
-      const target = markers.find(m => m.offsetTop > threshold);
-      if (target) {
-        logList.scrollTop = Math.max(0, target.offsetTop);
-        return;
-      }
+    const threshold = logList.scrollTop + 4;
+    const target = markers.find(m => m.offsetTop > threshold);
+    if (target) {
+      logList.scrollTop = Math.max(0, target.offsetTop);
+      return;
     }
-    await jumpToReboot('next');
+    await jumpToBoot('next');
   });
 
   const colPickerBtn = document.getElementById('col-picker-btn');
