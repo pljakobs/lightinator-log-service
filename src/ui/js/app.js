@@ -3,13 +3,14 @@ import './logs.js';
 import './controllers.js';
 import './settings.js';
 import './search.js';
+import './changelog.js';
 
 fetch('/api/info')
   .then(res => res.json())
   .then(data => {
     if (data.buildNumber) {
       document.getElementById('build-info').textContent = `Build #${data.buildNumber}`;
-      document.getElementById('build-info').title = `Version: ${data.gitVersion || 'unknown'}`;
+      document.getElementById('build-info').title = `Version: ${data.gitVersion || 'unknown'} — click for what's new`;
     }
   })
   .catch(() => {});

@@ -90,3 +90,33 @@ test("tabs, settings and search panel are wired", async ({ page }) => {
   await page.locator("#settings-close").click();
   await expect(page.locator("#settings-overlay")).not.toHaveClass(/open/);
 });
+
+test("build badge opens the what's-new modal; Escape closes it", async ({ page }) => {
+  const badge = page.locator("#build-info");
+  await expect(badge).toHaveText(/Build #/);
+  await badge.click();
+
+  const overlay = page.locator("#changelog-overlay");
+  await expect(overlay).toHaveClass(/open/);
+  await expect(page.locator("#changelog-meta")).toHaveText(/Build #/);
+
+  const body = page.locator("#changelog-body");
+  const builds = body.locator(".cl-build");
+  if (await builds.count()) {
+    await expect(builds.first().locator(".cl-build-header")).toContainText("Build #");
+    // the current build, when listed, is always on top
+    if (await body.locator(".cl-build.current").count()) {
+      await expect(builds.first()).toHaveClass(/current/);
+    }
+  } else {
+    await expect(body.locator(".empty")).toHaveText("No changelog available in this build");
+  }
+
+  await page.keyboard.press("Escape");
+  await expect(overlay).not.toHaveClass(/open/);
+
+  await badge.click();
+  await expect(overlay).toHaveClass(/open/);
+  await page.locator("#changelog-close-btn").click();
+  await expect(overlay).not.toHaveClass(/open/);
+});

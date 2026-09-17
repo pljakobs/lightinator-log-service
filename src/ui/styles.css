@@ -10,7 +10,8 @@ button { background: #0e639c; color: #fff; border: none; border-radius: 4px; pad
 button:hover { background: #1177bb; }
 button.danger { background: #8b1c1c; }
 button.danger:hover { background: #a02424; }
-.build-badge { font-size: 11px; color: #888; background: #2d2d2d; border: 1px solid #444; border-radius: 3px; padding: 2px 6px; font-family: ui-monospace, monospace; cursor: help; }
+.build-badge { font-size: 11px; color: #888; background: #2d2d2d; border: 1px solid #444; border-radius: 3px; padding: 2px 6px; font-family: ui-monospace, monospace; cursor: pointer; }
+.build-badge:hover { color: #d4d4d4; border-color: #666; }
 #status { margin-left: auto; font-size: 11px; color: #888; }
 main { display: flex; flex: 1; overflow: hidden; }
 #sources-panel { width: 200px; flex-shrink: 0; background: #252526; border-right: 1px solid #3c3c3c; overflow-y: auto; display: flex; flex-direction: column; }
@@ -158,3 +159,19 @@ mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; p
 #crash-modal { background: #1e1e1e; border: 1px solid #444; border-radius: 6px; width: 900px; max-width: 95vw; height: 80vh; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8); }
 #crash-modal-header { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 #crash-modal-body { flex: 1; overflow: auto; padding: 14px 16px; background: #141414; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+#changelog-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); z-index: 200; align-items: center; justify-content: center; }
+#changelog-overlay.open { display: flex; }
+#changelog-modal { background: #1e1e1e; border: 1px solid #444; border-radius: 6px; width: 720px; max-width: 95vw; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8); }
+#changelog-header { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+#changelog-body { flex: 1; overflow: auto; padding: 8px 16px 16px; }
+#changelog-body .empty { padding: 30px 0; text-align: center; color: #666; }
+.cl-build { margin-top: 14px; }
+.cl-build-header { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #3c3c3c; font-size: 12px; color: #9cdcfe; font-weight: 600; }
+.cl-build.current .cl-build-header { color: #4ec9b0; }
+.cl-build-meta { color: #888; font-weight: 400; }
+.cl-current-tag { background: #1e4d2b; color: #4ec9b0; font-size: 10px; font-weight: 600; border-radius: 3px; padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+.cl-commits { list-style: none; padding: 4px 0 0; }
+.cl-commit { display: flex; gap: 10px; padding: 3px 0; font-size: 12px; line-height: 1.4; }
+.cl-sha { color: #666; flex-shrink: 0; }
+.cl-subject { color: #d4d4d4; word-break: break-word; }
+.cl-none { color: #666; font-size: 12px; padding: 4px 0; font-style: italic; }
