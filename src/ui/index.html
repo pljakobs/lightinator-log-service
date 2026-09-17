@@ -685,40 +685,68 @@
   }
 
   function updateBootNavButtons() {
-    const markers = logList.querySelectorAll('.reboot-marker');
-    const show = currentIp && (hasBootFilter() || markers.length > 0);
+    const show = currentIp != null;
     bootPrevBtn.style.display = show ? '' : 'none';
     bootNextBtn.style.display = show ? '' : 'none';
   }
 
-  bootPrevBtn.addEventListener('click', () => {
+  async function jumpToReboot(direction) {
+    if (!currentIp || !allRows.length) return;
+    
+    // Select boundary row based on direction
+    const referenceLog = direction === 'prev' ? allRows[0] : allRows[allRows.length - 1];
+    const currentNonce = referenceLog.boot_nonce ?? referenceLog.bootNonce;
+
+    if (referenceLog.id == null || currentNonce == null) return;
+
+    try {
+      const data = await fetchJson(
+        `${BASE}/api/v1/logs/nonce-jump?ip=${encodeURIComponent(currentIp)}` +
+        `&currentId=${referenceLog.id}` +
+        `&nonce=${currentNonce}` +
+        `&direction=${direction}`
+      );
+
+      if (data.targetId != null) {
+        await fetchLogs(data.targetId + 1, false);
+      }
+    } catch (e) {
+      console.error('Failed to jump to reboot boundary:', e);
+    }
+  }
+
+  bootPrevBtn.addEventListener('click', async () => {
     if (hasBootFilter()) {
       logList.scrollTop = 0;
       return;
     }
     const markers = [...logList.querySelectorAll('.reboot-marker')];
-    if (!markers.length) return;
-    const threshold = logList.scrollTop - 4;
-    const target = [...markers].reverse().find(m => m.offsetTop < threshold);
-    if (target) {
-      logList.scrollTop = Math.max(0, target.offsetTop);
-    } else {
-      logList.scrollTop = 0;
+    if (markers.length > 0) {
+      const threshold = logList.scrollTop - 4;
+      const target = [...markers].reverse().find(m => m.offsetTop < threshold);
+      if (target) {
+        logList.scrollTop = Math.max(0, target.offsetTop);
+        return;
+      }
     }
+    await jumpToReboot('prev');
   });
 
-  bootNextBtn.addEventListener('click', () => {
+  bootNextBtn.addEventListener('click', async () => {
     if (hasBootFilter()) {
       logList.scrollTop = logList.scrollHeight;
       return;
     }
     const markers = [...logList.querySelectorAll('.reboot-marker')];
-    if (!markers.length) return;
-    const threshold = logList.scrollTop + 4;
-    const target = markers.find(m => m.offsetTop > threshold);
-    if (target) {
-      logList.scrollTop = Math.max(0, target.offsetTop);
+    if (markers.length > 0) {
+      const threshold = logList.scrollTop + 4;
+      const target = markers.find(m => m.offsetTop > threshold);
+      if (target) {
+        logList.scrollTop = Math.max(0, target.offsetTop);
+        return;
+      }
     }
+    await jumpToReboot('next');
   });
 
   const colPickerBtn = document.getElementById('col-picker-btn');

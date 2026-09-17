@@ -256,6 +256,51 @@ class LogStorage {
     const row = this._stmtLastBoot.get(ip);
     return Promise.resolve(row ? row.boot : 0);
   }
+
+  /**
+   * Resolves the absolute ID of the first log entry following a reboot transition.
+   * @param {string} ip
+   * @param {number} currentLogId
+   * @param {number} currentNonce
+   * @param {'prev' | 'next'} direction
+   * @returns {number|null}
+   */
+  getAbsoluteNonceChangeLogId(ip, currentLogId, currentNonce, direction = 'prev') {
+    if (direction === 'prev') {
+      // Locate the last log entry belonging to the preceding nonce section
+      const targetBoundary = this.db.prepare(`
+        SELECT id, boot_nonce 
+        FROM logs 
+        WHERE ip = ? AND id < ? AND boot_nonce IS NOT NULL AND boot_nonce != ?
+        ORDER BY id DESC 
+        LIMIT 1
+      `).get(ip, currentLogId, currentNonce);
+
+      if (!targetBoundary) return null;
+
+      // Retrieve the first log entry of that boot session
+      const firstLogOfBoot = this.db.prepare(`
+        SELECT id 
+        FROM logs 
+        WHERE ip = ? AND boot_nonce = ?
+        ORDER BY id ASC 
+        LIMIT 1
+      `).get(ip, targetBoundary.boot_nonce);
+
+      return firstLogOfBoot ? firstLogOfBoot.id : targetBoundary.id;
+    } else {
+      // Locate the first log entry where the nonce changes in ascending order
+      const nextBootLog = this.db.prepare(`
+        SELECT id 
+        FROM logs 
+        WHERE ip = ? AND id > ? AND boot_nonce IS NOT NULL AND boot_nonce != ?
+        ORDER BY id ASC 
+        LIMIT 1
+      `).get(ip, currentLogId, currentNonce);
+
+      return nextBootLog ? nextBootLog.id : null;
+    }
+  }
 }
 
 module.exports = { LogStorage };

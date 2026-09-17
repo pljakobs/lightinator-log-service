@@ -197,6 +197,24 @@ async function main() {
     }
   });
 
+  app.get("/api/v1/logs/nonce-jump", (req, res, next) => {
+  try {
+    const ip = String(req.query.ip || "").trim();
+    const currentId = Number.parseInt(req.query.currentId, 10);
+    const nonce = Number.parseInt(req.query.nonce, 10);
+    const direction = req.query.direction === "next" ? "next" : "prev";
+
+    if (!ip || Number.isNaN(currentId) || Number.isNaN(nonce)) {
+      return res.status(400).json({ error: "Missing or invalid parameters" });
+    }
+
+    const targetId = storage.getAbsoluteNonceChangeLogId(ip, currentId, nonce, direction);
+    res.json({ targetId });
+  } catch (err) {
+    next(err);
+  }
+});
+
   app.delete("/api/v1/logs", async (req, res, next) => {
     try {
       const ip = String(req.query.ip || "").trim();

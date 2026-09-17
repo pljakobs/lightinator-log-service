@@ -53,7 +53,7 @@ const SETTINGS_SCHEMA = [
     key: "LLS_MAX_ROWS_PER_IP",
     label: "Max log rows per controller",
     description: "Maximum log lines stored per controller before oldest lines are trimmed. Default 10000.",
-    placeholder: "10000",
+    placeholder: "100000",
     type: "number",
   },
   {
