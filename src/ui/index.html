@@ -196,6 +196,7 @@
       <div id="log-list"><div class="empty">Select a source on the left</div></div>
       <div id="pager">
         <span id="pager-info"></span>
+        <button id="jump-end-btn" style="display:none;font-size:11px;padding:3px 10px" title="Return to the live end of the log">&#x2913; Jump to end</button>
         <label id="auto-scroll-label"><input type="checkbox" id="auto-scroll" checked /> Stick to bottom</label>
       </div>
     </div>
@@ -350,6 +351,7 @@
   const filterInput = document.getElementById('filter-input');
   const autoRefresh = document.getElementById('auto-refresh');
   const autoScroll = document.getElementById('auto-scroll');
+  const jumpEndBtn = document.getElementById('jump-end-btn');
   const status = document.getElementById('status');
 
   async function fetchJson(url) {
@@ -642,11 +644,28 @@
     }
     _lastRenderFilter = rawFilter;
     _lastRenderIp = currentIp;
+    updateJumpEndBtn();
   }
+
+  function isAtBottom() {
+    return logList.scrollHeight - logList.scrollTop <= logList.clientHeight + 8;
+  }
+
+  function updateJumpEndBtn() {
+    jumpEndBtn.style.display = currentIp && (nextAfter != null || !isAtBottom()) ? '' : 'none';
+  }
+
+  jumpEndBtn.addEventListener('click', async () => {
+    autoScroll.checked = true;
+    if (nextAfter != null) await jumpToTail();
+    else logList.scrollTop = logList.scrollHeight;
+    updateJumpEndBtn();
+  });
 
   let _loadingOlder = false;
   let _loadingNewer = false;
   logList.addEventListener('scroll', async () => {
+    updateJumpEndBtn();
     if (!_loadingOlder && nextBefore != null && logList.scrollTop <= 80) {
       _loadingOlder = true;
       try { await fetchLogs({ before: nextBefore, mode: 'older' }); }
