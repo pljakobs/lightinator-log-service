@@ -1,6 +1,7 @@
 import { BASE, fetchJson, activateTab } from './common.js';
 import './logs.js';
 import './controllers.js';
+import './crashes.js';
 import './settings.js';
 import './search.js';
 

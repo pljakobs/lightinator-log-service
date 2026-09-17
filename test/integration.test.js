@@ -73,8 +73,15 @@ test("boot-jump resolves neighbouring boot starts", async () => {
 });
 
 test("UI assets are served", async () => {
-  for (const p of ["/", "/styles.css", "/js/app.js", "/js/logs.js"]) {
+  for (const p of ["/", "/styles.css", "/js/app.js", "/js/logs.js", "/js/crashes.js"]) {
     const r = await fetch(`${srv.baseUrl}${p}`);
     assert.equal(r.status, 200, p);
   }
+});
+
+test("crashes endpoint is empty on a fresh server", async () => {
+  const res = await api("/api/v1/crashes?limit=10");
+  assert.deepEqual(res, { items: [], total: 0 });
+  const filtered = await api(`/api/v1/crashes?ip=${ip}`);
+  assert.deepEqual(filtered, { items: [], total: 0 });
 });

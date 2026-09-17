@@ -115,3 +115,50 @@ test("maxRowsPerIp trims oldest rows", async () => {
   assert.equal(res.items.length, 3);
   assert.deepEqual(res.items.map((r) => r.message), ["x2", "x3", "x4"]);
 });
+
+test("listCrashes returns decoded crashes newest first with pending flag and ip filter", async () => {
+  const crashIp = "10.0.0.9";
+  const longLine = "Exception (28): epc1=0x4000bf80 " + "x".repeat(200);
+  const a = await storage.append(crashIp, { message: "crash a", boot: 1, crashDecode: "\n\n\x1b[31mException (0): guru meditation\x1b[0m\nPC: 0x40201234 app_main" });
+  const b = await storage.append(ip,      { message: "crash b", boot: 3, crashDecode: longLine + "\nmore" });
+  const c = await storage.append(crashIp, { message: "crash c\nsecond line", boot: 2, crashDecode: "[Crash dump detected, decoding in progress...]" });
+
+  const all = storage.listCrashes({ limit: 10 });
+  assert.equal(all.total, 3);
+  assert.deepEqual(all.items.map((r) => r.id), [c, b, a]);
+
+  const [rc, rb, ra] = all.items;
+  assert.equal(rc.pending, true);
+  assert.equal(rc.summary, "");
+  assert.equal(rc.message, "crash c");
+  assert.equal(rc.ip, crashIp);
+  assert.equal(rc.boot, 2);
+  assert.equal(rc.fingerprint, null);
+  assert.equal(rc.issueUrl, null);
+
+  assert.equal(rb.pending, false);
+  assert.equal(rb.summary.length, 160);
+  assert.ok(rb.summary.endsWith("…"));
+
+  assert.equal(ra.pending, false);
+  assert.equal(ra.summary, "Exception (0): guru meditation");
+  assert.ok(ra.receivedAt);
+
+  const limited = storage.listCrashes({ limit: 1 });
+  assert.equal(limited.items.length, 1);
+  assert.equal(limited.total, 3);
+
+  const filtered = storage.listCrashes({ ip: crashIp });
+  assert.equal(filtered.total, 2);
+  assert.deepEqual(filtered.items.map((r) => r.id), [c, a]);
+
+  // crash_reports join surfaces issue data
+  db.prepare(`INSERT INTO crash_reports (fingerprint, log_id, issue_url, issue_number, soc, git_version, created_at)
+              VALUES ('fp-a', ?, 'https://github.com/x/y/issues/7', 7, 'esp8266', 'v1.2.3', '2026-01-01T00:00:00Z')`).run(a);
+  const joined = storage.listCrashes({ ip: crashIp }).items.find((r) => r.id === a);
+  assert.equal(joined.fingerprint, "fp-a");
+  assert.equal(joined.issueUrl, "https://github.com/x/y/issues/7");
+  assert.equal(joined.issueNumber, 7);
+  assert.equal(joined.soc, "esp8266");
+  assert.equal(joined.gitVersion, "v1.2.3");
+});

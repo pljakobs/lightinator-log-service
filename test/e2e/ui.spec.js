@@ -90,3 +90,15 @@ test("tabs, settings and search panel are wired", async ({ page }) => {
   await page.locator("#settings-close").click();
   await expect(page.locator("#settings-overlay")).not.toHaveClass(/open/);
 });
+
+test("crashes tab shows the panel with an empty state", async ({ page }) => {
+  await page.locator('.tab[data-tab="crashes"]').click();
+  await expect(page.locator("#crashes-panel")).toHaveClass(/visible/);
+  await expect(page.locator("#crashes-panel")).toBeVisible();
+  await expect(page.locator("#crashes-list .empty")).toHaveText("No crashes recorded");
+  await expect(page.locator("#crashes-status")).toHaveText("No crashes recorded");
+  await expect(page.locator("#crashes-ip-sel option")).toHaveCount(2);
+
+  await page.locator('.tab[data-tab="logs"]').click();
+  await expect(page.locator("#crashes-panel")).not.toHaveClass(/visible/);
+});

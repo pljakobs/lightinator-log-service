@@ -1,6 +1,9 @@
 const fs = require("fs/promises");
 const path = require("path");
 
+// Placeholder text written by CrashDecoder while a dump is being decoded.
+const CRASH_PENDING_MARKER = "decoding in progress";
+
 /**
  * Map a SQLite logs row (snake_case columns) back to the record shape the
  * rest of the application expects (camelCase).
@@ -111,6 +114,18 @@ class LogStorage {
     `);
     this._stmtSearchCtx = db.prepare(
       "SELECT * FROM logs WHERE ip = ? AND id BETWEEN ? AND ? ORDER BY id ASC",
+    );
+    this._stmtCrashes = db.prepare(`
+      SELECT l.id, l.ip, l.received_at, l.boot, l.message, l.crash_decode,
+             c.fingerprint, c.issue_url, c.issue_number, c.soc, c.git_version
+      FROM logs l
+      LEFT JOIN crash_reports c ON c.log_id = l.id
+      WHERE l.crash_decode IS NOT NULL AND (? IS NULL OR l.ip = ?)
+      ORDER BY l.id DESC
+      LIMIT ?
+    `);
+    this._stmtCrashCount = db.prepare(
+      "SELECT COUNT(*) AS cnt FROM logs WHERE crash_decode IS NOT NULL AND (? IS NULL OR ip = ?)",
     );
   }
 
@@ -302,6 +317,48 @@ class LogStorage {
     }));
 
     return { query, snippets, total: matches.length };
+  }
+
+  /**
+   * Recent crash dumps across all IPs (newest first), joined with any GitHub
+   * issue created for them.
+   * @param {object} opts
+   * @param {number} [opts.limit=100]  Max rows (1–1000).
+   * @param {string} [opts.ip]         Restrict to one controller.
+   */
+  listCrashes({ limit = 100, ip = null } = {}) {
+    const safeLimit = Math.max(1, Math.min(1000, Number.parseInt(limit, 10) || 100));
+    const ipFilter = ip ? String(ip) : null;
+
+    const items = this._stmtCrashes.all(ipFilter, ipFilter, safeLimit).map((r) => {
+      const decode = r.crash_decode || "";
+      const pending = decode.includes(CRASH_PENDING_MARKER);
+      let summary = "";
+      if (!pending) {
+        const line = decode
+          .split("\n")
+          .map((l) => l.replace(/\x1b\[[0-9;]*m/g, "").trim())
+          .find((l) => l && !l.includes(CRASH_PENDING_MARKER));
+        if (line) summary = line.length > 160 ? line.slice(0, 159) + "…" : line;
+      }
+      return {
+        id:          r.id,
+        ip:          r.ip,
+        receivedAt:  r.received_at,
+        boot:        r.boot != null ? r.boot : null,
+        message:     (r.message || "").split("\n")[0].slice(0, 160),
+        pending,
+        summary,
+        fingerprint: r.fingerprint  || null,
+        issueUrl:    r.issue_url    || null,
+        issueNumber: r.issue_number != null ? r.issue_number : null,
+        soc:         r.soc          || null,
+        gitVersion:  r.git_version  || null,
+      };
+    });
+
+    const { cnt: total } = this._stmtCrashCount.get(ipFilter, ipFilter);
+    return { items, total };
   }
 
   /**

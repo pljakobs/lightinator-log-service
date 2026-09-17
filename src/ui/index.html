@@ -26,6 +26,7 @@
     <div class="tab-bar">
       <div class="tab active" data-tab="logs">Logs</div>
       <div class="tab" data-tab="controllers">Controllers</div>
+      <div class="tab" data-tab="crashes">Crashes</div>
       <div class="tab" data-tab="search">Search</div>
     </div>
     <div id="log-panel" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
@@ -60,6 +61,15 @@
         <span id="ctrl-status" style="font-size:11px;color:#888"></span>
       </div>
       <div id="ctrl-grid" class="ctrl-grid"></div>
+    </div>
+    <div id="crashes-panel">
+      <div id="crashes-toolbar">
+        <span style="color:#ccc;font-size:13px;font-weight:600">Recent Crashes</span>
+        <button id="crashes-refresh-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">&#8635; Refresh</button>
+        <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px">Controller: <select id="crashes-ip-sel" style="background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px"><option value="">All</option></select></label>
+        <span id="crashes-status" style="font-size:11px;color:#888"></span>
+      </div>
+      <div id="crashes-list"><div class="empty">Loading…</div></div>
     </div>
     <div id="search-panel">
       <div id="search-toolbar">
