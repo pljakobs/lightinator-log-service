@@ -197,6 +197,19 @@ async function main() {
     }
   });
 
+  app.get("/api/v1/boots", (req, res, next) => {
+    try {
+      const ip = String(req.query.ip || "").trim();
+      if (!ip) {
+        res.status(400).json({ error: "Missing required query parameter: ip" });
+        return;
+      }
+      res.json({ items: storage.listBoots(ip) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.get("/api/v1/logs/boot-jump", (req, res, next) => {
     try {
       const ip = String(req.query.ip || "").trim();

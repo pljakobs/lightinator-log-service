@@ -89,6 +89,17 @@ class LogStorage {
       SELECT MIN(id) AS id FROM logs
       WHERE ip = ? AND id > ? AND boot IS NOT NULL AND (? IS NULL OR boot != ?)
     `);
+    this._stmtBoots = db.prepare(`
+      SELECT boot,
+             MIN(id) AS first_id, MAX(id) AS last_id,
+             MIN(received_at) AS started_at, MAX(received_at) AS ended_at,
+             COUNT(*) AS entries,
+             SUM(CASE WHEN crash_decode IS NOT NULL THEN 1 ELSE 0 END) AS crashes
+      FROM logs
+      WHERE ip = ? AND boot IS NOT NULL
+      GROUP BY boot
+      ORDER BY boot DESC
+    `);
     this._stmtCount = db.prepare("SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?");
     this._stmtPurgeIp  = db.prepare("DELETE FROM logs WHERE ip = ?");
     this._stmtPurgeAll = db.prepare("DELETE FROM logs");
@@ -307,6 +318,19 @@ class LogStorage {
   lastBootNonceFor(ip) {
     const row = this._stmtLastBootNonce.get(ip);
     return row ? row.boot_nonce : undefined;
+  }
+
+  /** Boot sessions of an IP, newest first (like `journalctl --list-boots`). */
+  listBoots(ip) {
+    return this._stmtBoots.all(ip).map((r) => ({
+      boot:      r.boot,
+      firstId:   r.first_id,
+      lastId:    r.last_id,
+      startedAt: r.started_at,
+      endedAt:   r.ended_at,
+      entries:   r.entries,
+      crashes:   r.crashes,
+    }));
   }
 
   /**

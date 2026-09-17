@@ -89,6 +89,17 @@ test("next jump from the last boot returns null", () => {
   assert.equal(storage.getBootJumpTarget(ip, 20, "next"), null);
 });
 
+test("listBoots summarises boot sessions newest first", () => {
+  const boots = storage.listBoots(ip);
+  assert.deepEqual(boots.map((b) => [b.boot, b.firstId, b.lastId, b.entries]), [
+    [3, 13, 20, 8],
+    [2, 6, 12, 7],
+    [1, 1, 5, 5],
+  ]);
+  assert.equal(boots[0].crashes, 0);
+  assert.ok(boots[0].startedAt);
+});
+
 test("lastBootFor / lastBootNonceFor return the newest values", async () => {
   assert.equal(await storage.lastBootFor(ip), 3);
   assert.equal(storage.lastBootNonceFor(ip), 333);

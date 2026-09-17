@@ -47,6 +47,16 @@
     #col-picker { display: none; position: absolute; top: 100%; background: #252526; border: 1px solid #3c3c3c; border-radius: 4px; padding: 8px 12px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.5); min-width: 110px; }
     #col-picker.open { display: block; }
     #col-picker label { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; color: #ccc; font-size: 12px; white-space: nowrap; }
+    #boot-picker { display: none; position: absolute; top: 100%; left: 0; background: #252526; border: 1px solid #3c3c3c; border-radius: 4px; padding: 4px 0; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.5); min-width: 420px; max-height: 60vh; overflow-y: auto; }
+    #boot-picker.open { display: block; }
+    .boot-item { display: grid; grid-template-columns: 70px 1fr 1fr 70px 24px; gap: 10px; align-items: center; padding: 4px 12px; cursor: pointer; font-size: 11px; color: #ccc; white-space: nowrap; }
+    .boot-item:hover { background: #2d2d2d; }
+    .boot-item.current { background: #1e3a5f; }
+    .boot-item .boot-no { color: #dcdcaa; font-weight: 600; }
+    .boot-item .boot-time { color: #888; }
+    .boot-item .boot-entries { color: #888; text-align: right; }
+    .boot-item .boot-crash { color: #f48771; text-align: center; }
+    .boot-hdr { display: grid; grid-template-columns: 70px 1fr 1fr 70px 24px; gap: 10px; padding: 3px 12px 5px; font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid #3c3c3c; margin-bottom: 2px; }
     .log-row.raw-row { display: block; white-space: pre-wrap; word-break: break-all; color: #9cdcfe; }
     #log-list .empty { padding: 24px; color: #666; text-align: center; }
     .reboot-marker { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 11px; font-weight: 700; background: #444; border-top: 1px solid #666; border-bottom: 1px solid #666; }
@@ -186,11 +196,13 @@
         <span id="log-count" style="font-size:11px;color:#888"></span>
         <button id="boot-prev-btn" title="Jump to previous boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Previous boot">&#x21bb;&#x25B4;</button>
         <button id="boot-next-btn" title="Jump to next boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Next boot">&#x21bb;&#x25BE;</button>
+        <button id="boot-picker-btn" title="List boots of this controller" style="display:none;background:#3c3c3c;font-size:11px;padding:3px 10px">Boots &#9660;</button>
         <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
         <button id="col-picker-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">Columns &#9660;</button>
         <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px"><input type="checkbox" id="raw-mode-toggle" /> Raw</label>
         <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px" title="Sort displayed rows by the device uptime timestamp embedded in each message"><input type="checkbox" id="sort-device-time" /> Sort by device time</label>
         <div id="col-picker"></div>
+        <div id="boot-picker"></div>
       </div>
       <div id="log-header-row"></div>
       <div id="log-list"><div class="empty">Select a source on the left</div></div>
@@ -729,7 +741,62 @@
     const show = currentIp != null;
     bootPrevBtn.style.display = show ? '' : 'none';
     bootNextBtn.style.display = show ? '' : 'none';
+    bootPickerBtn.style.display = show ? '' : 'none';
   }
+
+  const bootPickerBtn = document.getElementById('boot-picker-btn');
+  const bootPickerEl  = document.getElementById('boot-picker');
+
+  function fmtBootTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-CA') + ' ' + d.toLocaleTimeString('en', { hour12: false });
+  }
+
+  async function openBootPicker() {
+    if (!currentIp) return;
+    bootPickerEl.innerHTML = '<div class="empty" style="padding:12px">Loading…</div>';
+    bootPickerEl.classList.add('open');
+    let items;
+    try {
+      ({ items } = await fetchJson(`${BASE}/api/v1/boots?ip=${encodeURIComponent(currentIp)}`));
+    } catch (e) {
+      bootPickerEl.innerHTML = `<div class="empty" style="padding:12px">Error: ${escHtml(e.message)}</div>`;
+      return;
+    }
+    if (!items.length) {
+      bootPickerEl.innerHTML = '<div class="empty" style="padding:12px">No boots recorded</div>';
+      return;
+    }
+    // highlight boots that are part of the loaded window
+    const visibleBoots = new Set(allRows.map(r => r.boot));
+    bootPickerEl.innerHTML =
+      '<div class="boot-hdr"><span>Boot</span><span>First entry</span><span>Last entry</span><span style="text-align:right">Entries</span><span></span></div>' +
+      items.map(b =>
+        `<div class="boot-item${visibleBoots.has(b.boot) ? ' current' : ''}" data-first="${b.firstId}" title="Jump to start of boot ${b.boot}">` +
+          `<span class="boot-no">&#x21bb; ${b.boot}</span>` +
+          `<span class="boot-time">${fmtBootTime(b.startedAt)}</span>` +
+          `<span class="boot-time">${fmtBootTime(b.endedAt)}</span>` +
+          `<span class="boot-entries">${b.entries}</span>` +
+          `<span class="boot-crash" title="${b.crashes} crash dump(s)">${b.crashes ? '&#9888;' : ''}</span>` +
+        `</div>`
+      ).join('');
+    bootPickerEl.querySelectorAll('.boot-item').forEach(el => {
+      el.addEventListener('click', async () => {
+        bootPickerEl.classList.remove('open');
+        await fetchLogs({ from: Number(el.dataset.first), mode: 'jump' });
+      });
+    });
+  }
+
+  bootPickerBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (bootPickerEl.classList.contains('open')) { bootPickerEl.classList.remove('open'); return; }
+    openBootPicker();
+  });
+  document.addEventListener('click', (e) => {
+    if (!bootPickerEl.contains(e.target) && e.target !== bootPickerBtn) bootPickerEl.classList.remove('open');
+  });
 
   async function jumpToTail() {
     allRows = [];
