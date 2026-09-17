@@ -197,6 +197,15 @@ async function main() {
     }
   });
 
+  app.get("/api/v1/crashes", (req, res, next) => {
+    try {
+      const ip = String(req.query.ip || "").trim() || null;
+      res.json(storage.listCrashes({ limit: req.query.limit, ip }));
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.get("/api/v1/boots", (req, res, next) => {
     try {
       const ip = String(req.query.ip || "").trim();

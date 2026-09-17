@@ -50,6 +50,7 @@ export function activateTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.getElementById('log-panel').style.display = name === 'logs' ? 'flex' : 'none';
   document.getElementById('controllers-panel').classList.toggle('visible', name === 'controllers');
+  document.getElementById('crashes-panel').classList.toggle('visible', name === 'crashes');
   document.getElementById('search-panel').classList.toggle('visible', name === 'search');
   document.dispatchEvent(new CustomEvent('tabchange', { detail: name }));
 }

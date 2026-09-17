@@ -123,6 +123,25 @@ button.add-btn:hover { background: #1e3a3a; }
 .log-row.search-match { background: rgba(30, 100, 180, 0.2); }
 .log-row.search-match:hover { background: rgba(30, 100, 180, 0.32); }
 mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; padding: 0 1px; }
+/* ── Crashes ────────────────────────────────────────────────────────────────────── */
+#crashes-panel { flex: 1; display: none; flex-direction: column; overflow: hidden; }
+#crashes-panel.visible { display: flex; }
+#crashes-toolbar { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 6px 12px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+#crashes-list { flex: 1; overflow-y: auto; }
+#crashes-list .empty { padding: 24px; color: #666; text-align: center; }
+.crash-row { display: grid; grid-template-columns: 150px 120px 60px 1fr auto; gap: 8px; padding: 4px 12px; border-bottom: 1px solid #2a2a2a; align-items: center; cursor: pointer; }
+.crash-row:hover { background: #2d2d2d; }
+.crash-row .col-ip { color: #9cdcfe; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crash-row .col-boot { color: #dcdcaa; font-size: 11px; white-space: nowrap; }
+.crash-row .col-summary { color: #f48771; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.crash-row .col-summary .crash-fp { color: #888; font-size: 11px; margin-right: 8px; }
+.crash-row .col-summary .crash-msg { color: #aaa; }
+.crash-row .col-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.crash-row .col-actions a { color: #4ec9b0; font-size: 11px; text-decoration: none; }
+.crash-row .col-actions a:hover { text-decoration: underline; }
+.crash-row .col-actions button { background: #3c3c3c; font-size: 11px; padding: 2px 8px; }
+.crash-pending { background: #e67e22; color: #fff; border-radius: 3px; padding: 0 6px; font-size: 10px; font-weight: 600; margin-right: 6px; }
+.crash-hdr { display: grid; grid-template-columns: 150px 120px 60px 1fr auto; gap: 8px; padding: 4px 12px; background: #1e1e1e; border-bottom: 1px solid #3c3c3c; font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
 
 .ansi-black-fg   { color: #1a1a1a; }
 .ansi-red-fg     { color: #f44336; }
