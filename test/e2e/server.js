@@ -5,6 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const net = require("net");
+const { openDatabase } = require("../../src/db");
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -32,10 +33,33 @@ async function waitFor(url, timeoutMs = 10000) {
   throw new Error(`Server did not become ready: ${lastErr?.message || "timeout"}`);
 }
 
-async function startServer() {
+/**
+ * @param {object} [opts]
+ * @param {object[]} [opts.controllers]  rows pre-inserted into the `controllers`
+ *   table before the server starts ({ ip, name?, last_seen?, last_log_received? })
+ * @param {object} [opts.env]  extra environment variables
+ */
+async function startServer({ controllers = [], env: extraEnv = {} } = {}) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "lls-e2e-"));
   const httpPort = await freePort();
   const udpPort = await freePort();
+  const dbPath = path.join(tmpDir, "db.sqlite");
+  if (controllers.length) {
+    const db = openDatabase(dbPath);
+    const ins = db.prepare(
+      "INSERT INTO controllers (ip, hostname, name, last_seen, last_log_received) VALUES (@ip, @hostname, @name, @last_seen, @last_log_received)",
+    );
+    for (const c of controllers) {
+      ins.run({
+        ip: c.ip,
+        hostname: c.hostname || c.ip,
+        name: c.name || c.ip,
+        last_seen: c.last_seen || null,
+        last_log_received: c.last_log_received || null,
+      });
+    }
+    db.close();
+  }
   const env = {
     ...process.env,
     LLS_HTTP_HOST: "127.0.0.1",
@@ -43,13 +67,14 @@ async function startServer() {
     LLS_HTTP_PORT: String(httpPort),
     LLS_UDP_PORT: String(udpPort),
     LLS_DATA_DIR: path.join(tmpDir, "logs"),
-    LLS_DB_PATH: path.join(tmpDir, "db.sqlite"),
+    LLS_DB_PATH: dbPath,
     LLS_LOKI_CONFIG: path.join(tmpDir, "loki.json"),
     LLS_CONTROLLER_STATE: path.join(tmpDir, "controllers.json"),
     LLS_SERVICE_ENV: path.join(tmpDir, "service.env"),
     LLS_ELF_CACHE_DIR: path.join(tmpDir, "elfs"),
     LLS_DISCOVERY_SEEDS: "",
     LLS_MDNS_HOST: "lls-test.local",
+    ...extraEnv,
   };
   const proc = spawn(process.execPath, [path.join(__dirname, "..", "..", "src", "index.js")], {
     env,

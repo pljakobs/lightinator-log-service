@@ -53,11 +53,13 @@
       </div>
     </div>
     <div id="controllers-panel">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
         <span style="color:#ccc;font-size:13px;font-weight:600">Discovered Devices</span>
         <button id="refresh-ctrl-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">&#8635; Refresh</button>
         <button id="log-all-on-btn" style="background:#1e4d2b;font-size:11px;padding:3px 10px">Log All ON</button>
         <button id="log-all-off-btn" style="background:#4d1e1e;font-size:11px;padding:3px 10px">Log All OFF</button>
+        <button id="remove-selected-btn" style="background:#4d1e1e;font-size:11px;padding:3px 10px" disabled title="Select controllers via their checkbox first">&#x2715; Remove selected</button>
+        <label style="font-size:11px;color:#aaa;display:flex;align-items:center;gap:4px">Remove not seen for <input id="stale-days" type="number" min="0" value="30" style="width:48px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:2px 4px;font-family:inherit;font-size:11px;text-align:center" /> days <button id="remove-stale-btn" style="background:#3c3c3c;font-size:11px;padding:3px 8px">Go</button></label>
         <span id="ctrl-status" style="font-size:11px;color:#888"></span>
       </div>
       <div id="ctrl-grid" class="ctrl-grid"></div>

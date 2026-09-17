@@ -62,6 +62,7 @@ function getLiveValues() {
     LLS_RETENTION_DAYS: String(config.retentionDays),
     LLS_MAX_ROWS_PER_IP: String(config.maxRowsPerIp),
     LLS_DISCOVERY_REFRESH_MS: String(config.discoveryRefreshMs),
+    LLS_CONTROLLER_STALE_DAYS: String(config.controllerStaleDays),
     LLS_MDNS_HOST: config.mdnsHost,
   };
 }
@@ -115,6 +116,34 @@ async function main() {
   });
 
   discovery.start();
+
+  // Periodic auto-removal of controllers (and their logs) not seen for N days.
+  const STALE_PURGE_INTERVAL_MS = 60 * 60 * 1000;
+  const STALE_PURGE_INITIAL_DELAY_MS = 60 * 1000;
+  const purgeStaleControllers = () => {
+    const days = config.controllerStaleDays;
+    if (!(days > 0)) return;
+    try {
+      const removed = removeControllers(discovery.listStale(days), true);
+      if (removed.length) {
+        console.log(`Stale purge: removed ${removed.length} controller(s) not seen for ${days} day(s) incl. logs: ${removed.join(", ")}`);
+      }
+    } catch (err) {
+      console.warn(`Stale purge failed: ${err.message}`);
+    }
+  };
+  const stalePurgeTimers = [];
+  if (config.controllerStaleDays > 0) {
+    console.log(`Stale purge: controllers not seen for ${config.controllerStaleDays} day(s) are removed hourly`);
+    const initial = setTimeout(purgeStaleControllers, STALE_PURGE_INITIAL_DELAY_MS);
+    const interval = setInterval(purgeStaleControllers, STALE_PURGE_INTERVAL_MS);
+    for (const t of [initial, interval]) {
+      if (t.unref) t.unref();
+      stalePurgeTimers.push(t);
+    }
+  } else {
+    console.log("Stale purge: disabled (LLS_CONTROLLER_STALE_DAYS=0)");
+  }
 
   const app = express();
   app.use(cors({ origin: config.corsOrigin }));
@@ -355,6 +384,55 @@ async function main() {
     res.json({ buildNumber, gitVersion });
   });
 
+  function removeControllers(ips, purgeLogs) {
+    const removed = [];
+    for (const ip of ips) {
+      if (!discovery.remove(ip)) continue;
+      if (purgeLogs) storage.purgeIp(ip);
+      removed.push(ip);
+    }
+    return removed;
+  }
+
+  app.delete("/api/v1/controllers/:ip", (req, res, next) => {
+    try {
+      const ip = req.params.ip;
+      const purgeLogs = String(req.query.purgeLogs || "").toLowerCase() === "true";
+      const removed = removeControllers([ip], purgeLogs);
+      if (!removed.length) return res.status(404).json({ error: "Controller not found" });
+      res.json({ ok: true, ip, purgedLogs: purgeLogs });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/controllers/remove", (req, res, next) => {
+    try {
+      const { ips, purgeLogs } = req.body || {};
+      if (!Array.isArray(ips) || !ips.every((ip) => typeof ip === "string" && ip)) {
+        return res.status(400).json({ error: "ips must be a non-empty array of strings" });
+      }
+      const removed = removeControllers(ips, purgeLogs === true);
+      res.json({ ok: true, removed, purgedLogs: purgeLogs === true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/controllers/remove-stale", (req, res, next) => {
+    try {
+      const { days, purgeLogs } = req.body || {};
+      const n = Number(days);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ error: "days must be a non-negative number" });
+      }
+      const removed = removeControllers(discovery.listStale(n), purgeLogs === true);
+      res.json({ ok: true, removed, purgedLogs: purgeLogs === true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.patch("/api/v1/controllers/:ip/logging", async (req, res) => {
     const ip = req.params.ip;
     const { enabled } = req.body;
@@ -488,6 +566,10 @@ async function main() {
 
   const shutdown = () => {
     console.log("Shutting down...");
+    for (const t of stalePurgeTimers) {
+      clearTimeout(t);
+      clearInterval(t);
+    }
     mdns.stop();
     loki.stop();
     discovery.stop();
