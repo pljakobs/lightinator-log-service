@@ -42,6 +42,11 @@ const config = {
   githubToken: process.env.LLS_GITHUB_TOKEN || "",
   githubRepo:  process.env.LLS_GITHUB_REPO || "",
   autoCreateIssues: process.env.LLS_AUTO_CREATE_ISSUES === "true",
+  githubToken: process.env.LLS_GITHUB_TOKEN || "",
+  githubRepo:  process.env.LLS_GITHUB_REPO || "",
+  autoCreateIssues: process.env.LLS_AUTO_CREATE_ISSUES === "true",
+  geminiApiKey: process.env.GEMINI_API_KEY || process.env.LLS_GEMINI_API_KEY || "",
+  workspaceDir: process.env.LLS_WORKSPACE_DIR || path.join(process.cwd(), "data", "workspace"),
 };
 
 module.exports = { config };

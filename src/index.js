@@ -506,9 +506,11 @@ async function main() {
     autoCreateIssues: config.autoCreateIssues,
   });
 
-  const crashDecoder = new CrashDecoder({
+const crashDecoder = new CrashDecoder({
     elfCacheDir: config.elfCacheDir,
     elfBaseUrl: config.elfBaseUrl,
+    workspaceDir: config.workspaceDir,
+    geminiApiKey: config.geminiApiKey,
     discovery,
     db,
     storage,
