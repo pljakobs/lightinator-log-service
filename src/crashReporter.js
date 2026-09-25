@@ -205,8 +205,8 @@ class CrashDecoder {
     await fsp.mkdir(this.workspaceDir, { recursive: true });
     
     const repos = [
-      { name: "sming", url: "http://github.com/sminghub/sming.git" },
-      { name: "esp_rgbww_firmware", url: "http://github.com/pljakobs/esp_rgbww_firmware.git" }
+      { name: "sming", url: "https://github.com/SmingHub/Sming.git" },
+      { name: "esp_rgbww_firmware", url: "https://github.com/pljakobs/esp_rgbww_firmware.git" }
     ];
 
     for (const repo of repos) {
@@ -220,7 +220,6 @@ class CrashDecoder {
         console.log(`CrashDecoder: Updating repository ${repo.name} and checking out branch/tag:${branch}`);
         execSync(`git -C ${repoPath} fetch origin`, { stdio: "ignore" });
         
-        // Try checking out the target branch; fallback to develop/main if not found
         try {
           execSync(`git -C ${repoPath} checkout${branch}`, { stdio: "ignore" });
         } catch {
@@ -251,19 +250,15 @@ class CrashDecoder {
       if (processedFiles.has(key)) continue;
       processedFiles.add(key);
 
-      // Search across checked out repositories
       const repos = ["esp_rgbww_firmware", "sming"];
-      let foundContent = null;
       let absoluteFilePath = null;
 
       for (const repo of repos) {
         const potentialPath = path.join(this.workspaceDir, repo, relPath);
-        // Also check if relPath is nested or needs basename matching
         if (fs.existsSync(potentialPath)) {
           absoluteFilePath = potentialPath;
           break;
         } else {
-          // Try searching recursively inside repo
           try {
             const files = execSync(`find ${path.join(this.workspaceDir, repo)} -name "${path.basename(relPath)}"`, { encoding: "utf8" })
               .split("\n")
@@ -376,7 +371,6 @@ Please provide a technical analysis addressing:
     const branch = vMatch ? vMatch[1] : "develop";
     const type   = build_type || "debug";
 
-    // Ensure correct repository versions are checked out locally
     await this._ensureRepositories(branch);
 
     const elfUrl  = `${this.elfBaseUrl}/${branch}/${git_version}/${socKey}/${type}/${cfg.elfFile}`;
@@ -397,12 +391,9 @@ Please provide a technical analysis addressing:
     let decoded;
     try {
       decoded = await this._runDecode(cfg, elfPath, lines);
-      
-      // Extract code snippets and run Gemini analysis
       const snippets = await this._extractCodeSnippets(decoded);
       const aiAnalysis = await this._analyzeWithGemini(decoded, snippets, { git_version, soc: socKey, build_type: type });
       decoded += aiAnalysis;
-
     } catch (err) {
       decoded = `[Crash decode error: ${err.message}]\n\nRaw dump:\n` + lines.join("\n");
     }
