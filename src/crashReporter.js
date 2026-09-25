@@ -545,4 +545,4 @@ Please provide a technical analysis addressing:
   }
 }
 
-module.exports = { CrashDecoder, stripAnsi, extractCrashFingerprint };
+module.exports = { CrashDecoder, stripAnsi, extractCrashFingerprint, crashReporter };
