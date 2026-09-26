@@ -133,6 +133,23 @@ async function main() {
 
   discovery.start();
 
+  const app = express();
+  app.use(cors({ origin: config.corsOrigin }));
+  app.use(express.json({ limit: "1mb" }));
+  app.use(express.static(path.join(__dirname, "ui")));
+
+  function removeControllers(ips, purgeLogs) {
+    const removed = [];
+    for (const ip of ips) {
+      if (!discovery.remove(ip)) continue;
+      if (purgeLogs && typeof storage.purgeIp === "function") {
+        storage.purgeIp(ip);
+      }
+      removed.push(ip);
+    }
+    return removed;
+  }
+
   // Periodic auto-removal of controllers (and their logs) not seen for N days.
   const STALE_PURGE_INTERVAL_MS = 60 * 60 * 1000;
   const STALE_PURGE_INITIAL_DELAY_MS = 60 * 1000;
@@ -140,7 +157,8 @@ async function main() {
     const days = config.controllerStaleDays;
     if (!(days > 0)) return;
     try {
-      const removed = removeControllers(discovery.listStale(days), true);
+      const staleList = typeof discovery.listStale === "function" ? discovery.listStale(days) : [];
+      const removed = removeControllers(staleList, true);
       if (removed.length) {
         console.log(`Stale purge: removed ${removed.length} controller(s) not seen for ${days} day(s) incl. logs: ${removed.join(", ")}`);
       }
@@ -160,11 +178,6 @@ async function main() {
   } else {
     console.log("Stale purge: disabled (LLS_CONTROLLER_STALE_DAYS=0)");
   }
-
-  const app = express();
-  app.use(cors({ origin: config.corsOrigin }));
-  app.use(express.json({ limit: "1mb" }));
-  app.use(express.static(path.join(__dirname, "ui")));
 
   app.get("/health", (_req, res) => {
     res.json({
@@ -400,16 +413,6 @@ async function main() {
     res.json({ buildNumber, gitVersion });
   });
 
-  function removeControllers(ips, purgeLogs) {
-    const removed = [];
-    for (const ip of ips) {
-      if (!discovery.remove(ip)) continue;
-      if (purgeLogs) storage.purgeIp(ip);
-      removed.push(ip);
-    }
-    return removed;
-  }
-
   app.delete("/api/v1/controllers/:ip", (req, res, next) => {
     try {
       const ip = req.params.ip;
@@ -429,7 +432,8 @@ async function main() {
         return res.status(400).json({ error: "ips must be a non-empty array of strings" });
       }
       const removed = removeControllers(ips, purgeLogs === true);
-      res.json({ ok: true, removed, purgedLogs: purgeLogs === true });
+      const unknown = ips.filter(ip => !removed.includes(ip));
+      res.json({ ok: true, removed, unknown, purgedLogs: purgeLogs === true });
     } catch (err) {
       next(err);
     }
@@ -442,12 +446,13 @@ async function main() {
       if (!Number.isFinite(n) || n < 0) {
         return res.status(400).json({ error: "days must be a non-negative number" });
       }
-      const removed = removeControllers(discovery.listStale(n), purgeLogs === true);
+      const staleList = typeof discovery.listStale === "function" ? discovery.listStale(n) : [];
+      const removed = removeControllers(staleList, purgeLogs === true);
       res.json({ ok: true, removed, purgedLogs: purgeLogs === true });
     } catch (err) {
       next(err);
     }
-  }); // <-- ADD THIS
+  });
 
   app.get("/api/v1/changelog", async (_req, res) => {
     const { generatedAt, builds } = await loadChangelog();
@@ -611,4 +616,3 @@ main().catch((err) => {
   console.error("Fatal startup error:", err);
   process.exit(1);
 });
-  
