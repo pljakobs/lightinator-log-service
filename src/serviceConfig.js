@@ -50,10 +50,10 @@ const SETTINGS_SCHEMA = [
     type: "number",
   },
   {
-    key: "LLS_MAX_BYTES_PER_IP",
-    label: "Max log bytes per controller",
-    description: "Maximum raw bytes stored per controller before rotation. Default 20971520 (20 MB).",
-    placeholder: "20971520",
+    key: "LLS_MAX_ROWS_PER_IP",
+    label: "Max log rows per controller",
+    description: "Maximum log lines stored per controller before oldest lines are trimmed. Default 10000.",
+    placeholder: "100000",
     type: "number",
   },
   {
@@ -64,11 +64,39 @@ const SETTINGS_SCHEMA = [
     type: "number",
   },
   {
+    key: "LLS_CONTROLLER_STALE_DAYS",
+    label: "Auto-remove controllers not seen for (days)",
+    description: "Controllers with no discovery contact and no log message for this many days are removed automatically once per hour — their stored logs are deleted too. Default 30, 0 disables.",
+    placeholder: "30",
+    type: "number",
+  },
+  {
     key: "LLS_MDNS_HOST",
     label: "mDNS hostname",
     description: "Hostname announced via mDNS so browsers can find the UI at http://<name>:<port>.",
     placeholder: "lightinator-logservice.local",
     type: "text",
+  },
+  {
+    key: "LLS_GITHUB_TOKEN",
+    label: "GitHub Personal Access Token",
+    type: "password",
+    category: "GitHub Integration",
+    description: "Personal access token with 'repo' or 'public_repo' scope to create crash issues."
+  },
+  {
+    key: "LLS_GITHUB_REPO",
+    label: "GitHub Repository",
+    type: "text",
+    category: "GitHub Integration",
+    description: "Target repository in owner/repo format (e.g. owner/lightinator)."
+  },
+  {
+    key: "LLS_AUTO_CREATE_ISSUES",
+    label: "Auto-create GitHub issues on crash",
+    type: "boolean",
+    default: "false",
+    description: "Automatically log a GitHub issue when a firmware crash is decoded",
   },
 ];
 

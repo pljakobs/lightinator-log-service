@@ -2,3 +2,8 @@ node_modules/
 data/
 .env
 npm-debug.log*
+*.out
+*.elf
+test-results/
+playwright-report/
+src/changelog.json

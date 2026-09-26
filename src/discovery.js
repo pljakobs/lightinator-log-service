@@ -26,9 +26,116 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs/promises");
 const path = require("path");
+const dns = require("dns").promises;
+const { Bonjour } = require("bonjour-service");
+
+// ── SQLite helpers ────────────────────────────────────────────────────────────
+
+function rowToController(row) {
+  return {
+    ip:               row.ip,
+    hostname:         row.hostname,
+    deviceId:         row.device_id,
+    name:             row.name,
+    groups:           JSON.parse(row.groups || "[]"),
+    loggingEnabled:   row.logging_enabled !== 0,
+    reachable:        row.reachable       !== 0,
+    splitBrain:       row.split_brain     !== 0,
+    lastSeen:         row.last_seen,
+    lastLogReceived:  row.last_log_received,
+    soc:              row.soc,
+    buildType:        row.build_type,
+    gitVersion:       row.git_version,
+    deviceClass:      "swarm_controller",
+  };
+}
+
+function controllerToRow(c) {
+  return {
+    ip:                c.ip,
+    hostname:          c.hostname          || null,
+    device_id:         c.deviceId          || null,
+    name:              c.name              || null,
+    groups:            JSON.stringify(c.groups || []),
+    logging_enabled:   c.loggingEnabled !== false ? 1 : 0,
+    reachable:         c.reachable  ? 1 : 0,
+    split_brain:       c.splitBrain ? 1 : 0,
+    last_seen:         c.lastSeen          || null,
+    last_log_received: c.lastLogReceived    || null,
+    soc:               c.soc               || null,
+    build_type:        c.buildType         || null,
+    git_version:       c.gitVersion        || null,
+  };
+}
 
 const DEFAULT_PORT = 80;
 const REQUEST_TIMEOUT_MS = 5000;
+
+function isIpv4Address(value) {
+  return /^\d+\.\d+\.\d+\.\d+$/.test(String(value || ""));
+}
+
+async function discoverWallPanelSeeds(timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    const discovered = new Set();
+    let done = false;
+    const browsers = [];
+
+    const finish = (bonjour) => {
+      if (done) return;
+      done = true;
+      try {
+        for (const browser of browsers) {
+          if (browser) browser.stop();
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        if (bonjour) bonjour.destroy();
+      } catch {
+        // ignore
+      }
+      resolve([...discovered]);
+    };
+
+    let bonjour;
+    try {
+      bonjour = new Bonjour();
+      const wallPanelTypes = ["wall_panel_api", "wall-panel-api"];
+      for (const type of wallPanelTypes) {
+        const browser = bonjour.find({ type, protocol: "tcp" }, (service) => {
+          for (const addr of service?.addresses || []) {
+            if (isIpv4Address(addr)) {
+              discovered.add(addr);
+            }
+          }
+          if (service?.host) {
+            discovered.add(String(service.host));
+          }
+          if (isIpv4Address(service?.referer?.address)) {
+            discovered.add(service.referer.address);
+          }
+        });
+        browsers.push(browser);
+      }
+      setTimeout(() => finish(bonjour), timeoutMs);
+    } catch {
+      finish(bonjour);
+    }
+  });
+}
+
+async function resolveSeedToIpv4(seed) {
+  if (!seed) return null;
+  if (isIpv4Address(seed)) return String(seed);
+  try {
+    const result = await dns.lookup(String(seed), { family: 4 });
+    return result?.address || null;
+  } catch {
+    return null;
+  }
+}
 
 function fetchJson(host, port, path) {
   return new Promise((resolve, reject) => {
@@ -60,6 +167,18 @@ function fetchJson(host, port, path) {
   });
 }
 
+async function fetchFirstJson(host, port, paths) {
+  for (const p of paths) {
+    try {
+      const body = await fetchJson(host, port, p);
+      return { body, path: p };
+    } catch {
+      // try next path
+    }
+  }
+  return null;
+}
+
 class ControllerDiscovery {
   /**
    * @param {object} opts
@@ -73,12 +192,14 @@ class ControllerDiscovery {
     controllerPort = DEFAULT_PORT,
     refreshIntervalMs = 300_000,
     statePath = null,
+    db = null,
     onUpdate = null,
   } = {}) {
     this.seedHosts = seedHosts;
     this.controllerPort = controllerPort;
     this.refreshIntervalMs = refreshIntervalMs;
     this.statePath = statePath;
+    this.db = db;
     this.onUpdate = onUpdate;
 
     /** ip → { hostname, ip, deviceId, name, groups:[{id,name}], loggingEnabled, reachable, lastSeen, lastLogReceived } */
@@ -122,10 +243,19 @@ class ControllerDiscovery {
   }
 
   async refresh() {
+    const mdnsSeeds = await discoverWallPanelSeeds();
+    const resolvedMdnsIps = await Promise.all(mdnsSeeds.map((s) => resolveSeedToIpv4(s)));
+    const mdnsWallPanelIps = new Set([
+      ...mdnsSeeds.filter(isIpv4Address),
+      ...resolvedMdnsIps.filter(Boolean),
+    ]);
+
     const allSeeds = [
       ...this.seedHosts,
       ...this.extraSeeds,
       ...[...this.controllers.keys()],
+      ...mdnsSeeds,
+      ...resolvedMdnsIps.filter(Boolean),
     ];
 
     let hostsData = null;
@@ -146,60 +276,141 @@ class ControllerDiscovery {
     }
 
     if (!hostsData || !appData) {
-      console.debug("Discovery: no reachable seed found");
-      return;
+      console.debug("Discovery: no reachable swarm seed found, using mDNS/syslog-only mode");
     }
 
     // Build group membership: data.controller id → [{id,name}]
     const groupsByControllerId = new Map();
-    for (const g of appData.groups || []) {
-      for (const cid of g.controller_ids || []) {
-        const key = String(cid);
-        if (!groupsByControllerId.has(key)) groupsByControllerId.set(key, []);
-        groupsByControllerId.get(key).push({ id: g.id, name: g.name });
+    if (appData) {
+      for (const g of appData.groups || []) {
+        for (const cid of g.controller_ids || []) {
+          const key = String(cid);
+          if (!groupsByControllerId.has(key)) groupsByControllerId.set(key, []);
+          groupsByControllerId.get(key).push({ id: g.id, name: g.name });
+        }
       }
     }
 
     // Build ip → data.controller.id map using the "ip-address" field
     const ipToDataId = new Map();
     const ipToDataName = new Map();
-    for (const c of appData.controllers || []) {
-      const ip = c["ip-address"];
-      if (ip) {
-        ipToDataId.set(ip, String(c.id));
-        ipToDataName.set(ip, c.name);
+    if (appData) {
+      for (const c of appData.controllers || []) {
+        const ip = c["ip-address"];
+        if (ip) {
+          ipToDataId.set(ip, String(c.id));
+          ipToDataName.set(ip, c.name);
+        }
       }
     }
 
     const updatedIps = new Set();
-    for (const h of hostsData.hosts || []) {
-      const ip = h.ip_address;
-      if (!ip) continue;
+    if (hostsData) {
+      for (const h of hostsData.hosts || []) {
+        const ip = h.ip_address;
+        if (!ip) continue;
 
-      const dataId = ipToDataId.get(ip);
-      const groups = dataId ? (groupsByControllerId.get(dataId) || []) : [];
-      const name = ipToDataName.get(ip) || h.hostname;
+        const dataId = ipToDataId.get(ip);
+        const groups = dataId ? (groupsByControllerId.get(dataId) || []) : [];
+        const name = ipToDataName.get(ip) || h.hostname;
+        const existing = this.controllers.get(ip) || {};
+        const deviceClass = (existing.deviceClass === "wall_panel" || mdnsWallPanelIps.has(ip))
+          ? "wall_panel"
+          : "swarm_controller";
+
+        this.controllers.set(ip, {
+          hostname: h.hostname,
+          ip,
+          deviceId: String(h.id),
+          name,
+          deviceClass,
+          groups,
+          loggingEnabled: existing.loggingEnabled !== undefined ? existing.loggingEnabled : true,
+          reachable: true,
+          splitBrain: false,
+          lastSeen: new Date().toISOString(),
+          lastLogReceived: existing.lastLogReceived || null,
+          // Preserve fields fetched from /info?v=2 so they survive refresh cycles
+          // where the per-controller /info fetch might be slow or temporarily fail.
+          soc:        existing.soc,
+          buildType:  existing.buildType,
+          gitVersion: existing.gitVersion,
+        });
+        updatedIps.add(ip);
+        this.extraSeeds.delete(ip); // promoted to known
+      }
+    }
+
+    // mDNS-only wall panel upsert: no HTTP API required.
+    for (const ip of mdnsWallPanelIps) {
       const existing = this.controllers.get(ip) || {};
-
       this.controllers.set(ip, {
-        hostname: h.hostname,
+        hostname: existing.hostname || ip,
         ip,
-        deviceId: String(h.id),
-        name,
-        groups,
+        deviceId: existing.deviceId || null,
+        name: existing.name || `wall-panel-${ip.split(".").pop()}`,
+        deviceClass: "wall_panel",
+        groups: existing.groups || [],
         loggingEnabled: existing.loggingEnabled !== undefined ? existing.loggingEnabled : true,
         reachable: true,
         splitBrain: false,
         lastSeen: new Date().toISOString(),
         lastLogReceived: existing.lastLogReceived || null,
-        // Preserve fields fetched from /info?v=2 so they survive refresh cycles
-        // where the per-controller /info fetch might be slow or temporarily fail.
-        soc:        existing.soc,
-        buildType:  existing.buildType,
+        soc: existing.soc,
+        buildType: existing.buildType,
         gitVersion: existing.gitVersion,
       });
       updatedIps.add(ip);
-      this.extraSeeds.delete(ip); // promoted to known
+      this.extraSeeds.delete(ip);
+    }
+
+    // Fallback discovery for standalone wall panels:
+    // probe all seeds not discovered via /hosts + /data.
+    const fallbackCandidates = allSeeds.filter((host) => {
+      if (!host) return false;
+      if (updatedIps.has(host)) return false;
+      const existing = this.controllers.get(host);
+      return !(existing && existing.deviceClass === "swarm_controller");
+    });
+
+    for (const host of fallbackCandidates) {
+      const infoResult = await fetchFirstJson(host, this.controllerPort, ["/info?v=2", "/info"]);
+      if (!infoResult) {
+        continue;
+      }
+
+      const cfgResult = await fetchFirstJson(host, this.controllerPort, ["/config"]);
+      const info = infoResult.body || {};
+      const cfg = cfgResult?.body || {};
+
+      const ip = host;
+      const existing = this.controllers.get(ip) || {};
+      const detectedName = info?.device?.name || info?.name || info?.hostname || existing.name || ip;
+      const detectedSoc = info?.device?.soc || info?.soc || existing.soc;
+      const detectedBuildType = info?.app?.build_type || info?.build_type || existing.buildType;
+      const detectedGitVersion = info?.app?.git_version || info?.git_version || existing.gitVersion;
+      const loggingEnabled = cfg?.network?.rsyslog?.enabled;
+
+      this.controllers.set(ip, {
+        hostname: existing.hostname || ip,
+        ip,
+        deviceId: existing.deviceId || null,
+        name: detectedName,
+        deviceClass: "wall_panel",
+        groups: existing.groups || [],
+        loggingEnabled: loggingEnabled !== undefined
+          ? !!loggingEnabled
+          : (existing.loggingEnabled !== undefined ? existing.loggingEnabled : true),
+        reachable: true,
+        splitBrain: false,
+        lastSeen: new Date().toISOString(),
+        lastLogReceived: existing.lastLogReceived || null,
+        soc: detectedSoc,
+        buildType: detectedBuildType,
+        gitVersion: detectedGitVersion,
+      });
+      updatedIps.add(ip);
+      this.extraSeeds.delete(ip);
     }
 
     // Mark controllers no longer in /hosts?all=true as unreachable (keep for history)
@@ -210,7 +421,7 @@ class ControllerDiscovery {
     }
 
     console.log(
-      `Discovery: ${updatedIps.size} controller(s) via ${sourceHost}: ` +
+      `Discovery: ${updatedIps.size} node(s) via ${sourceHost || "fallback"}: ` +
       [...updatedIps].join(", "),
     );
 
@@ -290,12 +501,51 @@ class ControllerDiscovery {
   }
 
   async _loadState() {
+    if (this.db) {
+      // ── SQLite path ──────────────────────────────────────────────────────
+      const rows = this.db.prepare("SELECT * FROM controllers").all();
+      if (rows.length > 0) {
+        for (const row of rows) {
+          this.controllers.set(row.ip, { ...rowToController(row), reachable: false });
+        }
+        console.log(`Discovery: loaded ${rows.length} persisted controller(s)`);
+        return;
+      }
+
+      // Empty DB — attempt one-time migration from legacy controllers.json
+      if (this.statePath) {
+        try {
+          const raw = await fs.readFile(this.statePath, "utf8");
+          const arr = JSON.parse(raw);
+          const upsert = this.db.prepare(`
+            INSERT OR REPLACE INTO controllers
+              (ip, hostname, device_id, name, groups, logging_enabled, reachable,
+               split_brain, last_seen, last_log_received, soc, build_type, git_version)
+            VALUES
+              (@ip, @hostname, @device_id, @name, @groups, @logging_enabled, @reachable,
+               @split_brain, @last_seen, @last_log_received, @soc, @build_type, @git_version)
+          `);
+          const importAll = this.db.transaction((entries) => {
+            for (const e of entries) upsert.run(controllerToRow(e));
+          });
+          importAll(arr);
+          for (const entry of arr) {
+            this.controllers.set(entry.ip, { ...entry, reachable: false });
+          }
+          console.log(`Discovery: migrated ${arr.length} controller(s) from controllers.json`);
+        } catch {
+          // No JSON file — first run
+        }
+      }
+      return;
+    }
+
+    // ── Legacy file-only path (no db passed) ─────────────────────────────
     if (!this.statePath) return;
     try {
       const raw = await fs.readFile(this.statePath, "utf8");
       const arr = JSON.parse(raw);
       for (const entry of arr) {
-        // Mark all as offline until next refresh confirms them
         this.controllers.set(entry.ip, { ...entry, reachable: false });
       }
       console.log(`Discovery: loaded ${arr.length} persisted controller(s)`);
@@ -304,18 +554,36 @@ class ControllerDiscovery {
     }
   }
 
-  async _saveState() {
-    if (!this.statePath) return;
-    try {
-      await fs.mkdir(path.dirname(this.statePath), { recursive: true });
-      await fs.writeFile(
+  _saveState() {
+    if (this.db) {
+      try {
+        const upsert = this.db.prepare(`
+          INSERT OR REPLACE INTO controllers
+            (ip, hostname, device_id, name, groups, logging_enabled, reachable,
+             split_brain, last_seen, last_log_received, soc, build_type, git_version)
+          VALUES
+            (@ip, @hostname, @device_id, @name, @groups, @logging_enabled, @reachable,
+             @split_brain, @last_seen, @last_log_received, @soc, @build_type, @git_version)
+        `);
+        const saveAll = this.db.transaction((entries) => {
+          for (const e of entries) upsert.run(controllerToRow(e));
+        });
+        saveAll(Array.from(this.controllers.values()));
+      } catch (e) {
+        console.warn(`Discovery: failed to save state to SQLite: ${e.message}`);
+      }
+      return Promise.resolve();
+    }
+
+    // Legacy JSON fallback
+    if (!this.statePath) return Promise.resolve();
+    return fs.mkdir(path.dirname(this.statePath), { recursive: true })
+      .then(() => fs.writeFile(
         this.statePath,
         JSON.stringify(Array.from(this.controllers.values()), null, 2),
         "utf8",
-      );
-    } catch (e) {
-      console.warn(`Discovery: failed to save state: ${e.message}`);
-    }
+      ))
+      .catch((e) => console.warn(`Discovery: failed to save state: ${e.message}`));
   }
 
   setLogging(ip, enabled) {
@@ -323,6 +591,38 @@ class ControllerDiscovery {
     if (!c) return false;
     this.controllers.set(ip, { ...c, loggingEnabled: !!enabled });
     return true;
+  }
+
+  /** Remove a controller from memory and the DB. Returns false if unknown. */
+  remove(ip) {
+    const existed = this.controllers.delete(ip);
+    this.extraSeeds.delete(ip);
+    if (this.db) {
+      try {
+        this.db.prepare("DELETE FROM controllers WHERE ip = ?").run(ip);
+      } catch (e) {
+        console.warn(`Discovery: failed to delete ${ip} from SQLite: ${e.message}`);
+      }
+    }
+    return existed;
+  }
+
+  /**
+   * IPs of controllers whose last activity (max of lastSeen and lastLogReceived,
+   * null counts as never) is older than `days` days.
+   */
+  listStale(days) {
+    const cutoff = Date.now() - Number(days) * 86_400_000;
+    const toTime = (iso) => {
+      const t = iso ? new Date(iso).getTime() : NaN;
+      return Number.isFinite(t) ? t : -Infinity;
+    };
+    const stale = [];
+    for (const [ip, c] of this.controllers) {
+      const last = Math.max(toTime(c.lastSeen), toTime(c.lastLogReceived));
+      if (last < cutoff) stale.push(ip);
+    }
+    return stale;
   }
 
   /** Returns false only when we explicitly know this IP has logging disabled */

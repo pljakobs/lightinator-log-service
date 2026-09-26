@@ -1,11 +1,68 @@
 # Lightinator Log Service
 
-Local-first UDP log collector for Lightinator controllers.
+Local-first UDP log collector and diagnostic viewer for Lightinator controllers.
+
+## Web Interface & Key Features
+
+The browser UI is accessible at `http://<host>:4821/` in a browser. No build step or CDN dependency required — the UI is a single self-contained HTML file served directly from the container.
+
+### Log Viewer
+
+The primary log interface provides real-time log stream inspection per controller with configurable layout options and instant filtering.
+
+![Log Viewer Interface](logView.jpg)
+
+* **Paginated Log Stream:** Paginated, newest-first log list with time / tag / application / message columns.
+* **Real-time Auto-Refresh:** Auto-refresh every 5 s (toggle off to pause).
+* **Free-Text Search & Filtering:** Instant free-text filter for matching log text.
+* **Severity Bolding & Highlighting:** Severity colouring (error = red, warning = yellow).
+* **Source Selection & Maintenance:** Sidebar for source navigation, load-older pagination, and per-controller log purge functionality.
+
+---
+
+### Automated Crash Decoding
+
+When a controller experiences a hardware panic or exception, the log service captures the crash payload and displays an interactive modal for diagnostic evaluation.
+
+![Decoded Crash Dump View](crashDecode.jpg)
+
+* **Automatic Panic Detection:** Ingests raw stack dumps and presents decoded register details and call stacks.
+* **Symbolicated Stack Traces:** Displays calculated stack traces with function names, line numbers, and file paths.
+* **Raw & Decoded Toggles:** Action buttons to easily switch between raw log output and symbolicated stack traces.
+* **One-Click Export:** Features action buttons to copy formatted backtraces or raw crash payloads directly to your clipboard.
+
+---
+
+### Controller Management
+
+The controllers interface maintains a live view of discovered devices across your network deployment.
+
+![Controller Management Interface](controllerView.jpg)
+
+* **Network Discovery Grid:** Card grid of all discovered Lightinator controllers showing name, IP, hostname, device ID, and group memberships.
+* **Online/Offline Telemetry:** Green online indicator or last-seen timestamp when unreachable.
+* **Per-Device Logging Toggles:** Per-controller Logging ON/OFF toggle.
+* **Global Overrides & Refresh:** Global control buttons (`Log All ON` / `Log All OFF`) and manual Refresh button.
+
+---
+
+### Service Configuration & Loki Settings
+
+Configure Loki forwarding and service integrations without restarting the container.
+
+![Service & Loki Settings Panel](config.jpg)
+
+* **Loki Forwarding Settings:** Connection URL, username, and password (masked).
+* **Dynamic Tagging Hierarchy:** Set global labels applied to every log entry, group label overrides (matched by group name from controller discovery), and per-controller extra labels.
+* **Connection Testing & Advanced Settings:** Features connection testing alongside advanced batch size and flush interval configuration.
+* **Persistent Storage:** Settings are persisted to `data/loki.json` (the already-mounted data volume).
+
+---
 
 ## One-Command User Setup (No make required)
 
 ```bash
-git clone https://github.com/pljakobs/lightinator-log-service.git
+git clone [https://github.com/pljakobs/lightinator-log-service.git](https://github.com/pljakobs/lightinator-log-service.git)
 cd lightinator-log-service
 ./scripts/run-container.sh
 ```
@@ -233,3 +290,5 @@ The Grafana datasource for Loki is provisioned automatically. Visit `http://loca
 | `LLS_DISCOVERY_SEEDS` | `lightinator.local` | Comma-separated seed hosts for controller discovery |
 | `LLS_DISCOVERY_PORT` | `80` | HTTP port used to query controllers |
 | `LLS_DISCOVERY_REFRESH_MS` | `300000` (5 min) | Controller discovery refresh interval |
+
+

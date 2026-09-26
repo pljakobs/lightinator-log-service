@@ -285,6 +285,63 @@ INITD
   fi
 }
 
+ensure_gh_cli() {
+  if has gh; then
+    info "GitHub CLI (gh) is already installed."
+    return 0
+  fi
+
+  warn "GitHub CLI (gh) is not installed. It is required for automatic crash issue reporting."
+  if ! yn "Install GitHub CLI (gh) now?" y; then
+    warn "Skipping GitHub CLI installation. Crash issue reporting will not work until 'gh' is installed."
+    return 0
+  fi
+
+  if is_alpine; then
+    if is_root; then
+      apk add --no-cache github-cli
+    else
+      sudo apk add --no-cache github-cli
+    fi
+  elif has apt-get; then
+    # Debian / Ubuntu / Raspberry Pi OS
+    local sudo_cmd=""
+    is_root || sudo_cmd="sudo"
+    
+    $sudo_cmd mkdir -p -m 755 /etc/apt/keyrings
+    wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | $sudo_cmd tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+    $sudo_cmd chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | $sudo_cmd tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+    $sudo_cmd apt-get update
+    $sudo_cmd apt-get install -y gh
+  elif has dnf; then
+    # Fedora / RHEL / CentOS
+    local sudo_cmd=""
+    is_root || sudo_cmd="sudo"
+    $sudo_cmd wget https://cli.github.com/packages/rpm/gh-cli.repo -O /tmp/gh-cli.repo
+    $sudo_cmd dnf install -y 'dnf-command(config-manager)' 2>/dev/null || true
+    $sudo_cmd dnf config-manager addrepo --from-repofile /tmp/gh-cli.repo 2>/dev/null || true
+    $sudo_cmd dnf install -y gh
+  elif has pacman; then
+    # Arch Linux
+    if is_root; then
+      pacman -S --noconfirm github-cli
+    else
+      sudo pacman -S --noconfirm github-cli
+    fi
+  else
+    warn "Could not detect package manager to install gh automatically."
+    warn "Please install GitHub CLI manually: https://cli.github.com/"
+    return 0
+  fi
+
+  if has gh; then
+    info "GitHub CLI installed successfully."
+  else
+    warn "GitHub CLI installation failed or was not found in PATH."
+  fi
+}
+
 # ── usage ─────────────────────────────────────────────────────────────────────
 usage() {
   cat << 'USAGE'
@@ -370,6 +427,8 @@ main() {
       ;;
   esac
 
+  ensure_gh_cli
+  
   # ── dispatch ──
   case "$method" in
     quadlet) do_quadlet "$scope" ;;

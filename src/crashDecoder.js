@@ -1,25 +1,9 @@
 /**
  * crashDecoder.js
  *
- * Detects crash dump lines arriving via syslog (from esp_rgbww_firmware's
- * reportCrashDump()), downloads the matching ELF from lightinator.de, runs
- * the Sming decode-stacktrace.py script, and emits a decoded log record.
- *
- * Expected syslog line sequence (decode-stacktrace.py compatible):
- *
- *   pc=0x40201234 sp=0x3ffff350 excvaddr=0x00000000   ← triggers collection
- *   epc2=0x... epc3=0x... exccause=3 depc=0x...        ← pass-through
- *   Stack dump:
- *   3ffff350:  40201234 3ffef888 00000001 3ffef8c0
- *   ...
- *   <blank line>                                       ← ends collection
- *
- * ELF URL pattern (built by CI):
- *   http://lightinator.de/download/{branch}/{version}/{soc}/{type}/app_0.out
- *   http://lightinator.de/download/{branch}/{version}/{soc}/{type}/app.out
- *
- * Firmware /info?v=2 response:
- *   { device: { soc: "Esp8266" }, app: { git_version: "V5.0-123-develop", build_type: "debug" } }
+ * Detects crash dump lines arriving via syslog, resolves matching target ELF
+ * using version metadata registered from alive controllers (or database / live HTTP fallback),
+ * runs the Sming stacktrace decoder, and stores the decoded output on the crash log entry.
  */
 
 "use strict";
@@ -31,95 +15,240 @@ const path = require("path");
 const http = require("http");
 const https = require("https");
 
-// Regex that identifies the first line of a crash dump
-const CRASH_TRIGGER_RE = /pc=0x[0-9a-f]+ +sp=0x[0-9a-f]+ +excvaddr=0x[0-9a-f]+/i;
+function stripAnsi(str) {
+  return String(str || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").trim();
+}
 
-// Per-SOC configuration: which decode script, addr2line binary, ELF filename,
-// and SMING_SOC value to set when invoking the ESP32 script.
+/**
+ * Parses decoded crash text to extract exception cause, PC frame, top-of-stack frame,
+ * and builds a deterministic fingerprint string.
+ * @param {string} decodedText
+ * @returns {{ exccause: string, pcFrame: string, tosFrame: string, fingerprint: string }}
+ */
+function extractCrashFingerprint(decodedText) {
+  if (!decodedText || typeof decodedText !== "string") {
+    return { exccause: "", pcFrame: "", tosFrame: "", fingerprint: "" };
+  }
+
+  let exccause = "";
+  let pcFrame = "";
+  let tosFrame = "";
+
+  // 1. Extract exccause (e.g. "Fatal exception (28):" or "excvaddr=...")
+  const excMatch = decodedText.match(/(?:Fatal exception\s*\(([^)]+)\)|Guru Meditation Error:\s*([^\r\n]+))/i);
+  if (excMatch) {
+    exccause = (excMatch[1] || excMatch[2] || "").trim();
+  }
+
+  // 2. Extract PC / Top-of-stack frames from decoded stack traces
+  const lines = decodedText.split("\n");
+  for (const line of lines) {
+    const trimmed = stripAnsi(line);
+    if (!pcFrame && /(?:pc=|->\s*0x[0-9a-f]+)/i.test(trimmed)) {
+      pcFrame = trimmed;
+    } else if (!tosFrame && /0x[0-9a-f]{8}\s+in\s+/i.test(trimmed)) {
+      tosFrame = trimmed;
+    }
+  }
+
+  const rawFingerprint = `${exccause}|${pcFrame}|${tosFrame}`;
+  const fingerprint = rawFingerprint !== "||" ? rawFingerprint : "";
+
+  return { exccause, pcFrame, tosFrame, fingerprint };
+}
+
+// Regex matching the initial trigger line of a crash
+const CRASH_TRIGGER_RE = /(?:Fatal exception|Guru Meditation Error|pc=0x[0-9a-f]+\s+sp=0x[0-9a-f]+\s+excvaddr=0x[0-9a-f]+|epc1=0x[0-9a-f]+)/i;
+
+// Regex matching stack header lines
+const STACK_HEADER_RE = /(?:[Ss]tack dump:|[Ss]tack memory:|Backtrace:)/i;
+
+// Regex matching individual stack trace lines
+const STACK_LINE_RE = /^[0-9a-f]{8}:\s+(?:0x)?[0-9a-f]{8}/i;
+const BACKTRACE_LINE_RE = /(?:Backtrace:\s*)?(?:0x[0-9a-f]{8}:0x[0-9a-f]{8}\s*)+/i;
+
 const SOC_CONFIG = {
   esp8266: {
-    script:   path.join(__dirname, "../tools/decode-esp8266.py"),
-    elfFile:  "app_0.out",
-    smingArch: "Esp8266",
-    smingSOC:  "esp8266",
+    script:          path.join(__dirname, "../tools/decode-esp8266.py"),
+    remoteScriptUrl: "https://raw.githubusercontent.com/SmingHub/Sming/develop/Sming/Arch/Esp8266/Tools/decode-stacktrace.py",
+    elfFile:         "app_0.out",
+    smingArch:       "Esp8266",
+    smingSOC:        "esp8266",
   },
   esp32: {
-    script:   path.join(__dirname, "../tools/decode-esp32.py"),
-    elfFile:  "app.out",
-    smingArch: "Esp32",
-    smingSOC:  "esp32",
+    script:          path.join(__dirname, "../tools/decode-esp32.py"),
+    remoteScriptUrl: "https://raw.githubusercontent.com/SmingHub/Sming/develop/Sming/Arch/Esp32/Tools/decode-stacktrace.py",
+    elfFile:         "app.out",
+    smingArch:       "Esp32",
+    smingSOC:        "esp32",
   },
   esp32c3: {
-    script:   path.join(__dirname, "../tools/decode-esp32.py"),
-    elfFile:  "app.out",
-    smingArch: "Esp32",
-    smingSOC:  "esp32c3",
+    script:          path.join(__dirname, "../tools/decode-esp32.py"),
+    remoteScriptUrl: "https://raw.githubusercontent.com/SmingHub/Sming/develop/Sming/Arch/Esp32/Tools/decode-stacktrace.py",
+    elfFile:         "app.out",
+    smingArch:       "Esp32",
+    smingSOC:        "esp32c3",
   },
 };
 
 class CrashDecoder {
   /**
    * @param {object} opts
-   * @param {string}   opts.elfCacheDir  Directory where ELF files are cached
-   * @param {string}   opts.elfBaseUrl   Base URL for ELF downloads
-   *                                     e.g. "http://lightinator.de/download"
-   * @param {Function} opts.onDecoded    Called with a synthetic log record
-   *                                     containing the decoded stack output.
+   * @param {string}              opts.elfCacheDir Directory where ELF files are cached
+   * @param {string}              opts.elfBaseUrl  Base URL for ELF downloads
+   * @param {ControllerDiscovery} [opts.discovery] ControllerDiscovery instance tracking active nodes
+   * @param {import('better-sqlite3').Database} [opts.db] SQLite database instance
+   * @param {LogStorage}          [opts.storage]   LogStorage instance for updating records
+   * @param {Function}            [opts.onDecoded] Called with decoded log record
    */
-  constructor({ elfCacheDir, elfBaseUrl, onDecoded }) {
+  constructor({ elfCacheDir, elfBaseUrl, discovery = null, db = null, storage = null, onDecoded = null }) {
     this.elfCacheDir = elfCacheDir;
     this.elfBaseUrl  = elfBaseUrl;
+    this.discovery   = discovery;
+    this.db          = db;
+    this.storage     = storage;
     this.onDecoded   = onDecoded;
 
-    // ip → { lines: string[], inStack: boolean }
+    // ip → { triggerRecordId, triggerRecord, lines: string[], inStack: boolean, timer: Timeout }
     this._collecting = new Map();
   }
 
-  /**
-   * Feed a parsed syslog record.
-   * Returns true if the line is part of a crash dump (caller may still store
-   * it normally; this is non-exclusive).
-   */
   feed(record) {
-    const msg = (record.message || "").trimEnd();
-    const ip  = record.sourceIp;
+    const rawMsg = record.message || "";
+    const cleanMsg = stripAnsi(rawMsg);
+    const ip = record.sourceIp;
 
-    // Start of crash dump
-    if (CRASH_TRIGGER_RE.test(msg)) {
-      this._collecting.set(ip, { lines: [], inStack: false });
+    if (!cleanMsg || !ip) return false;
+
+    // Check if this line marks the beginning of a crash dump
+    if (CRASH_TRIGGER_RE.test(cleanMsg)) {
+      const existing = this._collecting.get(ip);
+      // Start a new crash session if not already in one or if previous wasn't actively in stack
+      if (!existing || !existing.inStack) {
+        if (existing?.timer) clearTimeout(existing.timer);
+
+        const isStackHeader = STACK_HEADER_RE.test(cleanMsg);
+        const triggerRecordId = record.id;
+
+        this._collecting.set(ip, {
+          triggerRecordId,
+          triggerRecord: record,
+          lines: [cleanMsg],
+          inStack: isStackHeader,
+          timer: setTimeout(() => this._finalize(ip), 5000),
+        });
+
+        // Mark on the database record that crash decode is pending
+        if (this.storage && triggerRecordId) {
+          this.storage.updateCrashDecode(triggerRecordId, "[Crash dump detected, decoding in progress...]").catch(() => {});
+        }
+
+        return true;
+      }
     }
 
     const state = this._collecting.get(ip);
     if (!state) return false;
 
-    state.lines.push(msg);
+    // Reset inactivity timer
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => this._finalize(ip), 5000);
 
-    if (msg === "Stack dump:") {
+    // Check for stack dump header (e.g. "Stack dump:")
+    if (STACK_HEADER_RE.test(cleanMsg)) {
+      state.lines.push(cleanMsg);
       state.inStack = true;
       return true;
     }
 
-    // Blank line after stack data = end of dump
-    if (state.inStack && msg.trim() === "") {
-      this._collecting.delete(ip);
-      const capturedLines = state.lines;
-      setImmediate(() => {
-        this._decode(ip, record, capturedLines).catch(e => {
-          console.warn(`CrashDecoder [${ip}]: decode failed — ${e.message}`);
-        });
-      });
-      return true;
+    if (state.inStack) {
+      if (STACK_LINE_RE.test(cleanMsg) || BACKTRACE_LINE_RE.test(cleanMsg)) {
+        state.lines.push(cleanMsg);
+        return true;
+      }
+
+      // Non-stack line encountered (blank line, next syslog message, reboot marker) -> finalize
+      this._finalize(ip);
+      return false;
     }
 
+    // Still in pre-stack registers section (e.g. ps=..., sar=..., r00:...)
+    state.lines.push(cleanMsg);
     return true;
   }
 
-  // ── Private ────────────────────────────────────────────────────────────────
+  _finalize(ip) {
+    const state = this._collecting.get(ip);
+    if (!state) return;
+    clearTimeout(state.timer);
+    this._collecting.delete(ip);
 
-  async _decode(ip, triggerRecord, lines) {
-    const info = await this._fetchFirmwareInfo(ip);
+    const { triggerRecordId, triggerRecord, lines } = state;
+    setImmediate(() => {
+      this._decode(ip, triggerRecordId, triggerRecord, lines).catch(e => {
+        console.warn(`CrashDecoder [${ip}]: decode failed — ${e.message}`);
+      });
+    });
+  }
+
+  // ── Private Methods ────────────────────────────────────────────────────────
+
+  async _resolveTargetInfo(ip) {
+    // 1. Try resolving target version from Discovery memory cache
+    if (this.discovery) {
+      const known = this.discovery.controllers.get(ip);
+      if (known?.gitVersion && known?.soc) {
+        return {
+          git_version: known.gitVersion,
+          soc:         known.soc,
+          build_type:  known.buildType || "debug",
+        };
+      }
+    }
+
+    // 2. Try resolving target version from SQLite database
+    if (this.db) {
+      try {
+        const row = this.db.prepare(
+          "SELECT soc, build_type, git_version FROM controllers WHERE ip = ?"
+        ).get(ip);
+        if (row?.git_version && row?.soc) {
+          return {
+            git_version: row.git_version,
+            soc:         row.soc,
+            build_type:  row.build_type || "debug",
+          };
+        }
+      } catch (e) {
+        console.debug(`CrashDecoder [${ip}]: DB query failed: ${e.message}`);
+      }
+    }
+
+    // 3. Fall back to live /info?v=2 endpoint directly (retry once in case controller is rebooting)
+    let info = await this._fetchFirmwareInfo(ip);
+    if (!info?.git_version) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      info = await this._fetchFirmwareInfo(ip);
+    }
+    return info;
+  }
+
+  async _decode(ip, triggerRecordId, triggerRecord, lines) {
+    const info = await this._resolveTargetInfo(ip);
     if (!info || !info.git_version || !info.soc) {
-      console.warn(`CrashDecoder [${ip}]: could not fetch /info?v=2 — skipping decode`);
+      const msg = `[Crash decode skipped: target metadata missing for ${ip}]`;
+      console.warn(`CrashDecoder [${ip}]: target metadata missing (git_version/soc) — skipping decode`);
+      if (this.storage && triggerRecordId) {
+        await this.storage.updateCrashDecode(triggerRecordId, msg);
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 4,
+          tag: "crash-decoder",
+          message: msg,
+          sourceIp: ip,
+        });
+      }
       return;
     }
 
@@ -128,12 +257,23 @@ class CrashDecoder {
     const cfg    = SOC_CONFIG[socKey];
 
     if (!cfg) {
+      const msg = `[Crash decode skipped: unsupported SOC "${soc}"]`;
       console.warn(`CrashDecoder [${ip}]: unsupported SOC "${soc}" — skipping decode`);
+      if (this.storage && triggerRecordId) {
+        await this.storage.updateCrashDecode(triggerRecordId, msg);
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 4,
+          tag: "crash-decoder",
+          message: msg,
+          sourceIp: ip,
+        });
+      }
       return;
     }
 
-    // Parse git_version: "V5.0-{build}-{branch}"
-    const vMatch = git_version.match(/^V[\d.]+-\d+-(.+)$/);
+    const vMatch = git_version.match(/^V[\d.]+-\d+-(.+)$/i);
     const branch = vMatch ? vMatch[1] : "develop";
     const type   = build_type || "debug";
 
@@ -143,21 +283,81 @@ class CrashDecoder {
       `${git_version}-${socKey}-${type}.elf`,
     );
 
-    console.log(`CrashDecoder [${ip}]: fetching ELF from ${elfUrl}`);
-    await this._ensureElf(elfUrl, elfPath);
+    console.log(`CrashDecoder [${ip}]: using firmware ${git_version} (${socKey}/${type})`);
+    try {
+      await this._ensureElf(elfUrl, elfPath);
+    } catch (err) {
+      const msg = `[Crash decode error: failed downloading ELF from ${elfUrl}: ${err.message}]`;
+      console.warn(`CrashDecoder [${ip}]: ${msg}`);
+      if (this.storage && triggerRecordId) {
+        await this.storage.updateCrashDecode(triggerRecordId, msg);
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 3,
+          tag: "crash-decoder",
+          message: msg,
+          sourceIp: ip,
+        });
+      }
+      return;
+    }
 
-    console.log(`CrashDecoder [${ip}]: running decode-stacktrace.py`);
-    const decoded = await this._runDecode(cfg, elfPath, lines);
+    await this._ensureScript(cfg);
+
+    let decoded;
+    try {
+      decoded = await this._runDecode(cfg, elfPath, lines);
+      if (this.storage) {
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 6,
+          tag: "crash-decoder",
+          message: `[Crash decode completed successfully for ${git_version}]`,
+          sourceIp: ip,
+        });
+      }
+    } catch (err) {
+      console.warn(`CrashDecoder [${ip}]: decode failed — ${err.message}`);
+      decoded = `[Crash decode error: ${err.message}]\n\nRaw dump:\n` + lines.join("\n");
+      if (this.storage) {
+        await this.storage.append(ip, {
+          receivedAt: new Date().toISOString(),
+          facility: 1,
+          severity: 3,
+          tag: "crash-decoder",
+          message: `[Crash decode execution failed: ${err.message}]`,
+          sourceIp: ip,
+        });
+      }
+    }
+
+    if (this.storage && triggerRecordId) {
+      await this.storage.updateCrashDecode(triggerRecordId, decoded).catch(e => {
+        console.warn(`CrashDecoder [${ip}]: failed updating database row: ${e.message}`);
+      });
+    }
 
     if (this.onDecoded) {
+      const fingerprintData = extractCrashFingerprint(decoded);
+
       this.onDecoded({
-        sourceIp:   ip,
-        receivedAt: triggerRecord.receivedAt,
-        tag:        triggerRecord.tag,
-        app:        triggerRecord.app,
-        message:    decoded,
-        raw:        lines.join("\n"),
-        // Tell loki.js to use a distinct label
+        id:          triggerRecordId,
+        sourceIp:    ip,
+        receivedAt:  triggerRecord.receivedAt,
+        tag:         triggerRecord.tag,
+        app:         triggerRecord.app,
+        gitVersion:  git_version,
+        soc:         socKey,
+        buildType:   type,
+        message:     decoded,
+        raw:         lines.join("\n"),
+        crashDecode: decoded,
+        fingerprint: fingerprintData.fingerprint,
+        exccause:    fingerprintData.exccause,
+        pcFrame:     fingerprintData.pcFrame,
+        tosFrame:    fingerprintData.tosFrame,
         _crashDecode: true,
       });
     }
@@ -171,7 +371,7 @@ class CrashDecoder {
           port: 80,
           path: "/info?v=2",
           headers: { Accept: "application/json" },
-          timeout: 5000,
+          timeout: 4000,
         },
         (res) => {
           if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -185,9 +385,9 @@ class CrashDecoder {
             try {
               const j = JSON.parse(body);
               resolve({
-                git_version: j?.app?.git_version ?? null,
-                soc:         j?.device?.soc       ?? null,
-                build_type:  j?.app?.build_type   ?? "debug",
+                git_version: j?.app?.git_version ?? j?.git_version ?? null,
+                soc:         j?.device?.soc       ?? j?.soc         ?? null,
+                build_type:  j?.app?.build_type   ?? j?.build_type   ?? "debug",
               });
             } catch {
               resolve(null);
@@ -200,31 +400,96 @@ class CrashDecoder {
     });
   }
 
-  async _ensureElf(url, localPath) {
+  async _ensureScript(cfg) {
+    if (fs.existsSync(cfg.script)) return;
+    if (!cfg.remoteScriptUrl) return;
+
+    try {
+      console.log(`CrashDecoder: downloading script ${cfg.script} from ${cfg.remoteScriptUrl}`);
+      await fsp.mkdir(path.dirname(cfg.script), { recursive: true });
+      const tmpPath = cfg.script + ".tmp";
+      await new Promise((resolve, reject) => {
+        const file = fs.createWriteStream(tmpPath);
+        https.get(cfg.remoteScriptUrl, (res) => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            file.close(() => {
+              fs.unlink(tmpPath, () => {});
+              reject(new Error(`HTTP ${res.statusCode} downloading script ${cfg.remoteScriptUrl}`));
+            });
+            return;
+          }
+          res.pipe(file);
+          file.on("finish", () => file.close(resolve));
+          file.on("error", (err) => {
+            file.close(() => {
+              fs.unlink(tmpPath, () => {});
+              reject(err);
+            });
+          });
+        }).on("error", (e) => {
+          file.close(() => {
+            fs.unlink(tmpPath, () => {});
+            reject(e);
+          });
+        });
+      });
+      await fsp.chmod(tmpPath, 0o755);
+      await fsp.rename(tmpPath, cfg.script);
+      console.log(`CrashDecoder: downloaded script ${cfg.script}`);
+    } catch (err) {
+      console.warn(`CrashDecoder: could not download script ${cfg.script}: ${err.message}`);
+    }
+  }
+
+  async _ensureElf(url, localPath, maxRedirects = 3) {
     await fsp.mkdir(path.dirname(localPath), { recursive: true });
 
-    // Return immediately if already cached
     try {
       await fsp.access(localPath);
       return;
-    } catch { /* not cached */}
+    } catch { /* file not cached */ }
 
     const tmpPath = localPath + ".tmp";
-    await new Promise((resolve, reject) => {
-      const lib  = url.startsWith("https") ? https : http;
-      const file = fs.createWriteStream(tmpPath);
-      lib.get(url, (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          res.resume();
-          file.close(() => reject(new Error(`HTTP ${res.statusCode} downloading ELF: ${url}`)));
-          return;
-        }
-        res.pipe(file);
-        file.on("finish", () => file.close(resolve));
-        file.on("error",  reject);
-      }).on("error", e => { file.close(() => reject(e)); });
-    });
+    const download = (targetUrl, redirectsLeft) => {
+      return new Promise((resolve, reject) => {
+        const lib = targetUrl.startsWith("https") ? https : http;
+        const file = fs.createWriteStream(tmpPath);
+        lib.get(targetUrl, (res) => {
+          if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location && redirectsLeft > 0) {
+            res.resume();
+            file.close(() => {
+              fs.unlink(tmpPath, () => {});
+              const nextUrl = new URL(res.headers.location, targetUrl).toString();
+              download(nextUrl, redirectsLeft - 1).then(resolve, reject);
+            });
+            return;
+          }
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            res.resume();
+            file.close(() => {
+              fs.unlink(tmpPath, () => {});
+              reject(new Error(`HTTP ${res.statusCode} downloading ELF: ${targetUrl}`));
+            });
+            return;
+          }
+          res.pipe(file);
+          file.on("finish", () => file.close(resolve));
+          file.on("error", (err) => {
+            file.close(() => {
+              fs.unlink(tmpPath, () => {});
+              reject(err);
+            });
+          });
+        }).on("error", (e) => {
+          file.close(() => {
+            fs.unlink(tmpPath, () => {});
+            reject(e);
+          });
+        });
+      });
+    };
 
+    await download(url, maxRedirects);
     await fsp.rename(tmpPath, localPath);
   }
 
@@ -232,6 +497,7 @@ class CrashDecoder {
     return new Promise((resolve, reject) => {
       const env = {
         ...process.env,
+        PATH: process.env.PATH ? `/usr/local/bin:${process.env.PATH}` : "/usr/local/bin:/usr/bin:/bin",
         SMING_SOC:  cfg.smingSOC,
         SMING_ARCH: cfg.smingArch,
       };
@@ -262,4 +528,4 @@ class CrashDecoder {
   }
 }
 
-module.exports = { CrashDecoder };
+module.exports = { CrashDecoder, stripAnsi, extractCrashFingerprint };

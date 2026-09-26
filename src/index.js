@@ -7,14 +7,36 @@ const os = require("os");
 
 const { config } = require("./config");
 const { parseSyslogLine } = require("./syslogParser");
+const { BootTracker } = require("./bootTracker");
 const { LogStorage } = require("./storage");
+const { openDatabase } = require("./db");
 const { advertiseMdns } = require("./mdns");
 const { LokiForwarder } = require("./loki");
 const { ControllerDiscovery } = require("./discovery");
 const { CrashDecoder } = require("./crashDecoder");
+const { CrashReporter } = require("./crashReporter");
 const { version: pkgVersion } = require("../package.json");
 const version = process.env.APP_VERSION || pkgVersion;
 const { SETTINGS_SCHEMA, readServiceEnv, writeServiceEnv } = require("./serviceConfig");
+
+const buildNumber = process.env.BUILD_NUMBER || 'dev';
+const gitVersion = process.env.GIT_VERSION || 'local';
+
+const changelogPath = path.join(__dirname, "changelog.json");
+let changelogCache = null;
+
+async function loadChangelog() {
+  if (changelogCache) return changelogCache;
+  try {
+    const parsed = JSON.parse(await fs.readFile(changelogPath, "utf8"));
+    const builds = Array.isArray(parsed.builds) ? parsed.builds : [];
+    changelogCache = { generatedAt: parsed.generatedAt || null, builds };
+    return changelogCache;
+  } catch (err) {
+    if (err.code !== "ENOENT") console.warn(`Could not read changelog: ${err.message}`);
+    return { generatedAt: null, builds: [] };
+  }
+}
 
 function listCollectorIpv4Addresses() {
   const interfaces = os.networkInterfaces();
@@ -32,21 +54,12 @@ function listCollectorIpv4Addresses() {
   return [...new Set(ips)];
 }
 
-/**
- * Pick the best IP to advertise to controllers for syslog delivery.
- * Preference order:
- *   1. LLS_SYSLOG_ADVERTISE_HOST env var (explicit override)
- *   2. Only one non-loopback IPv4 → use it
- *   3. Multiple IPs → prefer one on the same /24 as the first seed
- *   4. Fallback: first IP in the list
- */
 function resolveAdvertiseHost(seedHosts) {
   if (config.syslogAdvertiseHost) return config.syslogAdvertiseHost;
   const ips = listCollectorIpv4Addresses();
   if (!ips.length) return "";
   if (ips.length === 1) return ips[0];
 
-  // Try to find an IP on the same /24 as the first seed that looks like an IP
   const seed = seedHosts.find(s => /^\d+\.\d+\.\d+\.\d+$/.test(s));
   if (seed) {
     const seedPrefix = seed.split(".").slice(0, 3).join(".");
@@ -56,7 +69,6 @@ function resolveAdvertiseHost(seedHosts) {
   return ips[0];
 }
 
-/** Current effective runtime values for display in the UI */
 function getLiveValues() {
   return {
     LLS_DISCOVERY_SEEDS: config.discoverySeedHosts.join(","),
@@ -64,48 +76,33 @@ function getLiveValues() {
     LLS_UDP_PORT: String(config.udpPort),
     LLS_HTTP_PORT: String(config.httpPort),
     LLS_RETENTION_DAYS: String(config.retentionDays),
-    LLS_MAX_BYTES_PER_IP: String(config.maxBytesPerIp),
+    LLS_MAX_ROWS_PER_IP: String(config.maxRowsPerIp),
     LLS_DISCOVERY_REFRESH_MS: String(config.discoveryRefreshMs),
+    LLS_CONTROLLER_STALE_DAYS: String(config.controllerStaleDays),
     LLS_MDNS_HOST: config.mdnsHost,
   };
 }
 
 async function main() {
-  // Ensure the data directory exists (parent of loki.json, controllers.json, service.env)
   await fs.mkdir(path.dirname(config.lokiConfigFile), { recursive: true });
 
+  const db = openDatabase(config.dbPath);
+
   const storage = new LogStorage({
+    db,
     dataDir: config.dataDir,
-    maxBytesPerIp: config.maxBytesPerIp,
+    maxRowsPerIp: config.maxRowsPerIp,
   });
   await storage.init();
 
-  // Per-source boot counters. Loaded from stored records on startup so the
-  // counter survives service restarts. Incremented each time a restart sentinel
-  // arrives. Stamped onto every stored record as `boot`.
-  const bootCounters = new Map();
-  // Last seen restart nonce per IP — used to deduplicate the 3× sentinel
-  // copies the firmware sends to protect against UDP packet loss.
-  const bootNonces = new Map();
+  const bootTracker = new BootTracker();
   for (const src of storage.listSources()) {
-    const last = await storage.lastBootFor(src.ip);
-    bootCounters.set(src.ip, last);
+    bootTracker.restore(src.ip, await storage.lastBootFor(src.ip), storage.lastBootNonceFor(src.ip));
   }
 
   const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
   await loki.loadConfig();
 
-  const crashDecoder = new CrashDecoder({
-    elfCacheDir: config.elfCacheDir,
-    elfBaseUrl:  config.elfBaseUrl,
-    onDecoded: (syntheticRecord) => {
-      // Store and forward decoded crash output as a separate log entry
-      storage.append(syntheticRecord.sourceIp, syntheticRecord).catch(() => {});
-      loki.forward({ ...syntheticRecord, tag: (syntheticRecord.tag || "") + ":crash-decode" });
-    },
-  });
-
-  // Resolve the IP to advertise to controllers for syslog delivery
   const advertiseHost = resolveAdvertiseHost(config.discoverySeedHosts);
   if (advertiseHost) {
     config.syslogAdvertiseHost = advertiseHost;
@@ -119,9 +116,8 @@ async function main() {
     controllerPort: config.discoveryControllerPort,
     refreshIntervalMs: config.discoveryRefreshMs,
     statePath: config.controllerStatePath,
+    db,
     onUpdate: (controllers) => {
-      // Push group memberships back into Loki controller config
-      // so streams are labelled with group names automatically.
       const lokiControllers = {};
       for (const c of controllers) {
         const groupName = c.groups[0]?.name || "";
@@ -131,11 +127,39 @@ async function main() {
           labels: existing.labels || { controller_name: c.name },
         };
       }
-      // Merge, don't overwrite any user-set controller config
       loki.config.controllers = { ...lokiControllers, ...(loki.config.controllers || {}) };
     },
   });
+
   discovery.start();
+
+  // Periodic auto-removal of controllers (and their logs) not seen for N days.
+  const STALE_PURGE_INTERVAL_MS = 60 * 60 * 1000;
+  const STALE_PURGE_INITIAL_DELAY_MS = 60 * 1000;
+  const purgeStaleControllers = () => {
+    const days = config.controllerStaleDays;
+    if (!(days > 0)) return;
+    try {
+      const removed = removeControllers(discovery.listStale(days), true);
+      if (removed.length) {
+        console.log(`Stale purge: removed ${removed.length} controller(s) not seen for ${days} day(s) incl. logs: ${removed.join(", ")}`);
+      }
+    } catch (err) {
+      console.warn(`Stale purge failed: ${err.message}`);
+    }
+  };
+  const stalePurgeTimers = [];
+  if (config.controllerStaleDays > 0) {
+    console.log(`Stale purge: controllers not seen for ${config.controllerStaleDays} day(s) are removed hourly`);
+    const initial = setTimeout(purgeStaleControllers, STALE_PURGE_INITIAL_DELAY_MS);
+    const interval = setInterval(purgeStaleControllers, STALE_PURGE_INTERVAL_MS);
+    for (const t of [initial, interval]) {
+      if (t.unref) t.unref();
+      stalePurgeTimers.push(t);
+    }
+  } else {
+    console.log("Stale purge: disabled (LLS_CONTROLLER_STALE_DAYS=0)");
+  }
 
   const app = express();
   app.use(cors({ origin: config.corsOrigin }));
@@ -159,43 +183,21 @@ async function main() {
     res.json({
       serviceName: config.serviceName,
       host: os.hostname(),
-      http: {
-        host: config.host,
-        port: config.httpPort,
-      },
-      udp: {
-        host: config.udpHost,
-        port: config.udpPort,
-      },
+      http: { host: config.host, port: config.httpPort },
+      udp: { host: config.udpHost, port: config.udpPort },
       storage: {
         dataDir: config.dataDir,
         maxBytesPerIp: config.maxBytesPerIp,
         retentionDays: config.retentionDays,
       },
-      network: {
-        ipv4: listCollectorIpv4Addresses(),
-      },
-      request: {
-        localAddress: req.socket.localAddress || null,
-      },
-      capabilities: {
-        mdns: true,
-        perIpLogs: true,
-        paging: true,
-      },
+      network: { ipv4: listCollectorIpv4Addresses() },
+      request: { localAddress: req.socket.localAddress || null },
+      capabilities: { mdns: true, perIpLogs: true, paging: true },
       mdns: {
         host: config.mdnsHost,
         services: [
-          {
-            name: config.serviceName,
-            type: "_lightinator-log._tcp.local",
-            port: config.httpPort,
-          },
-          {
-            name: `${config.serviceName} Syslog`,
-            type: "_lightinator-syslog._udp.local",
-            port: config.udpPort,
-          },
+          { name: config.serviceName, type: "_lightinator-log._tcp.local", port: config.httpPort },
+          { name: `${config.serviceName} Syslog`, type: "_lightinator-syslog._udp.local", port: config.udpPort },
         ],
       },
     });
@@ -212,11 +214,68 @@ async function main() {
         res.status(400).json({ error: "Missing required query parameter: ip" });
         return;
       }
-
       const limit = req.query.limit;
       const before = req.query.before;
-      const result = await storage.getLogs({ ip, limit, before });
+      const from = req.query.from;
+      const result = await storage.getLogs({ ip, limit, before, from });
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/logs/:id/crash-decode", async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!id || Number.isNaN(id)) {
+        res.status(400).json({ error: "Invalid log id" });
+        return;
+      }
+      const crashDecode = await storage.getCrashDecode(id);
+      if (!crashDecode) {
+        res.status(404).json({ error: "No crash decode found for this log entry" });
+        return;
+      }
+      res.json({ id, crashDecode });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/crashes", (req, res, next) => {
+    try {
+      const ip = String(req.query.ip || "").trim() || null;
+      res.json(storage.listCrashes({ limit: req.query.limit, ip }));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/boots", (req, res, next) => {
+    try {
+      const ip = String(req.query.ip || "").trim();
+      if (!ip) {
+        res.status(400).json({ error: "Missing required query parameter: ip" });
+        return;
+      }
+      res.json({ items: storage.listBoots(ip) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/logs/boot-jump", (req, res, next) => {
+    try {
+      const ip = String(req.query.ip || "").trim();
+      const currentId = Number.parseInt(req.query.currentId, 10);
+      const direction = req.query.direction === "next" ? "next" : "prev";
+
+      if (!ip || Number.isNaN(currentId)) {
+        return res.status(400).json({ error: "Missing or invalid parameters" });
+      }
+
+      const target = storage.getBootJumpTarget(ip, currentId, direction);
+      res.json({ targetId: target ? target.id : null, boot: target ? target.boot : null });
     } catch (err) {
       next(err);
     }
@@ -244,11 +303,28 @@ async function main() {
     }
   });
 
+  app.get("/api/v1/search", (req, res, next) => {
+    try {
+      const query = String(req.query.q || "").trim();
+      if (!query) {
+        res.status(400).json({ error: "Missing required query parameter: q" });
+        return;
+      }
+      const result = storage.search({
+        query,
+        limit: req.query.limit,
+        context: req.query.context,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.get("/api/v1/loki/status", (_req, res) => {
     res.json(loki.getStatus());
   });
 
-  // ── Service config (service.env) ─────────────────────────────────────────
   app.get("/api/v1/service-config", async (_req, res) => {
     try {
       const values = await readServiceEnv(config.serviceEnvPath);
@@ -270,7 +346,6 @@ async function main() {
 
   app.post("/api/v1/service-config/restart", (_req, res) => {
     res.json({ ok: true, message: "Restarting…" });
-    // Allow response to flush before exiting; systemd Restart=always brings it back
     setTimeout(() => process.exit(0), 300);
   });
 
@@ -294,7 +369,6 @@ async function main() {
   });
 
   app.post("/api/v1/loki/test", async (req, res) => {
-    // Accept optional override config from the request body (current form values)
     const override = {};
     if (req.body.url) override.url = req.body.url;
     if (req.body.username !== undefined) override.username = req.body.username;
@@ -309,7 +383,6 @@ async function main() {
     }
   });
 
-  // Discovery API
   app.get("/api/v1/controllers", (_req, res) => {
     res.json({ items: discovery.getAll() });
   });
@@ -323,6 +396,64 @@ async function main() {
     }
   });
 
+  app.get('/api/info', (_req, res) => {
+    res.json({ buildNumber, gitVersion });
+  });
+
+  function removeControllers(ips, purgeLogs) {
+    const removed = [];
+    for (const ip of ips) {
+      if (!discovery.remove(ip)) continue;
+      if (purgeLogs) storage.purgeIp(ip);
+      removed.push(ip);
+    }
+    return removed;
+  }
+
+  app.delete("/api/v1/controllers/:ip", (req, res, next) => {
+    try {
+      const ip = req.params.ip;
+      const purgeLogs = String(req.query.purgeLogs || "").toLowerCase() === "true";
+      const removed = removeControllers([ip], purgeLogs);
+      if (!removed.length) return res.status(404).json({ error: "Controller not found" });
+      res.json({ ok: true, ip, purgedLogs: purgeLogs });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/controllers/remove", (req, res, next) => {
+    try {
+      const { ips, purgeLogs } = req.body || {};
+      if (!Array.isArray(ips) || !ips.every((ip) => typeof ip === "string" && ip)) {
+        return res.status(400).json({ error: "ips must be a non-empty array of strings" });
+      }
+      const removed = removeControllers(ips, purgeLogs === true);
+      res.json({ ok: true, removed, purgedLogs: purgeLogs === true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/controllers/remove-stale", (req, res, next) => {
+    try {
+      const { days, purgeLogs } = req.body || {};
+      const n = Number(days);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ error: "days must be a non-negative number" });
+      }
+      const removed = removeControllers(discovery.listStale(n), purgeLogs === true);
+      res.json({ ok: true, removed, purgedLogs: purgeLogs === true });
+    } catch (err) {
+      next(err);
+    }
+  }); // <-- ADD THIS
+
+  app.get("/api/v1/changelog", async (_req, res) => {
+    const { generatedAt, builds } = await loadChangelog();
+    res.json({ buildNumber, gitVersion, generatedAt, builds });
+  });
+
   app.patch("/api/v1/controllers/:ip/logging", async (req, res) => {
     const ip = req.params.ip;
     const { enabled } = req.body;
@@ -332,7 +463,6 @@ async function main() {
     const ok = discovery.setLogging(ip, enabled);
     if (!ok) return res.status(404).json({ error: "Controller not found" });
 
-    // Push rsyslog config to firmware if we know our own advertise address
     let firmwareUpdated = false;
     if (config.syslogAdvertiseHost) {
       try {
@@ -369,15 +499,51 @@ async function main() {
     res.json({ ok: true, ip, loggingEnabled: enabled, firmwareUpdated });
   });
 
+  const crashReporter = new CrashReporter({
+    db,
+    githubToken: config.githubToken,
+    githubRepo: config.githubRepo,
+    autoCreateIssues: config.autoCreateIssues,
+  });
+
+  const crashDecoder = new CrashDecoder({
+    elfCacheDir: config.elfCacheDir,
+    elfBaseUrl: config.elfBaseUrl,
+    discovery,
+    db,
+    storage,
+    onDecoded: (record) => {
+      const decodedContent = record.crashDecode || record.message || "";
+      loki.forward({ ...record, tag: (record.tag || "") + ":crash-decode" });
+
+      crashReporter
+        .processCrash({
+          logId: record.id,
+          record,
+          decodedText: decodedContent,
+          fingerprint: record.fingerprint || "",
+          exccause: record.exccause || "",
+          pcFrame: record.pcFrame || "",
+          tosFrame: record.tosFrame || "",
+        })
+        .then((result) => {
+          if (result?.issueUrl) {
+            console.log(`[CrashReporter] Created/updated GitHub issue: ${result.issueUrl}`);
+          }
+        })
+        .catch((err) => {
+          console.warn(`[CrashReporter] Crash reporting failed: ${err.message}`);
+        });
+    },
+  });
+
   app.use((err, _req, res, _next) => {
     console.error("Unhandled error:", err);
     res.status(500).json({ error: "Internal server error" });
   });
 
   const server = app.listen(config.httpPort, config.host, () => {
-    console.log(
-      `HTTP API listening on http://${config.host}:${config.httpPort}`,
-    );
+    console.log(`HTTP API listening on http://${config.host}:${config.httpPort}`);
   });
 
   const udpServer = dgram.createSocket("udp4");
@@ -389,26 +555,7 @@ async function main() {
     try {
       const raw = msg.toString("utf8");
       const record = parseSyslogLine(raw, rinfo.address);
-
-      // Boot detection: new firmware embeds the nonce on every packet header,
-      // so we can assign lines to the correct boot the moment any packet arrives
-      // with a previously-unseen nonce — no need to wait for the sentinel.
-      // Old firmware only carries the nonce on the sentinel (isRestartMarker),
-      // handled by the same path since bootNonce is also populated from the
-      // message body as a fallback in the parser.
-      const nonce = record.bootNonce;
-      const lastNonce = bootNonces.get(rinfo.address);
-      if (nonce !== undefined) {
-        if (nonce !== lastNonce) {
-          // New nonce → new boot.
-          bootNonces.set(rinfo.address, nonce);
-          bootCounters.set(rinfo.address, (bootCounters.get(rinfo.address) || 0) + 1);
-        } else if (record.isRestartMarker) {
-          // Same nonce + sentinel = duplicate copy of the 3× sentinel — discard.
-          return;
-        }
-      }
-      record.boot = bootCounters.get(rinfo.address) || 0;
+      if (!bootTracker.assign(rinfo.address, record)) return;
 
       await storage.append(rinfo.address, record);
       discovery.addSeenIp(rinfo.address);
@@ -416,8 +563,6 @@ async function main() {
       if (discovery.isLoggingEnabled(rinfo.address)) {
         loki.forward(record);
       }
-      // Feed to crash decoder regardless of logging toggle — crash context
-      // is always valuable. The decoder only acts on matching lines.
       crashDecoder.feed(record);
     } catch (err) {
       console.error("Failed processing UDP packet:", err);
@@ -437,16 +582,25 @@ async function main() {
 
   console.log(`mDNS host announced as ${mdns.info.host}`);
   for (const svc of mdns.info.services) {
-    console.log(`mDNS service ${svc.type} name=\"${svc.name}\" port=${svc.port}`);
+    console.log(`mDNS service ${svc.type} name="${svc.name}" port=${svc.port}`);
   }
 
   const shutdown = () => {
     console.log("Shutting down...");
+    for (const t of stalePurgeTimers) {
+      clearTimeout(t);
+      clearInterval(t);
+    }
     mdns.stop();
     loki.stop();
     discovery.stop();
     udpServer.close();
-    server.close(() => process.exit(0));
+    server.close(() => {
+      if (db && typeof db.close === "function") {
+        db.close();
+      }
+      process.exit(0);
+    });
   };
 
   process.on("SIGINT", shutdown);
@@ -457,3 +611,4 @@ main().catch((err) => {
   console.error("Fatal startup error:", err);
   process.exit(1);
 });
+  
