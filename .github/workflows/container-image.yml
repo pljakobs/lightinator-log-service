@@ -41,6 +41,9 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Run tests
+        env:
+          # Dummy-Schlüssel für Tests, damit der Client im Testmodus initialisiert werden kann
+          GEMINI_API_KEY: "test-dummy-key"
         run: npm test
 
   e2e:
