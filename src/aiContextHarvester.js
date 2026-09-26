@@ -2,14 +2,16 @@
  * aiContextHarvester.js
  * 
  * Handles repository synchronization (Sming, esp-rgbww-firmware), map file retrieval,
- * and source code context extraction around stack trace fault locations and targeted JSON requests.
+ * and source code context extraction around stack trace fault locations and targeted JSON requests asynchronously.
  */
 
 "use strict";
 
 const fs = require("fs/promises");
 const path = require("path");
-const { execSync } = require("child_process");
+const { exec } = require("child_process");
+const util = require("util");
+const execAsync = util.promisify(exec);
 const http = require("http");
 const https = require("https");
 
@@ -24,26 +26,24 @@ class AIContextHarvester {
   }
 
   /**
-   * Clones or updates a repository and checks out a specific branch, tag, or commit reference.
+   * Clones or updates a repository and checks out a specific branch, tag, or commit reference asynchronously.
    */
-async ensureRepo(name, repoUrl, ref) {
+  async ensureRepo(name, repoUrl, ref) {
     const repoPath = path.join(this.cacheDir, name);
     const targetRef = ref || "develop";
     const effectiveUrl = repoUrl || (name === "Sming" ? "https://github.com/pljakobs/Sming.git" : repoUrl);
 
     try {
-      // If the cache directory already exists, fetch updates, checkout reference, and sync submodules
       await fs.access(repoPath);
-      execSync(`git -C "${repoPath}" fetch origin --tags`, { stdio: "ignore" });
-      execSync(`git -C "${repoPath}" checkout "${targetRef}"`, { stdio: "ignore" });
-      execSync(`git -C "${repoPath}" submodule update --init --recursive`, { stdio: "ignore" });
+      await execAsync(`git -C "${repoPath}" fetch origin --tags`, { stdio: "ignore" });
+      await execAsync(`git -C "${repoPath}" checkout "${targetRef}"`, { stdio: "ignore" });
+      await execAsync(`git -C "${repoPath}" submodule update --init --recursive`, { stdio: "ignore" });
     } catch {
-      // If missing, initialize a clean clone, fetch tags, checkout, and populate submodules
       await fs.mkdir(repoPath, { recursive: true });
-      execSync(`git clone --depth 50 "${effectiveUrl}" "${repoPath}"`, { stdio: "ignore" });
-      execSync(`git -C "${repoPath}" fetch origin --tags`, { stdio: "ignore" });
-      execSync(`git -C "${repoPath}" checkout "${targetRef}"`, { stdio: "ignore" });
-      execSync(`git -C "${repoPath}" submodule update --init --recursive`, { stdio: "ignore" });
+      await execAsync(`git clone --depth 50 "${effectiveUrl}" "${repoPath}"`, { stdio: "ignore" });
+      await execAsync(`git -C "${repoPath}" fetch origin --tags`, { stdio: "ignore" });
+      await execAsync(`git -C "${repoPath}" checkout "${targetRef}"`, { stdio: "ignore" });
+      await execAsync(`git -C "${repoPath}" submodule update --init --recursive`, { stdio: "ignore" });
     }
     return repoPath;
   }
@@ -67,7 +67,7 @@ async ensureRepo(name, repoUrl, ref) {
         await fs.writeFile(localPath, data, "utf8");
         return data;
       } catch (err) {
-        console.warn(`[AIContextHarvester] Could not fetch map file from ${url}: ${err.message}`);
+        console.warn(`[AIContextHarvester] Could not fetch map file from ${url}:${err.message}`);
         return null;
       }
     }
@@ -130,14 +130,12 @@ async ensureRepo(name, repoUrl, ref) {
 
   /**
    * Extracts specific file ranges requested via JSON from Pass 1 analysis.
-   * Handles absolute container/vm paths (e.g., /opt/Sming/...) and maps them to local repo caches.
    */
   async getContextFiles(fileRequests, repoPaths) {
     const snippets = [];
     if (!Array.isArray(fileRequests)) return snippets;
 
     for (const req of fileRequests) {
-      // Normalize path by stripping container-specific absolute prefixes
       let relPath = req.path.replace(/^\/(opt|home|root|app)\/[^\/]+\//, '');
       if (relPath.startsWith('/')) {
         relPath = relPath.substring(1);

@@ -1,7 +1,8 @@
 /**
  * aiService.js
  * 
- * Multi-pass AI crash analysis engine using the official Google Gen AI SDK.
+ * Multi-pass AI crash analysis engine using the official Google Gen AI SDK,
+ * featuring a strictly linear execution queue for non-reentrant repository operations.
  */
 
 "use strict";
@@ -15,10 +16,20 @@ class AIService {
     if (this.apiKey) {
       this.ai = new GoogleGenAI({ apiKey: this.apiKey });
     }
+    this._queue = Promise.resolve();
   }
 
   isAvailable() {
     return Boolean(this.ai);
+  }
+
+  /**
+   * Enqueues an analysis task to ensure strict linearity (non-reentrant execution).
+   */
+  enqueue(taskFn) {
+    const promise = this._queue.then(() => taskFn());
+    this._queue = promise.catch(() => {}); // Prevent queue blockage on failure
+    return promise;
   }
 
   /**
@@ -68,7 +79,7 @@ class AIService {
     if (!this.ai) throw new Error("AI service is not configured.");
 
     const prompt = [
-            `You are an expert embedded firmware engineer specializing in Sming on the ESP8266/ESP32 platform, analyzing a crash dump.`,
+      `You are an expert embedded firmware engineer specializing in Sming on the ESP8266/ESP32 platform, analyzing a crash dump.`,
       'your code operates in tight heap conditions, especially on the esp8266, most of the application code uses restrictive heap guards, but there is still a lot of Framework code that uses optimistic heap management',
       ``,
       `### Pass 1 Analysis & Gap Assessment:`,

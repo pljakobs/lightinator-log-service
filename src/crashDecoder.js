@@ -252,40 +252,40 @@ class CrashDecoder {
     }
 
     // Execute Multi-Pass AI Analysis if available
-    let aiAnalysisResult = null;
+   let aiAnalysisResult = null;
     if (this.aiService && this.aiService.isAvailable()) {
       try {
         console.log(`CrashDecoder [${ip}]: Initiating multi-pass AI analysis...`);
         
-        // Sync Repositories
-        const smingPath = await this.harvester.ensureRepo("Sming", "https://github.com/pljakobs/Sming.git", "develop");
-        const fwRepoPath = await this.harvester.ensureRepo("esp-rgbww-firmware", "https://github.com/pljakobs/esp-rgbww-firmware.git", branch);
-        
-        const mapSymbols = await this.harvester.fetchMapFile(git_version, socKey, type);
-        const codeSnippets = await this.harvester.extractSnippets(decoded, { Sming: smingPath, "esp-rgbww-firmware": fwRepoPath });
+        aiAnalysisResult = await this.aiService.enqueue(async () => {
+          const smingPath = await this.harvester.ensureRepo("Sming", "https://github.com/pljakobs/Sming.git", "develop");
+          const fwRepoPath = await this.harvester.ensureRepo("esp-rgbww-firmware", "https://github.com/pljakobs/esp-rgbww-firmware.git", branch);
+          
+          const mapSymbols = await this.harvester.fetchMapFile(git_version, socKey, type);
+          const codeSnippets = await this.harvester.extractSnippets(decoded, { Sming: smingPath, "esp-rgbww-firmware": fwRepoPath });
 
-        // Pass 1 Analysis
-        const pass1 = await this.aiService.runPass1({
-          soc: socKey,
-          gitVersion: git_version,
-          decodedText: decoded,
-          codeSnippets,
-          mapSymbols,
+          const pass1 = await this.aiService.runPass1({
+            soc: socKey,
+            gitVersion: git_version,
+            decodedText: decoded,
+            codeSnippets,
+            mapSymbols,
+          });
+
+          const pass2 = await this.aiService.runPass2({
+            pass1Result: pass1,
+            supplementalSnippets: codeSnippets,
+          });
+
+          return `### AI Pass 1: Anatomical & Gap Analysis\n${pass1}\n\n### AI Pass 2: Root-Cause Remediation\n${pass2}`;
         });
 
-        // Pass 2 Remediation Generation
-        const pass2 = await this.aiService.runPass2({
-          pass1Result: pass1,
-          supplementalSnippets: codeSnippets,
-        });
-
-        aiAnalysisResult = `### AI Pass 1: Anatomical & Gap Analysis\n${pass1}\n\n### AI Pass 2: Root-Cause Remediation\n${pass2}`;
         decoded = `${decoded}\n\n---\n\n${aiAnalysisResult}`;
       } catch (aiErr) {
         console.warn(`CrashDecoder [${ip}]: AI analysis pipeline failed:${aiErr.message}`);
       }
     }
-
+    
     if (this.storage && triggerRecordId) {
       await this.storage.updateCrashDecode(triggerRecordId, decoded, {
         gitVersion: git_version,
