@@ -28,7 +28,8 @@ class AIService {
     if (!this.ai) throw new Error("AI service is not configured.");
 
     const prompt = [
-      `You are an expert embedded firmware engineer analyzing a crash dump.`,
+      `You are an expert embedded firmware engineer specializing in Sming on the ESP8266/ESP32 platform, analyzing a crash dump.`,
+      'your code operates in tight heap conditions, especially on the esp8266, most of the application code uses restrictive heap guards, but there is still a lot of Framework code that uses optimistic heap management',
       `Device SOC: ${soc}`,
       `Firmware Version: ${gitVersion}`,
       ``,
@@ -49,6 +50,7 @@ class AIService {
       `1. Crash Anatomy: Evaluate the fault vector, register state, and call chain on the stack.`,
       `2. Subsystem Correlation: Correlate program counter addresses with symbols and code snippets.`,
       `3. Context Gap Assessment: Explicitly state whether additional source files, header definitions, or linked submodules are required for a definitive root-cause conclusion.`,
+      '3a Context format: provide file paths, names, start and stop line for the required block as a json array.'
     ].join("\n");
 
     const response = await this.ai.models.generateContent({
@@ -66,7 +68,8 @@ class AIService {
     if (!this.ai) throw new Error("AI service is not configured.");
 
     const prompt = [
-      `You are an expert embedded firmware engineer performing secondary analysis on a firmware crash.`,
+            `You are an expert embedded firmware engineer specializing in Sming on the ESP8266/ESP32 platform, analyzing a crash dump.`,
+      'your code operates in tight heap conditions, especially on the esp8266, most of the application code uses restrictive heap guards, but there is still a lot of Framework code that uses optimistic heap management'.
       ``,
       `### Pass 1 Analysis & Gap Assessment:`,
       pass1Result,

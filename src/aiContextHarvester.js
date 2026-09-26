@@ -2,7 +2,7 @@
  * aiContextHarvester.js
  * 
  * Handles repository synchronization (Sming, esp-rgbww-firmware), map file retrieval,
- * and source code context extraction around stack trace fault locations.
+ * and source code context extraction around stack trace fault locations and targeted JSON requests.
  */
 
 "use strict";
@@ -29,8 +29,7 @@ class AIContextHarvester {
   async ensureRepo(name, repoUrl, ref) {
     const repoPath = path.join(this.cacheDir, name);
     
-    // Sming uses the 'develop' branch instead of 'experimental'
-    const targetRef = ref || (name === "Sming" ? "develop" : "develop");
+    const targetRef = ref || "develop";
     const effectiveUrl = repoUrl || (name === "Sming" ? "https://github.com/pljakobs/Sming.git" : repoUrl);
 
     try {
@@ -62,7 +61,7 @@ class AIContextHarvester {
         await fs.writeFile(localPath, data, "utf8");
         return data;
       } catch (err) {
-        console.warn(`[AIContextHarvester] Could not fetch map file from ${url}:${err.message}`);
+        console.warn(`[AIContextHarvester] Could not fetch map file from ${url}: ${err.message}`);
         return null;
       }
     }
@@ -118,6 +117,60 @@ class AIContextHarvester {
         } catch {
           // File not found in this repo, check next
         }
+      }
+    }
+    return snippets;
+  }
+
+  /**
+   * Extracts specific file ranges requested via JSON from Pass 1 analysis.
+   * Handles absolute container/vm paths (e.g., /opt/Sming/...) and maps them to local repo caches.
+   */
+  async getContextFiles(fileRequests, repoPaths) {
+    const snippets = [];
+    if (!Array.isArray(fileRequests)) return snippets;
+
+    for (const req of fileRequests) {
+      // Normalize path by stripping container-specific absolute prefixes
+      let relPath = req.path.replace(/^\/(opt|home|root|app)\/[^\/]+\//, '');
+      if (relPath.startsWith('/')) {
+        relPath = relPath.substring(1);
+      }
+
+      let found = false;
+      for (const [repoName, baseDir] of Object.entries(repoPaths)) {
+        const candidatePaths = [
+          path.join(baseDir, relPath),
+          path.join(baseDir, relPath.replace(new RegExp(`^${repoName}\/*`), '')),
+        ];
+
+        for (const candidate of candidatePaths) {
+          try {
+            const content = await fs.readFile(candidate, "utf8");
+            const lines = content.split("\n");
+            const start = Math.max(0, (req.startLine || 1) - 1);
+            const end = Math.min(lines.length, req.stopLine || lines.length);
+            const snippet = lines.slice(start, end).map((l, idx) => `${start + idx + 1}:${l}`).join("\n");
+
+            snippets.push({
+              repo: repoName,
+              file: req.name || path.basename(candidate),
+              path: req.path,
+              startLine: start + 1,
+              stopLine: end,
+              snippet,
+            });
+            found = true;
+            break;
+          } catch {
+            // Try next candidate path
+          }
+        }
+        if (found) break;
+      }
+
+      if (!found) {
+        console.warn(`[AIContextHarvester] Requested context file not found: ${req.path}`);
       }
     }
     return snippets;
