@@ -16,6 +16,7 @@ const { ControllerDiscovery } = require("./discovery");
 const { CrashDecoder } = require("./crashDecoder");
 const { CrashReporter } = require("./crashReporter");
 const { version: pkgVersion } = require("../package.json");
+const { AIService } = require("./aiService");
 const version = process.env.APP_VERSION || pkgVersion;
 const { SETTINGS_SCHEMA, readServiceEnv, writeServiceEnv } = require("./serviceConfig");
 
@@ -528,13 +529,19 @@ async function main() {
     autoCreateIssues: config.autoCreateIssues,
   });
 
+const aiService = new AIService({
+    apiKey: config.geminiApiKey || process.env.LLS_GEMINI_API_KEY || process.env.GEMINI_API_KEY
+  });
+
   const crashDecoder = new CrashDecoder({
     elfCacheDir: config.elfCacheDir,
     elfBaseUrl: config.elfBaseUrl,
     discovery,
     db,
     storage,
+    aiService, // <-- Pass the aiService instance here
     onDecoded: (record) => {
+     
       const decodedContent = record.crashDecode || record.message || "";
       loki.forward({ ...record, tag: (record.tag || "") + ":crash-decode" });
 
@@ -558,6 +565,8 @@ async function main() {
         });
     },
   });
+
+
 
   app.use((err, _req, res, _next) => {
     console.error("Unhandled error:", err);
