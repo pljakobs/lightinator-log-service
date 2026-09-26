@@ -85,6 +85,14 @@ function getLiveValues() {
 }
 
 async function main() {
+  // Load persisted service environment variables into process.env prior to initialization
+  const savedEnv = await readServiceEnv(config.serviceEnvPath);
+  for (const [key, val] of Object.entries(savedEnv)) {
+    if (val && !process.env[key]) {
+      process.env[key] = val;
+    }
+  }
+
   await fs.mkdir(path.dirname(config.lokiConfigFile), { recursive: true });
 
   const db = openDatabase(config.dbPath);
@@ -265,7 +273,6 @@ async function main() {
     }
   });
 
-  // Neuer Endpunkt für die manuelle/on-demand AI-Analyse
   app.post("/api/v1/crashes/:id/analyze", async (req, res, next) => {
     try {
       const id = Number.parseInt(req.params.id, 10);
@@ -529,7 +536,7 @@ async function main() {
     autoCreateIssues: config.autoCreateIssues,
   });
 
-const aiService = new AIService({
+  const aiService = new AIService({
     apiKey: config.geminiApiKey || process.env.LLS_GEMINI_API_KEY || process.env.GEMINI_API_KEY
   });
 
@@ -539,9 +546,8 @@ const aiService = new AIService({
     discovery,
     db,
     storage,
-    aiService, // <-- Pass the aiService instance here
+    aiService,
     onDecoded: (record) => {
-     
       const decodedContent = record.crashDecode || record.message || "";
       loki.forward({ ...record, tag: (record.tag || "") + ":crash-decode" });
 
@@ -565,8 +571,6 @@ const aiService = new AIService({
         });
     },
   });
-
-
 
   app.use((err, _req, res, _next) => {
     console.error("Unhandled error:", err);
@@ -620,7 +624,7 @@ const aiService = new AIService({
     console.log("Shutting down...");
     for (const t of stalePurgeTimers) {
       clearTimeout(t);
-      clearInterval(t)
+      clearInterval(t);
     }
     mdns.stop();
     loki.stop();

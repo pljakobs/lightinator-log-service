@@ -33,7 +33,7 @@ const config = {
   githubToken: process.env.LLS_GITHUB_TOKEN || "",
   githubRepo:  process.env.LLS_GITHUB_REPO || "",
   autoCreateIssues: process.env.LLS_AUTO_CREATE_ISSUES === "true",
-  geminiApiKey: process.env.LLS_GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "",
+  geminiApiKey: process.env.LLS_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "",
   geminiModel: process.env.GEMINI_MODEL || "gemini-2.5-flash",
   aiEnabled: process.env.LLS_AI_ENABLED !== "false",
 };
