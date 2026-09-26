@@ -19,29 +19,23 @@ const config = {
   serviceName: process.env.LLS_SERVICE_NAME || "LightinatorLogService",
   mdnsHost: process.env.LLS_MDNS_HOST || "lightinator-logservice.local",
   lokiConfigFile: process.env.LLS_LOKI_CONFIG || path.join(process.cwd(), "data", "loki.json"),
-  // Discovery: comma-separated seed hostnames/IPs to bootstrap controller discovery
   discoverySeedHosts: (process.env.LLS_DISCOVERY_SEEDS || "lightinator.local").split(",").map(s => s.trim()).filter(Boolean),
   discoveryControllerPort: envInt("LLS_DISCOVERY_PORT", 80),
   discoveryRefreshMs: envInt("LLS_DISCOVERY_REFRESH_MS", 300_000),
-  // Auto-remove controllers (and their logs) not seen for this many days; 0 disables
   controllerStaleDays: envInt("LLS_CONTROLLER_STALE_DAYS", 30),
-  // Path to persist the controller list so it survives restarts
   controllerStatePath: process.env.LLS_CONTROLLER_STATE || path.join(process.cwd(), "data", "controllers.json"),
   dbPath: process.env.LLS_DB_PATH || path.join(process.cwd(), "data", "db.sqlite"),
   maxRowsPerIp: envInt("LLS_MAX_ROWS_PER_IP", 10_000),
-  // Path to the runtime service.env config file (edited via UI)
   serviceEnvPath: process.env.LLS_SERVICE_ENV || path.join(process.cwd(), "data", "service.env"),
-  // The IP/hostname controllers should use to reach this service's syslog UDP port.
-  // Required for the logging toggle to push rsyslog config to firmware.
-  // If unset, the toggle falls back to a local filter only.
   syslogAdvertiseHost: process.env.LLS_SYSLOG_ADVERTISE_HOST || "",
-  // Crash-decode ELF cache directory (persistent between restarts)
   elfCacheDir: process.env.LLS_ELF_CACHE_DIR || path.join(process.cwd(), "data", "elfs"),
-  // Base URL where firmware ELF files are published by the CI deploy workflow
   elfBaseUrl: process.env.LLS_ELF_BASE_URL || "http://lightinator.de/download",
   githubToken: process.env.LLS_GITHUB_TOKEN || "",
   githubRepo:  process.env.LLS_GITHUB_REPO || "",
   autoCreateIssues: process.env.LLS_AUTO_CREATE_ISSUES === "true",
+  geminiApiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "",
+  geminiModel: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+  aiEnabled: process.env.LLS_AI_ENABLED !== "false",
 };
 
 module.exports = { config };
