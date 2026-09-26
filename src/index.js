@@ -264,6 +264,23 @@ async function main() {
     }
   });
 
+  // Neuer Endpunkt für die manuelle/on-demand AI-Analyse
+  app.post("/api/v1/crashes/:id/analyze", async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!id || Number.isNaN(id)) {
+        return res.status(400).json({ error: "Invalid log id" });
+      }
+      if (!crashDecoder) {
+        return res.status(503).json({ error: "CrashDecoder instance not available" });
+      }
+      const crashDecode = await crashDecoder.analyzeRecord(id);
+      res.json({ id, crashDecode });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.get("/api/v1/boots", (req, res, next) => {
     try {
       const ip = String(req.query.ip || "").trim();
@@ -594,7 +611,7 @@ async function main() {
     console.log("Shutting down...");
     for (const t of stalePurgeTimers) {
       clearTimeout(t);
-      clearInterval(t);
+      clearInterval(t)
     }
     mdns.stop();
     loki.stop();
