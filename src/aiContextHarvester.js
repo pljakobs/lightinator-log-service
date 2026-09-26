@@ -26,14 +26,19 @@ class AIContextHarvester {
   /**
    * Clones or checks out a repository at a specific tag/branch/commit.
    */
-  async ensureRepo(name, repoUrl, ref = "develop") {
+  async ensureRepo(name, repoUrl, ref) {
     const repoPath = path.join(this.cacheDir, name);
+    
+    // Sming uses the 'develop' branch instead of 'experimental'
+    const targetRef = ref || (name === "Sming" ? "develop" : "develop");
+    const effectiveUrl = repoUrl || (name === "Sming" ? "https://github.com/pljakobs/Sming.git" : repoUrl);
+
     try {
       await fs.access(repoPath);
-      execSync(`git -C "${repoPath}" fetch origin && git -C "${repoPath}" checkout ${ref} && git -C "${repoPath}" pull origin ${ref}`, { stdio: "ignore" });
+      execSync(`git -C "${repoPath}" fetch origin && git -C "${repoPath}" checkout ${targetRef} && git -C "${repoPath}" pull origin ${targetRef}`, { stdio: "ignore" });
     } catch {
       await fs.mkdir(repoPath, { recursive: true });
-      execSync(`git clone --branch ${ref} --depth 50 ${repoUrl} "${repoPath}"`, { stdio: "ignore" });
+      execSync(`git clone --branch ${targetRef} --depth 50 ${effectiveUrl} "${repoPath}"`, { stdio: "ignore" });
     }
     return repoPath;
   }
