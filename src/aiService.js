@@ -69,7 +69,7 @@ class AIService {
 
     const prompt = [
             `You are an expert embedded firmware engineer specializing in Sming on the ESP8266/ESP32 platform, analyzing a crash dump.`,
-      'your code operates in tight heap conditions, especially on the esp8266, most of the application code uses restrictive heap guards, but there is still a lot of Framework code that uses optimistic heap management'.
+      'your code operates in tight heap conditions, especially on the esp8266, most of the application code uses restrictive heap guards, but there is still a lot of Framework code that uses optimistic heap management',
       ``,
       `### Pass 1 Analysis & Gap Assessment:`,
       pass1Result,
