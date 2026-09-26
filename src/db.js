@@ -30,19 +30,22 @@ function openDatabase(dbPath) {
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS logs (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      ip          TEXT    NOT NULL,
-      received_at TEXT    NOT NULL,
-      source_ip   TEXT,
-      priority    INTEGER,
-      tag         TEXT,
-      app         TEXT,
-      message     TEXT,
-      boot        INTEGER,
-      boot_nonce  INTEGER,
-      device_time INTEGER,
-      raw         TEXT,
-      crash_decode TEXT
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      ip           TEXT    NOT NULL,
+      received_at  TEXT    NOT NULL,
+      source_ip    TEXT,
+      priority     INTEGER,
+      tag          TEXT,
+      app          TEXT,
+      message      TEXT,
+      boot         INTEGER,
+      boot_nonce   INTEGER,
+      device_time  INTEGER,
+      raw          TEXT,
+      crash_decode TEXT,
+      git_version  TEXT,
+      soc          TEXT,
+      build_type   TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_logs_ip_id ON logs (ip, id);
 
@@ -85,6 +88,16 @@ function openDatabase(dbPath) {
   if (!cols.includes("crash_decode")) {
     db.exec("ALTER TABLE logs ADD COLUMN crash_decode TEXT");
   }
+  if (!cols.includes("git_version")) {
+    db.exec("ALTER TABLE logs ADD COLUMN git_version TEXT");
+  }
+  if (!cols.includes("soc")) {
+    db.exec("ALTER TABLE logs ADD COLUMN soc TEXT");
+  }
+  if (!cols.includes("build_type")) {
+    db.exec("ALTER TABLE logs ADD COLUMN build_type TEXT");
+  }
+
   db.exec("CREATE INDEX IF NOT EXISTS idx_logs_ip_boot ON logs (ip, boot)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_logs_crash ON logs (crash_decode) WHERE crash_decode IS NOT NULL");
 

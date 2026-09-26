@@ -287,7 +287,11 @@ class CrashDecoder {
     }
 
     if (this.storage && triggerRecordId) {
-      await this.storage.updateCrashDecode(triggerRecordId, decoded).catch(() => {});
+      await this.storage.updateCrashDecode(triggerRecordId, decoded, {
+        gitVersion: git_version,
+        soc: socKey,
+        buildType: type
+      }).catch(() => {});
     }
 
     if (this.onDecoded) {
@@ -523,7 +527,11 @@ class CrashDecoder {
     const finalDecoded = `${decoded}\n\n---\n\n${aiAnalysisResult}`;
 
     if (this.storage && typeof this.storage.updateCrashDecode === "function") {
-      await this.storage.updateCrashDecode(triggerRecordId, finalDecoded);
+      await this.storage.updateCrashDecode(triggerRecordId, finalDecoded, {
+        gitVersion: git_version,
+        soc: socKey,
+        buildType: type
+      });
     }
 
     return finalDecoded;
@@ -534,7 +542,7 @@ class CrashDecoder {
       const env = {
         ...process.env,
         PATH: process.env.PATH ? `/usr/local/bin:${process.env.PATH}` : "/usr/local/bin:/usr/bin:/bin",
-        SMING_SOC:  cfg.smingSOC,
+        SMING_SOC:  cfg.smingsSOC || cfg.smingSOC,
         SMING_ARCH: cfg.smingArch,
       };
 
