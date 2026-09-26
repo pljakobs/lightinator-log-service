@@ -505,7 +505,8 @@ class CrashDecoder {
     }
 
     const smingPath = await this.harvester.ensureRepo("Sming", "https://github.com/pljakobs/Sming.git", "develop");
-    const fwRepoPath = await this.harvester.ensureRepo("esp-rgbww-firmware", "https://github.com/pljakobs/esp-rgbww-firmware.git", branch);
+
+    const fwRepoPath = await this.harvester.ensureRepo("esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", git_version);
 
     const mapSymbols = await this.harvester.fetchMapFile(git_version, socKey, type);
     const codeSnippets = await this.harvester.extractSnippets(decoded, { Sming: smingPath, "esp-rgbww-firmware": fwRepoPath });
