@@ -422,6 +422,113 @@ class CrashDecoder {
     await fsp.rename(tmpPath, localPath);
   }
 
+  async analyzeRecord(triggerRecordId) {
+    let rawLog = null;
+    let ip = null;
+    let git_version = null;
+    let soc = null;
+    let build_type = "debug";
+
+    if (this.storage && typeof this.storage.getCrashRecord === "function") {
+      const rec = this.storage.getCrashRecord(triggerRecordId);
+      if (rec) {
+        rawLog = rec.raw || rec.message;
+        ip = rec.sourceIp || rec.ip;
+        git_version = rec.gitVersion;
+        soc = rec.soc;
+        build_type = rec.buildType || "debug";
+      }
+    }
+
+    if (!rawLog && this.db) {
+      try {
+        const row = this.db.prepare("SELECT message, source_ip, git_version, soc, build_type, crash_decode FROM logs WHERE id = ?").get(triggerRecordId);
+        if (row) {
+          rawLog = row.crash_decode || row.message;
+          ip = row.source_ip;
+          git_version = row.git_version;
+          soc = row.soc;
+          build_type = row.build_type || "debug";
+        }
+      } catch (e) {
+        console.debug(`CrashDecoder: DB query for record ${triggerRecordId} failed: ${e.message}`);
+      }
+    }
+
+    if (!rawLog) {
+      throw new Error("Crash log or raw dump not found for analysis.");
+    }
+
+    if ((!git_version || !soc) && ip) {
+      const info = await this._resolveTargetInfo(ip);
+      if (info) {
+        git_version = git_version || info.git_version;
+        soc = soc || info.soc;
+        build_type = build_type || info.build_type;
+      }
+    }
+
+    if (!git_version || !soc) {
+      throw new Error("Target metadata (git_version or soc) missing for analysis.");
+    }
+
+    const socKey = soc.toLowerCase();
+    const cfg = SOC_CONFIG[socKey];
+    if (!cfg) {
+      throw new Error(`Unsupported SOC "${soc}"`);
+    }
+
+    const vMatch = git_version.match(/^V[\d.]+-\d+-(.+)$/i);
+    const branch = vMatch ? vMatch[1] : "develop";
+    const type = build_type || "debug";
+
+    const elfUrl = `${this.elfBaseUrl}/${branch}/${git_version}/${socKey}/${type}/${cfg.elfFile}`;
+    const elfPath = path.join(this.elfCacheDir, `${git_version}-${socKey}-${type}.elf`);
+
+    await this._ensureElf(elfUrl, elfPath);
+    await this._ensureScript(cfg);
+
+    const lines = rawLog.split("\n");
+    let decoded;
+    try {
+      decoded = await this._runDecode(cfg, elfPath, lines);
+    } catch (err) {
+      decoded = rawLog;
+    }
+
+    if (!this.aiService || !this.aiService.isAvailable()) {
+      throw new Error("AI service is not configured.");
+    }
+
+    const smingPath = await this.harvester.ensureRepo("Sming", "https://github.com/SmingHub/Sming.git", branch);
+    const fwRepoPath = await this.harvester.ensureRepo("esp-rgbww-firmware", "https://github.com/Lightinator/esp-rgbww-firmware.git", branch);
+
+    const mapSymbols = await this.harvester.fetchMapFile(git_version, socKey, type);
+    const codeSnippets = await this.harvester.extractSnippets(decoded, { Sming: smingPath, "esp-rgbww-firmware": fwRepoPath });
+
+    const pass1 = await this.aiService.runPass1({
+      soc: socKey,
+      gitVersion: git_version,
+      decodedText: decoded,
+      codeSnippets,
+      mapSymbols,
+    });
+
+    const pass2 = await this.aiService.runPass2({
+      pass1Result: pass1,
+      supplementalSnippets: codeSnippets,
+    });
+
+    const aiAnalysisResult = `### AI Pass 1: Anatomical & Gap Analysis\n${pass1}\n\n### AI Pass 2: Root-Cause Remediation\n${pass2}`;
+    const finalDecoded = `${decoded}\n\n---\n\n${aiAnalysisResult}`;
+
+    if (this.storage && typeof this.storage.updateCrashDecode === "function") {
+      await this.storage.updateCrashDecode(triggerRecordId, finalDecoded);
+    }
+
+    return finalDecoded;
+  }
+
   _runDecode(cfg, elfPath, lines) {
     return new Promise((resolve, reject) => {
       const env = {
