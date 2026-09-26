@@ -24,20 +24,26 @@ class AIContextHarvester {
   }
 
   /**
-   * Clones or checks out a repository at a specific tag/branch/commit.
+   * Clones or updates a repository and checks out a specific branch, tag, or commit reference.
    */
-  async ensureRepo(name, repoUrl, ref) {
+async ensureRepo(name, repoUrl, ref) {
     const repoPath = path.join(this.cacheDir, name);
-    
     const targetRef = ref || "develop";
     const effectiveUrl = repoUrl || (name === "Sming" ? "https://github.com/pljakobs/Sming.git" : repoUrl);
 
     try {
+      // If the cache directory already exists, fetch updates, checkout reference, and sync submodules
       await fs.access(repoPath);
-      execSync(`git -C "${repoPath}" fetch origin && git -C "${repoPath}" checkout ${targetRef} && git -C "${repoPath}" pull origin ${targetRef}`, { stdio: "ignore" });
+      execSync(`git -C "${repoPath}" fetch origin --tags`, { stdio: "ignore" });
+      execSync(`git -C "${repoPath}" checkout "${targetRef}"`, { stdio: "ignore" });
+      execSync(`git -C "${repoPath}" submodule update --init --recursive`, { stdio: "ignore" });
     } catch {
+      // If missing, initialize a clean clone, fetch tags, checkout, and populate submodules
       await fs.mkdir(repoPath, { recursive: true });
-      execSync(`git clone --branch ${targetRef} --depth 50 ${effectiveUrl} "${repoPath}"`, { stdio: "ignore" });
+      execSync(`git clone --depth 50 "${effectiveUrl}" "${repoPath}"`, { stdio: "ignore" });
+      execSync(`git -C "${repoPath}" fetch origin --tags`, { stdio: "ignore" });
+      execSync(`git -C "${repoPath}" checkout "${targetRef}"`, { stdio: "ignore" });
+      execSync(`git -C "${repoPath}" submodule update --init --recursive`, { stdio: "ignore" });
     }
     return repoPath;
   }
