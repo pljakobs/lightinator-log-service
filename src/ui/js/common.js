@@ -7,8 +7,17 @@ export const BASE = '';
 
 export async function fetchJson(url, options = {}) {
   const r = await fetch(url, options);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  // Handle empty responses gracefully if an endpoint returns no content
+  if (!r.ok) {
+    const errorBody = await r.text();
+    let message = `HTTP ${r.status}`;
+    try {
+      const parsed = JSON.parse(errorBody);
+      message = parsed.error || parsed.message || errorBody || message;
+    } catch {
+      if (errorBody) message = errorBody;
+    }
+    throw new Error(message);
+  }
   const text = await r.text();
   return text ? JSON.parse(text) : null;
 }
