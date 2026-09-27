@@ -10,8 +10,17 @@
 const { GoogleGenAI } = require("@google/genai");
 
 class AIService {
-  constructor({ apiKey, model = "gemini-2.5-flash" } = {}) {
+constructor({ apiKey, model = "gemini-2.5-flash" } = {}) {
     this.apiKey = apiKey || process.env.LLS_GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    
+    // Trace key resolution and source
+    const source = apiKey ? "constructor argument" 
+                 : (process.env.LLS_GEMINI_API_KEY ? "LLS_GEMINI_API_KEY" 
+                 : (process.env.GOOGLE_API_KEY ? "GOOGLE_API_KEY" : "none"));
+                 
+    const maskedKey = this.apiKey ? `${this.apiKey.slice(0, 4)}...${this.apiKey.slice(-4)}` : "MISSING";
+    console.log(`[AIService] Resolved key from [${source}] (masked: ${maskedKey})`);
+
     this.model = model;
     if (this.apiKey) {
       this.ai = new GoogleGenAI({ apiKey: this.apiKey });

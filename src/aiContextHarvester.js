@@ -52,7 +52,7 @@ class AIContextHarvester {
    * Downloads the .map file corresponding to a firmware build.
    */
   async fetchMapFile(gitVersion, soc, buildType = "debug") {
-    const mapFileName = `firmware_${soc}_${gitVersion}.map`;
+    const mapFileName = `app_0.map`;
     const localPath = path.join(this.cacheDir, mapFileName);
     
     try {
