@@ -5,10 +5,12 @@ ansi_up.use_classes = true;
 
 export const BASE = '';
 
-export async function fetchJson(url) {
-  const r = await fetch(url);
+export async function fetchJson(url, options = {}) {
+  const r = await fetch(url, options);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  // Handle empty responses gracefully if an endpoint returns no content
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
 }
 
 export function severityClass(priority) {
