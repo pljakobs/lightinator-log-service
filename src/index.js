@@ -574,7 +574,7 @@ async function main() {
 
   app.use((err, _req, res, _next) => {
     console.error("Unhandled error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    res.status(err.status || 500).json({ error: err.message || "Internal server error" });
   });
 
   const server = app.listen(config.httpPort, config.host, () => {

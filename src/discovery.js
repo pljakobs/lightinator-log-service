@@ -137,33 +137,47 @@ async function resolveSeedToIpv4(seed) {
   }
 }
 
-function fetchJson(host, port, path) {
+function fetchJson(url, options = {}) {
   return new Promise((resolve, reject) => {
-    const lib = http;
-    const req = lib.get(
-      {
-        hostname: host,
-        port,
-        path,
-        headers: { Accept: "application/json" },
-        timeout: REQUEST_TIMEOUT_MS,
+    const targetUrl = new URL(url);
+    const lib = targetUrl.protocol === 'https:' ? https : http;
+    
+    const reqOptions = {
+      hostname: targetUrl.hostname,
+      port: targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80),
+      path: targetUrl.pathname + targetUrl.search,
+      method: options.method || 'GET',
+      headers: {
+        Accept: 'application/json',
+        ...(options.headers || {})
       },
-      (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          res.resume();
-          return reject(new Error(`HTTP ${res.statusCode} from ${host}${path}`));
+      timeout: REQUEST_TIMEOUT_MS,
+    };
+
+    const req = lib.request(reqOptions, (res) => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} from ${targetUrl.hostname}${targetUrl.pathname}`));
+      }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => (body += c));
+      res.on('end', () => {
+        try { 
+          resolve(body ? JSON.parse(body) : null); 
+        } catch (e) { 
+          reject(new Error(`JSON parse error from ${targetUrl.hostname}${targetUrl.pathname}: ${e.message}`)); 
         }
-        let body = "";
-        res.setEncoding("utf8");
-        res.on("data", (c) => (body += c));
-        res.on("end", () => {
-          try { resolve(JSON.parse(body)); }
-          catch (e) { reject(new Error(`JSON parse error from ${host}${path}: ${e.message}`)); }
-        });
-      },
-    );
-    req.on("timeout", () => { req.destroy(); reject(new Error(`Timeout: ${host}${path}`)); });
-    req.on("error", reject);
+      });
+    });
+
+    req.on('timeout', () => { req.destroy(); reject(new Error(`Timeout: ${targetUrl.hostname}${targetUrl.pathname}`)); });
+    req.on('error', reject);
+
+    if (options.body) {
+      req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
+    }
+    req.end();
   });
 }
 
