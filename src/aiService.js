@@ -50,9 +50,9 @@ class AIService {
 
     const fallbackChain = [
       this.model,
-      "gemini-3.7",
-      "gemini-3.6",
-      "gemini-3.5"
+      "gemini-3.7-flash",
+      "gemini-3.6-flash",
+      "gemini-3.5-flash"
     ];
 
     const models = [...new Set(fallbackChain.filter(Boolean))];
