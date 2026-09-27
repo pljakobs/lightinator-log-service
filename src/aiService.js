@@ -10,7 +10,7 @@
 const { GoogleGenAI } = require("@google/genai");
 
 class AIService {
-constructor({ apiKey, model = "gemini-2.5-flash" } = {}) {
+constructor({ apiKey, model = "gemini-3.8-flash" } = {}) {
     this.apiKey = apiKey || process.env.LLS_GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     
     // Trace key resolution and source

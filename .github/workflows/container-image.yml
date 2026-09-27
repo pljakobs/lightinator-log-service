@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [20, 22]
+        node: [22, 24] # Updated from [20, 22] to avoid deprecated Node 20 actions
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -165,4 +165,3 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "build/${{ github.run_number }}"
           git push origin "build/${{ github.run_number }}"
-

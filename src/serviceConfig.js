@@ -105,7 +105,7 @@ const SETTINGS_SCHEMA = [
     label: "Gemini Model",
     type: "text",
     category: "AI Integration",
-    description: "Model identifier to use for analysis (default: gemini-2.5-flash)."
+    description: "Model identifier to use for analysis (default: gemini-3.8-flash)."
   },
   {
     key: "LLS_AI_ENABLED",
