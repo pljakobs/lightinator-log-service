@@ -150,18 +150,22 @@ class AIContextHarvester {
 
         for (const candidate of candidatePaths) {
           try {
+            /**
+             * for now, provide the entire file content as the snippet.
+             */
             const content = await fs.readFile(candidate, "utf8");
-            const lines = content.split("\n");
-            const start = Math.max(0, (req.startLine || 1) - 1);
-            const end = Math.min(lines.length, req.stopLine || lines.length);
-            const snippet = lines.slice(start, end).map((l, idx) => `${start + idx + 1}:${l}`).join("\n");
+            // const lines = content.split("\n");
+            // const start = Math.max(0, (req.startLine || 1) - 1);
+            // const end = Math.min(lines.length, req.stopLine || lines.length);
+            // const snippet = lines.slice(start, end).map((l, idx) => `${start + idx + 1}:${l}`).join("\n");
+            const snippet = content;
 
             snippets.push({
               repo: repoName,
               file: req.name || path.basename(candidate),
               path: req.path,
-              startLine: start + 1,
-              stopLine: end,
+              startLine: 1,
+              stopLine: content.split("\n").length,
               snippet,
             });
             found = true;
