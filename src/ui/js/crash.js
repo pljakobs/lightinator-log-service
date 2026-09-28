@@ -3,10 +3,44 @@ import { BASE, fetchJson, ansi_up } from './common.js';
 let _currentCrashDecode = '';
 let _currentCrashId = null;
 
+function renderModalContent() {
+  const body = document.getElementById('crash-modal-body');
+  const rawToggle = document.getElementById('crash-raw-toggle');
+
+  if (rawToggle.checked) {
+    body.textContent = _currentCrashDecode;
+    return;
+  }
+
+  // Check for AI analysis section delimiter
+  const aiDelimiter = '--- AI Analysis ---';
+  if (_currentCrashDecode.includes(aiDelimiter)) {
+    const parts = _currentCrashDecode.split(aiDelimiter);
+    const ansiLog = ansi_up.ansi_to_html(parts[0]);
+    const markdownAnalysis = window.marked ? window.marked.parse(parts[1]) : parts[1];
+
+    body.innerHTML = `
+      <div class="ansi-block">${ansiLog}</div>
+      <div class="ai-analysis-block">
+        <h3 style="color:#4ec9b0;margin-bottom:8px">&#10024; AI Analysis</h3>
+        ${markdownAnalysis}
+      </div>
+    `;
+    return;
+  }
+
+  // Fallback: Escape ANSI to HTML spans first, then pass through Markdown parser
+  const ansiHtml = ansi_up.ansi_to_html(_currentCrashDecode);
+  if (window.marked) {
+    body.innerHTML = window.marked.parse(ansiHtml, { gfm: true, breaks: true });
+  } else {
+    body.innerHTML = ansiHtml;
+  }
+}
+
 function openCrashModal(record) {
   const overlay = document.getElementById('crash-modal-overlay');
   const meta = document.getElementById('crash-modal-meta');
-  const body = document.getElementById('crash-modal-body');
   const rawToggle = document.getElementById('crash-raw-toggle');
   const analyzeBtn = document.getElementById('crash-analyze-btn');
 
@@ -19,14 +53,6 @@ function openCrashModal(record) {
     analyzeBtn.style.display = 'inline-block';
   } else {
     analyzeBtn.style.display = 'none';
-  }
-
-  function renderModalContent() {
-    if (rawToggle.checked) {
-      body.textContent = _currentCrashDecode;
-    } else {
-      body.innerHTML = ansi_up.ansi_to_html(_currentCrashDecode);
-    }
   }
 
   rawToggle.onchange = renderModalContent;
@@ -73,13 +99,7 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
     });
     if (res && res.crashDecode) {
       _currentCrashDecode = res.crashDecode;
-      const rawToggle = document.getElementById('crash-raw-toggle');
-      const body = document.getElementById('crash-modal-body');
-      if (rawToggle.checked) {
-        body.textContent = _currentCrashDecode;
-      } else {
-        body.innerHTML = ansi_up.ansi_to_html(_currentCrashDecode);
-      }
+      renderModalContent();
     }
     analyzeBtn.textContent = '✓ Analyzed!';
     setTimeout(() => { analyzeBtn.textContent = origText; analyzeBtn.disabled = false; }, 2000);
