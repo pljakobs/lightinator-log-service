@@ -127,7 +127,9 @@ class AIService {
       `Provide your final remediation plan:`,
       `1. Root Cause Isolation: Precise diagnosis of memory corruption, null pointer dereference, exception, or assertion failure.`,
       `2. Corrective Action Strategy: Recommended code modification or refactoring strategy to prevent recurrence.`,
-      `3. Proposed Code Patch: Concrete snippet showing the corrected logic.`,
+      `3. if there are any addresses on the stack that don't cleanly map into functions, check the map file for potential flash strings`,
+      `4. Proposed Code Patch: Concrete snippet showing the corrected logic. Be specific to not include any "old" code that is not in the provided code snippets`,
+      `5. Verification Plan: Steps to validate that the applied remediation effectively resolves the issue without introducing new regressions.`
     ].join("\n");
 
     return await this._generateWithFallback(prompt);
