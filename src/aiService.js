@@ -76,63 +76,545 @@ class AIService {
   }
 
   /**
-   * Pass 1: Anatomical analysis, call stack evaluation, and context gap identification.
-   */
-  async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols }) {
-    const prompt = [
-      `You are an expert embedded firmware engineer specializing in Sming on the ESP8266/ESP32 platform, analyzing a crash dump.`,
-      'your code operates in tight heap conditions, especially on the esp8266, most of the application code uses restrictive heap guards, but there is still a lot of Framework code that uses optimistic heap management',
-      `Device SOC: ${soc}`,
-      `Firmware Version: ${gitVersion}`,
-      ``,
-      `### Decoded Stack Trace:`,
-      `\`\`\`text`,
-      decodedText,
-      `\`\`\``,
-      ``,
-      `### Retrieved Source Context:`,
-      codeSnippets && codeSnippets.length > 0 
-        ? codeSnippets.map(s => `File: ${s.file} (Repo:${s.repo})\n\`\`\`c\n${s.snippet}\n\`\`\``).join("\n\n")
-        : "No direct source snippets matched.",
-      ``,
-      `### Map File Symbols & Variables:`,
-      mapSymbols ? mapSymbols.slice(0, 2000) : "Not available",
-      ``,
-      `Provide an initial engineering analysis containing:`,
-      `1. Crash Anatomy: Evaluate the fault vector, register state, and call chain on the stack.`,
-      `2. Subsystem Correlation: Correlate program counter addresses with symbols and code snippets.`,
-      `3. Context Gap Assessment: Explicitly state whether additional source files, header definitions, or linked submodules are required for a definitive root-cause conclusion.`,
-      '3a Context format: provide file paths, names, start and stop line for the required block as a json array.'
-    ].join("\n");
+ * Pass 1: Anatomical analysis, call stack evaluation, address resolution,
+ * memory/heap analysis, hypothesis generation, and context gap identification.
+ */
+async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disassembly }) {
+  const prompt = [
+    `You are an expert embedded firmware engineer specializing in Sming and Xtensa/RISC-V based ESP8266/ESP32 systems, analyzing a firmware crash dump.`,
+    ``,
+    `Your job in this pass is forensic analysis, not immediate remediation.`,
+    `Establish what is actually known from the crash dump and supplied source before forming hypotheses.`,
+    `Do not assume that the instruction at the faulting PC is the original cause of the failure.`,
+    ``,
 
-    return await this._generateWithFallback(prompt);
-  }
+    `### Firmware Environment`,
+    `Device SOC: ${soc}`,
+    `Firmware Version: ${gitVersion}`,
+    ``,
 
-  /**
-   * Pass 2: Root-cause isolation and remediation strategy generation.
-   */
-  async runPass2({ pass1Result, supplementalSnippets }) {
-    const prompt = [
-      `You are an expert embedded firmware engineer specializing in Sming on the ESP8266/ESP32 platform, analyzing a crash dump.`,
-      'your code operates in tight heap conditions, especially on the esp8266, most of the application code uses restrictive heap guards, but there is still a lot of Framework code that uses optimistic heap management',
-      ``,
-      `### Pass 1 Analysis & Gap Assessment:`,
-      pass1Result,
-      ``,
-      `### Additional Supplemental Source Context:`,
-      supplementalSnippets && supplementalSnippets.length > 0 
-        ? supplementalSnippets.map(s => `File: ${s.file}\n\`\`\`c\n${s.snippet}\n\`\`\``).join("\n\n")
-        : "None required.",
-      ``,
-      `Provide your final remediation plan:`,
-      `1. Root Cause Isolation: Precise diagnosis of memory corruption, null pointer dereference, exception, or assertion failure.`,
-      `2. Corrective Action Strategy: Recommended code modification or refactoring strategy to prevent recurrence.`,
-      `3. if there are any addresses on the stack that don't cleanly map into functions, check the map file for potential flash strings`,
-      `4. Proposed Code Patch: Concrete snippet showing the corrected logic. Be specific to not include any "old" code that is not in the provided code snippets`,
-      `5. Verification Plan: Steps to validate that the applied remediation effectively resolves the issue without introducing new regressions.`
-    ].join("\n");
+    `### Important Runtime Characteristics`,
+    `The application operates under tight heap conditions, especially on the ESP8266.`,
+    `Most application code uses restrictive heap guards and attempts to avoid optimistic allocations.`,
+    `However, significant framework code may use more optimistic heap management and may allocate temporary objects, buffers, strings, or other resources.`,
+    `Therefore, distinguish carefully between:`,
+    `- genuine out-of-memory conditions`,
+    `- heap fragmentation`,
+    `- allocation failure`,
+    `- heap metadata corruption`,
+    `- buffer overrun/underrun`,
+    `- use-after-free`,
+    `- double-free`,
+    `- lifetime/ownership errors`,
+    `- stack corruption`,
+    `- and unrelated CPU faults.`,
+    ``,
 
-    return await this._generateWithFallback(prompt);
+    `### Decoded Stack Trace`,
+    `\`\`\`text`,
+    decodedText || "No decoded stack trace available.",
+    `\`\`\``,
+    ``,
+
+    `### Disassembly Around Faulting PC`,
+    disassembly && disassembly.length > 0
+      ? `\`\`\`text\n${disassembly}\n\`\`\``
+      : "No disassembly supplied. Do not invent assembly instructions.",
+    ``,
+
+    `### Retrieved Source Context`,
+    codeSnippets && codeSnippets.length > 0
+      ? codeSnippets.map(s =>
+          `File: ${s.file} (Repo:${s.repo})\n` +
+          `\`\`\`c\n${s.snippet}\n\`\`\``
+        ).join("\n\n")
+      : "No direct source snippets matched.",
+    ``,
+
+    `### Map File Symbols & Variables`,
+    mapSymbols ? mapSymbols.slice(0, 2000) : "Not available",
+    ``,
+
+    `### Core Analysis Rules`,
+    ``,
+    `1. Crash site is not automatically root cause.`,
+    `The faulting PC identifies where the CPU detected a problem. It does not necessarily identify where memory corruption, lifetime corruption, or invalid state originated.`,
+    `When appropriate, trace the possible causal chain backwards from the detected failure.`,
+    ``,
+
+    `2. Separate facts from inference.`,
+    `Every important conclusion must be classified as one of:`,
+    `- OBSERVED: directly supported by the dump, symbols, disassembly, or supplied source.`,
+    `- INFERRED: logically derived from observed evidence.`,
+    `- HYPOTHESIS: plausible explanation that is not established.`,
+    `- UNKNOWN: cannot be determined from the supplied evidence.`,
+    ``,
+
+    `3. Do not invent evidence.`,
+    `Never invent register values, exception causes, source code, symbols, addresses, framework behavior, structure members, macros, APIs, or assembly instructions that are not present in the supplied context.`,
+    `If information is unavailable, explicitly say that it is unavailable.`,
+    ``,
+
+    `4. Architecture matters.`,
+    `Do not assume ESP8266 and ESP32 exception semantics are identical.`,
+    `Take the specified SOC into account when interpreting exception causes, registers, stack frames, task/core information, address ranges, instruction encoding, flash/IRAM behavior, and watchdog behavior.`,
+    `If the SOC is ambiguous, explicitly identify architecture-dependent conclusions.`,
+    ``,
+
+    `5. Do not treat every unexplained stack address as corruption.`,
+    `For every suspicious or unresolved address, determine whether it may represent:`,
+    `- a code/function address`,
+    `- a return address`,
+    `- a flash string or flash-resident data address`,
+    `- RAM/data`,
+    `- stack memory`,
+    `- peripheral/MMIO space`,
+    `- an invalid/unmapped address`,
+    `- or genuinely corrupted data.`,
+    `Use the map symbols and linker information when available.`,
+    ``,
+
+    `6. If disassembly is supplied, use it.`,
+    `Identify the exact instruction corresponding to the faulting PC when possible.`,
+    `Determine which register(s) participate in the effective address calculation.`,
+    `Compare the calculated access address with the reported fault address when fault information is available.`,
+    `Do not claim an exact instruction-level diagnosis when disassembly is not available.`,
+    ``,
+
+    `7. Distinguish memory failure types.`,
+    `Explicitly distinguish:`,
+    `- null/near-null pointer dereference`,
+    `- wild pointer`,
+    `- use-after-free`,
+    `- double-free`,
+    `- buffer overflow`,
+    `- buffer underflow`,
+    `- heap metadata corruption`,
+    `- stack corruption`,
+    `- stack overflow`,
+    `- allocation failure`,
+    `- heap fragmentation`,
+    `- invalid instruction/execute fault`,
+    `- flash/IRAM access problem`,
+    `- watchdog/reset`,
+    `- assertion/panic`,
+    `- and ordinary application logic errors.`,
+    ``,
+
+    `8. Heap analysis.`,
+    `When heap behavior is relevant, inspect the supplied code for:`,
+    `- unchecked allocation results`,
+    `- incorrect allocation sizes`,
+    `- integer overflow in size calculations`,
+    `- incorrect length calculations`,
+    `- buffer copies without adequate bounds`,
+    `- ownership ambiguity`,
+    `- object lifetime problems`,
+    `- use-after-free`,
+    `- double-free`,
+    `- realloc/lifetime problems`,
+    `- temporary allocations`,
+    `- excessive copying`,
+    `- String/container growth`,
+    `- error paths that leak or prematurely release memory`,
+    `- allocation/free imbalance`,
+    `- asynchronous callback lifetime problems`,
+    `- fragmentation`,
+    `- framework allocations that occur indirectly.`,
+    ``,
+
+    `Do not equate "low free heap" with "heap corruption".`,
+    `Do not equate "crashed in malloc/free" with "malloc/free caused the bug".`,
+    ``,
+
+    `9. Stack analysis.`,
+    `Evaluate whether the stack appears structurally valid.`,
+    `Look for:`,
+    `- impossible return addresses`,
+    `- invalid stack pointers`,
+    `- repeated or nonsensical frames`,
+    `- stack-region violations`,
+    `- corrupted saved registers`,
+    `- suspicious frame transitions`,
+    `- evidence of stack exhaustion or overwrite.`,
+    `However, do not label a stack frame corrupt solely because it does not map cleanly to a normal function without checking other possible address interpretations.`,
+    ``,
+
+    `10. Concurrency and lifetime.`,
+    `Where relevant, consider:`,
+    `- interrupts`,
+    `- callbacks`,
+    `- timers`,
+    `- task/thread context`,
+    `- asynchronous operations`,
+    `- object lifetime across callbacks`,
+    `- shared mutable state`,
+    `- race conditions`,
+    `- reentrancy.`,
+    `Only raise these as hypotheses when there is evidence supporting them.`,
+    ``,
+
+    `11. Framework versus application responsibility.`,
+    `If the crash occurs inside Sming/framework code, do not automatically conclude that the framework is defective.`,
+    `Trace backwards to determine whether application-provided data, invalid object lifetime, invalid lengths, allocation failures, or corrupted state could have caused framework code to fail.`,
+    `Conversely, do not automatically blame application code when the available evidence specifically indicates a framework defect.`,
+    ``,
+
+    `### Required Pass 1 Analysis`,
+    ``,
+
+    `1. Crash Classification`,
+    `Identify the apparent fault/reset/panic category if the dump provides enough evidence.`,
+    `State the relevant exception/fault information, faulting PC, fault address, stack pointer, core/task context, and other relevant registers when available.`,
+    ``,
+
+    `2. Crash Anatomy`,
+    `Explain what the CPU appears to have been doing at the point of failure.`,
+    `Separate directly observed register/fault facts from interpretation.`,
+    ``,
+
+    `3. Faulting Instruction`,
+    `If disassembly is available, identify the instruction at the faulting PC and explain the memory/code operation it performs.`,
+    `If disassembly is unavailable, explicitly state that exact instruction-level analysis cannot be confirmed.`,
+    ``,
+
+    `4. Call Stack Evaluation`,
+    `Evaluate each meaningful stack frame.`,
+    `For each frame, identify the symbol/source location when possible and explain its relevance.`,
+    `Identify suspicious, missing, or unresolved frames without automatically assuming corruption.`,
+    ``,
+
+    `5. Address and Symbol Correlation`,
+    `Correlate program counter addresses, return addresses, register values, and suspicious stack values against the supplied map symbols.`,
+    `Check whether unexplained addresses may actually be flash strings or other valid data addresses.`,
+    `Do not call an address corrupt merely because it does not correspond to a function.`,
+    ``,
+
+    `6. Source Correlation`,
+    `Correlate the crash location and callers with the supplied source snippets.`,
+    `Identify exact source statements that could plausibly produce the observed failure.`,
+    `Do not infer source behavior that is not visible in the supplied snippets.`,
+    ``,
+
+    `7. Memory and Heap Analysis`,
+    `Determine whether the evidence supports allocation failure, fragmentation, heap corruption, buffer corruption, lifetime corruption, or another memory-related failure.`,
+    `Explain the evidence for and against each significant possibility.`,
+    ``,
+
+    `8. Causal Chain`,
+    `Where possible, construct a causal chain from the earliest plausible defect to the observed crash.`,
+    `Example structure:`,
+    `earlier invalid operation -> corrupted state/memory -> later detection -> fault.`,
+    `Do not claim a causal chain as fact unless the supplied evidence supports it.`,
+    ``,
+
+    `9. Competing Hypotheses`,
+    `List the important plausible explanations that remain.`,
+    `For each hypothesis provide:`,
+    `- hypothesis`,
+    `- supporting evidence`,
+    `- contradicting evidence`,
+    `- missing evidence`,
+    `- confidence.`,
+    ``,
+
+    `Use confidence values exactly as:`,
+    `CONFIRMED`,
+    `STRONGLY_SUPPORTED`,
+    `PLAUSIBLE`,
+    `SPECULATIVE`,
+    `INSUFFICIENT_DATA`,
+    ``,
+
+    `10. Context Gap Assessment`,
+    `Explicitly determine whether additional source files, header definitions, linked submodules, disassembly, linker information, allocator information, or callers are required for a definitive root-cause conclusion.`,
+    ``,
+
+    `11. Context Request Format`,
+    `Provide required additional source/context as a JSON array.`,
+    `Each entry must contain:`,
+    `- file`,
+    `- start_line`,
+    `- end_line`,
+    `- reason`,
+    `- priority`,
+    ``,
+
+    `Priority must be one of:`,
+    `required`,
+    `confirmation`,
+    `optional`,
+    ``,
+
+    `Example:`,
+    `\`\`\`json`,
+    `[{`,
+    `  "file": "src/Foo.cpp",`,
+    `  "start_line": 120,`,
+    `  "end_line": 175,`,
+    `  "reason": "Need the caller implementation to determine whether the buffer remains valid when the callback executes.",`,
+    `  "priority": "required"`,
+    `}]`,
+    `\`\`\``,
+    ``,
+
+    `12. Evidence Summary`,
+    `End the analysis with a concise summary containing:`,
+    `- confirmed facts`,
+    `- strongest hypothesis`,
+    `- alternative hypotheses`,
+    `- most important missing evidence`,
+    `- whether Pass 2 can reasonably proceed to a concrete patch.`,
+    ``,
+
+    `### Required Output Structure`,
+    `Use these headings exactly:`,
+    ``,
+    `## 1. Crash Classification`,
+    `## 2. Crash Anatomy`,
+    `## 3. Faulting Instruction`,
+    `## 4. Call Stack Evaluation`,
+    `## 5. Address and Symbol Correlation`,
+    `## 6. Source Correlation`,
+    `## 7. Memory and Heap Analysis`,
+    `## 8. Causal Chain`,
+    `## 9. Competing Hypotheses`,
+    `## 10. Context Gap Assessment`,
+    `## 11. Context Requests`,
+    `## 12. Evidence Summary`,
+    ``,
+
+    `Be technically precise and conservative.`,
+    `A useful "insufficient data" conclusion is preferable to an invented root cause.`
+  ].join("\n");
+
+  return await this._generateWithFallback(prompt);
+}
+
+
+/**
+ * Pass 2: Independent root-cause validation, causal-chain isolation,
+ * remediation strategy, patch generation, and verification.
+ */
+async runPass2({ pass1Result, supplementalSnippets, mapSymbols, disassembly }) {
+  const prompt = [
+    `You are an expert embedded firmware engineer specializing in Sming and Xtensa/RISC-V based ESP8266/ESP32 systems.`,
+    `You are performing the final forensic analysis of a firmware crash.`,
+    ``,
+
+    `This is Pass 2.`,
+    `Pass 1 is evidence and hypothesis material, not ground truth.`,
+    `Independently evaluate the Pass 1 reasoning against the available evidence.`,
+    `Do not simply repeat or accept its proposed root cause.`,
+    ``,
+
+    `### Runtime Characteristics`,
+    `The application operates under tight heap conditions, especially on the ESP8266.`,
+    `Most application code uses restrictive heap guards, while significant framework code may use more optimistic heap management.`,
+    `Treat heap exhaustion, fragmentation, corruption, lifetime errors, and invalid memory access as distinct failure modes.`,
+    ``,
+
+    `### Pass 1 Analysis & Gap Assessment`,
+    `\`\`\`text`,
+    pass1Result || "No Pass 1 result available.",
+    `\`\`\``,
+    ``,
+
+    `### Additional Supplemental Source Context`,
+    supplementalSnippets && supplementalSnippets.length > 0
+      ? supplementalSnippets.map(s =>
+          `File: ${s.file}\n` +
+          `\`\`\`c\n${s.snippet}\n\`\`\``
+        ).join("\n\n")
+      : "None supplied.",
+    ``,
+
+    `### Map File Symbols & Variables`,
+    mapSymbols ? mapSymbols.slice(0, 2000) : "Not available.",
+    ``,
+
+    `### Disassembly`,
+    disassembly && disassembly.length > 0
+      ? `\`\`\`text\n${disassembly}\n\`\`\``
+      : "Not available.",
+    ``,
+
+    `### Pass 2 Rules`,
+    ``,
+
+    `1. Validate before diagnosing.`,
+    `Do not accept a Pass 1 hypothesis merely because it is plausible.`,
+    `Check whether the proposed root cause explains the actual fault type, PC, fault address, registers, stack, source, and timing/context represented by the dump.`,
+    ``,
+
+    `2. Distinguish crash site, immediate cause, and originating cause.`,
+    `Explicitly identify:`,
+    `- where the CPU detected the problem`,
+    `- what operation immediately failed`,
+    `- what earlier condition most likely produced that failure.`,
+    `These may be the same location, but do not assume that they are.`,
+    ``,
+
+    `3. Build a causal chain.`,
+    `The final diagnosis should explain the sequence of events from the earliest supported defect through to the observed crash.`,
+    `For example:`,
+    `invalid length calculation -> out-of-bounds write -> heap metadata corruption -> later free() -> allocator failure -> CPU exception.`,
+    `Only use a causal chain when the evidence supports it.`,
+    ``,
+
+    `4. Eliminate alternatives.`,
+    `For each major competing hypothesis from Pass 1, state whether it is:`,
+    `- supported`,
+    `- weakened by evidence`,
+    `- contradicted by evidence`,
+    `- or unresolved.`,
+    `Do not force a single root cause if the available evidence cannot distinguish between alternatives.`,
+    ``,
+
+    `5. Evidence discipline.`,
+    `Separate:`,
+    `- confirmed facts`,
+    `- strong inferences`,
+    `- hypotheses`,
+    `- unresolved questions.`,
+    `Never manufacture missing evidence.`,
+    ``,
+
+    `6. Source discipline.`,
+    `Only claim that a specific source statement is responsible when that statement is present in the supplied source context.`,
+    `Do not invent omitted lines, function implementations, structure members, macros, configuration values, APIs, or framework internals.`,
+    ``,
+
+    `7. Concrete patch discipline.`,
+    `Only provide a concrete code patch when the relevant source code is actually present in the supplied snippets.`,
+    `The patch must modify only logic that can be supported by the provided source.`,
+    `Do not include fictional "old code" that is not present in the supplied snippets.`,
+    `Do not invent surrounding code merely to make a patch compile.`,
+    `If the relevant source is incomplete, provide a remediation strategy or pseudocode instead of pretending to provide a verified patch.`,
+    ``,
+
+    `8. Framework code.`,
+    `If the failure occurs in framework code, determine whether application-provided state or data could have triggered it.`,
+    `Do not blame the framework merely because the faulting PC is inside framework code.`,
+    `Do not blame application code when the evidence points directly to a framework defect.`,
+    ``,
+
+    `9. Unresolved addresses.`,
+    `If any stack or register addresses do not cleanly map into functions, check the map information for possible flash strings or other valid data before interpreting them as corrupted return addresses.`,
+    `Classify unresolved addresses as code, data/string, RAM, stack, peripheral, invalid, or genuinely unresolved where possible.`,
+    ``,
+
+    `10. Memory corruption.`,
+    `When memory corruption is suspected, identify:`,
+    `- the operation that may have corrupted memory`,
+    `- the affected object/buffer/metadata if identifiable`,
+    `- the likely corruption direction and size if determinable`,
+    `- when the corruption was likely introduced`,
+    `- when it was detected.`,
+    `Do not assume that the detection point is the corruption point.`,
+    ``,
+
+    `11. Heap behavior.`,
+    `Explicitly distinguish:`,
+    `- allocation failure`,
+    `- low heap`,
+    `- fragmentation`,
+    `- heap metadata corruption`,
+    `- use-after-free`,
+    `- double-free`,
+    `- buffer overflow/underflow.`,
+    `If the evidence only supports "memory-related failure", do not over-specify the mechanism.`,
+    ``,
+
+    `12. Verification.`,
+    `Every proposed fix must have a verification strategy capable of proving that the suspected mechanism has been addressed.`,
+    `Include targeted runtime instrumentation, assertions, heap checks, guard patterns, logging, stress tests, or reproduction tests where appropriate.`,
+    `Do not claim that a fix is proven merely because the crash disappears once.`,
+    ``,
+
+    `### Required Final Analysis`,
+    ``,
+
+    `1. Final Root Cause Assessment`,
+    `State the most strongly supported root cause and its confidence.`,
+    `If no single root cause can be established, explicitly say so and provide the remaining hypotheses instead of arbitrarily selecting one.`,
+    ``,
+
+    `2. Evidence Supporting the Diagnosis`,
+    `List the concrete dump, symbol, disassembly, and source evidence supporting the diagnosis.`,
+    ``,
+
+    `3. Evidence Against / Remaining Uncertainty`,
+    `Identify evidence that weakens the diagnosis and explicitly identify unresolved questions.`,
+    ``,
+
+    `4. Causal Chain`,
+    `Provide the most likely complete chain from originating defect to observed crash.`,
+    ``,
+
+    `5. Root Cause Isolation`,
+    `Identify the exact source statement/function/component responsible when the evidence permits this.`,
+    `If it does not, identify the narrowest defensible location and explain what additional context is required.`,
+    ``,
+
+    `6. Corrective Action Strategy`,
+    `Explain the engineering change required to prevent recurrence.`,
+    `Consider correctness, memory usage, heap pressure, lifetime, ownership, error handling, and embedded-system constraints.`,
+    ``,
+
+    `7. Proposed Code Patch`,
+    `Only provide a concrete patch if the relevant source is present.`,
+    `The patch must be based strictly on supplied source code.`,
+    `Do not invent missing code.`,
+    `If a concrete patch cannot safely be produced, explicitly state why and provide the exact source context still required.`,
+    ``,
+
+    `8. Additional Context Required`,
+    `If more information is required, provide a JSON array using this format:`,
+    `\`\`\`json`,
+    `[{`,
+    `  "file": "src/Foo.cpp",`,
+    `  "start_line": 120,`,
+    `  "end_line": 175,`,
+    `  "reason": "Need to verify ownership and lifetime of the object passed to the asynchronous callback.",`,
+    `  "priority": "required"`
+    `}]`,
+    `\`\`\``,
+    ``,
+
+    `9. Verification Plan`,
+    `Provide concrete tests and instrumentation to verify the remediation.`,
+    `Include both:`,
+    `- a targeted reproduction test for the suspected failure`,
+    `- regression testing for normal operation and constrained-heap conditions.`,
+    ``,
+
+    `10. Residual Risk`,
+    `Identify any remaining plausible failure modes that the proposed change does not address.`,
+    ``,
+
+    `### Required Output Structure`,
+    `Use these headings exactly:`,
+    ``,
+    `## 1. Final Root Cause Assessment`,
+    `## 2. Evidence Supporting the Diagnosis`,
+    `## 3. Evidence Against / Remaining Uncertainty`,
+    `## 4. Causal Chain`,
+    `## 5. Root Cause Isolation`,
+    `## 6. Corrective Action Strategy`,
+    `## 7. Proposed Code Patch`,
+    `## 8. Additional Context Required`,
+    `## 9. Verification Plan`,
+    `## 10. Residual Risk`,
+    ``,
+
+    `### Final Requirement`,
+    `Do not optimize for producing a confident answer.`,
+    `Optimize for producing a technically defensible answer.`,
+    `If the supplied evidence is insufficient to establish root cause, say so clearly and identify the smallest additional evidence needed to establish it.`
+  ].join("\n");
+
+  return await this._generateWithFallback(prompt);
   }
 }
 
