@@ -56,7 +56,7 @@ Review date: 2026-10-03. Completed items require focused regression coverage.
 - [x] **22. CI runner/action updates and test reporting.** Pin Ubuntu 24.04, use Node 24 action runtimes, retain Node 22/24 application tests, publish inline/JUnit/check reports and browser HTML/trace artifacts, and retain fork-safe summaries. Report formats and workflow guards have regression coverage.
 - [x] **23. Background setup.** Run schema migration, legacy imports, pruning, and state restoration in a worker. Overlap independent configuration loading and repository preparation while retaining serialized crash jobs. Main-thread heartbeat and readiness-error tests pass.
 - [x] **24. Ingestion CPU starvation.** Replace per-packet retained-log scans and large OFFSET deletion with trigger-maintained byte/row usage and indexed oldest-row deletion. Below-budget ingestion, updates, IP changes, purges, and migrations have regression coverage.
-- [ ] **Operational follow-up:** deploy the permanent ingestion fix to 192.168.29.5 and restore its byte budget from the protected pre-mitigation backup. Byte-budget pruning is temporarily disabled there; row and age retention remain active, and HTTP health is responding.
+- [x] **Operational follow-up:** deployed revision e9b9823 to 192.168.29.5 and restored the 20 MiB per-controller byte budget from the protected pre-mitigation backup. The 100,000-row and 90-day limits remain active. HTTP health returns 200 in about 22 ms with no queued listener connections; incremental usage totals match the live database and all sources satisfy the byte budget. The protected backup is retained.
 
 ## Credential Contract
 
