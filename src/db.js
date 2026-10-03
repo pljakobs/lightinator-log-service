@@ -42,6 +42,7 @@ function openDatabase(dbPath) {
       boot_nonce   INTEGER,
       device_time  INTEGER,
       raw          TEXT,
+      crash_raw    TEXT,
       crash_decode TEXT,
       git_version  TEXT,
       soc          TEXT,
@@ -85,6 +86,9 @@ function openDatabase(dbPath) {
   if (!cols.includes("boot")) {
     db.exec("ALTER TABLE logs ADD COLUMN boot INTEGER");
   }
+  for (const [column, type] of Object.entries({ boot_nonce: "INTEGER", device_time: "INTEGER", crash_raw: "TEXT" })) {
+    if (!cols.includes(column)) db.exec(`ALTER TABLE logs ADD COLUMN ${column} ${type}`);
+  }
   if (!cols.includes("crash_decode")) {
     db.exec("ALTER TABLE logs ADD COLUMN crash_decode TEXT");
   }
@@ -98,7 +102,19 @@ function openDatabase(dbPath) {
     db.exec("ALTER TABLE logs ADD COLUMN build_type TEXT");
   }
 
+  const controllerCols = db.pragma("table_info(controllers)").map(column => column.name);
+  const controllerFields = {
+    hostname: "TEXT", device_id: "TEXT", name: "TEXT", groups: "TEXT NOT NULL DEFAULT '[]'",
+    logging_enabled: "INTEGER NOT NULL DEFAULT 1", reachable: "INTEGER NOT NULL DEFAULT 0",
+    split_brain: "INTEGER NOT NULL DEFAULT 0", last_seen: "TEXT", last_log_received: "TEXT",
+    soc: "TEXT", build_type: "TEXT", git_version: "TEXT",
+  };
+  for (const [column, type] of Object.entries(controllerFields)) {
+    if (!controllerCols.includes(column)) db.exec(`ALTER TABLE controllers ADD COLUMN ${column} ${type}`);
+  }
+
   db.exec("CREATE INDEX IF NOT EXISTS idx_logs_ip_boot ON logs (ip, boot)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_logs_received_at ON logs (received_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_logs_crash ON logs (crash_decode) WHERE crash_decode IS NOT NULL");
 
   return db;
