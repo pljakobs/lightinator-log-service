@@ -7,7 +7,8 @@ function envInt(name, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-const config = {
+function loadConfig() {
+  return {
   host: process.env.LLS_HTTP_HOST || "0.0.0.0",
   httpPort: envInt("LLS_HTTP_PORT", 4821),
   udpHost: process.env.LLS_UDP_HOST || "0.0.0.0",
@@ -36,6 +37,10 @@ const config = {
   geminiApiKey: process.env.LLS_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "",
   geminiModel: process.env.GEMINI_MODEL || "gemini-3.8-flash",
   aiEnabled: process.env.LLS_AI_ENABLED !== "false",
-};
+  aiContextRounds: envInt("LLS_AI_CONTEXT_ROUNDS", 3),
+  aiContextBytes: envInt("LLS_AI_CONTEXT_BYTES", 120_000),
+  };
+}
 
-module.exports = { config };
+const config = loadConfig();
+module.exports = { config, loadConfig };

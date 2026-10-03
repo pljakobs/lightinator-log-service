@@ -5,7 +5,7 @@ const express = require("express");
 const cors = require("cors");
 const os = require("os");
 
-const { config } = require("./config");
+const { config, loadConfig } = require("./config");
 const { parseSyslogLine } = require("./syslogParser");
 const { BootTracker } = require("./bootTracker");
 const { LogStorage } = require("./storage");
@@ -18,7 +18,7 @@ const { CrashReporter } = require("./crashReporter");
 const { version: pkgVersion } = require("../package.json");
 const { AIService } = require("./aiService");
 const version = process.env.APP_VERSION || pkgVersion;
-const { SETTINGS_SCHEMA, readServiceEnv, writeServiceEnv } = require("./serviceConfig");
+const { readServiceEnv, writeServiceEnv, loadServiceEnvironment, getServiceCredential, getPublicServiceConfig, getAIBackends } = require("./serviceConfig");
 
 const buildNumber = process.env.BUILD_NUMBER || 'dev';
 const gitVersion = process.env.GIT_VERSION || 'local';
@@ -78,20 +78,27 @@ function getLiveValues() {
     LLS_HTTP_PORT: String(config.httpPort),
     LLS_RETENTION_DAYS: String(config.retentionDays),
     LLS_MAX_ROWS_PER_IP: String(config.maxRowsPerIp),
+    LLS_MAX_BYTES_PER_IP: String(config.maxBytesPerIp),
     LLS_DISCOVERY_REFRESH_MS: String(config.discoveryRefreshMs),
     LLS_CONTROLLER_STALE_DAYS: String(config.controllerStaleDays),
     LLS_MDNS_HOST: config.mdnsHost,
+    LLS_AI_ENABLED: String(config.aiEnabled),
+    LLS_AI_CONTEXT_ROUNDS: String(config.aiContextRounds),
+    LLS_AI_CONTEXT_BYTES: String(config.aiContextBytes),
+    GEMINI_MODEL: config.geminiModel,
+    LLS_HTTP_HOST: config.host,
+    LLS_UDP_HOST: config.udpHost,
+    LLS_DISCOVERY_PORT: String(config.discoveryControllerPort),
+    LLS_CORS_ORIGIN: config.corsOrigin,
+    LLS_SERVICE_NAME: config.serviceName,
+    LLS_ELF_BASE_URL: config.elfBaseUrl,
   };
 }
 
 async function main() {
   // Load persisted service environment variables into process.env prior to initialization
-  const savedEnv = await readServiceEnv(config.serviceEnvPath);
-  for (const [key, val] of Object.entries(savedEnv)) {
-    if (val && !process.env[key]) {
-      process.env[key] = val;
-    }
-  }
+  const savedEnv = await loadServiceEnvironment(config.serviceEnvPath);
+  Object.assign(config, loadConfig());
 
   await fs.mkdir(path.dirname(config.lokiConfigFile), { recursive: true });
 
@@ -101,8 +108,15 @@ async function main() {
     db,
     dataDir: config.dataDir,
     maxRowsPerIp: config.maxRowsPerIp,
+    retentionDays: config.retentionDays,
+    maxBytesPerIp: config.maxBytesPerIp,
   });
   await storage.init();
+  storage.prune();
+  const retentionTimer = setInterval(() => {
+    try { storage.prune(); } catch (err) { console.warn(`Log pruning failed: ${err.message}`); }
+  }, 300_000);
+  retentionTimer.unref();
 
   const bootTracker = new BootTracker();
   for (const src of storage.listSources()) {
@@ -145,6 +159,9 @@ async function main() {
   const app = express();
   app.use(cors({ origin: config.corsOrigin }));
   app.use(express.json({ limit: "1mb" }));
+  app.get("/vendor/dompurify.min.js", (_req, res) => {
+    res.sendFile(path.join(path.dirname(require.resolve("dompurify")), "purify.min.js"));
+  });
   app.use(express.static(path.join(__dirname, "ui")));
 
   function removeControllers(ips, purgeLogs) {
@@ -208,7 +225,6 @@ async function main() {
       http: { host: config.host, port: config.httpPort },
       udp: { host: config.udpHost, port: config.udpPort },
       storage: {
-        dataDir: config.dataDir,
         maxBytesPerIp: config.maxBytesPerIp,
         retentionDays: config.retentionDays,
       },
@@ -366,7 +382,7 @@ async function main() {
   app.get("/api/v1/service-config", async (_req, res) => {
     try {
       const values = await readServiceEnv(config.serviceEnvPath);
-      res.json({ schema: SETTINGS_SCHEMA, values, liveValues: getLiveValues() });
+      res.json(getPublicServiceConfig(values, getLiveValues()));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -374,11 +390,11 @@ async function main() {
 
   app.post("/api/v1/service-config", async (req, res) => {
     try {
-      const values = req.body.values || {};
+      const values = req.body.values ?? {};
       await writeServiceEnv(config.serviceEnvPath, values);
       res.json({ ok: true, restartRequired: true });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(err.status || 500).json({ error: err.message });
     }
   });
 
@@ -412,12 +428,21 @@ async function main() {
     if (req.body.username !== undefined) override.username = req.body.username;
     if (req.body.password !== undefined) override.password = req.body.password;
     const effectiveUrl = override.url || (loki.getConfig ? loki.getConfig().url : "");
-    const target = effectiveUrl ? `POST ${effectiveUrl}/loki/api/v1/push` : "(no URL configured)";
+    let target = "(no URL configured)";
+    if (effectiveUrl) {
+      try {
+        const url = new URL(effectiveUrl);
+        target = ["http:", "https:"].includes(url.protocol) && !url.username && !url.password
+          ? `POST ${url.origin}/loki/api/v1/push` : "(invalid Loki URL)";
+      } catch {
+        target = "(invalid Loki URL)";
+      }
+    }
     try {
       await loki.testConnection(Object.keys(override).length ? override : null);
       res.json({ ok: true, message: "Successfully pushed test entry to Loki", target });
     } catch (err) {
-      res.status(502).json({ error: err.message, target });
+      res.status(err.status || 502).json({ error: err.message, target });
     }
   });
 
@@ -531,13 +556,19 @@ async function main() {
 
   const crashReporter = new CrashReporter({
     db,
-    githubToken: config.githubToken,
+    githubToken: getServiceCredential(savedEnv, "LLS_GITHUB_TOKEN"),
     githubRepo: config.githubRepo,
     autoCreateIssues: config.autoCreateIssues,
   });
 
+  let aiBackends = [];
+  try { aiBackends = getAIBackends(savedEnv); } catch { console.warn("Invalid AI backend configuration; AI disabled until settings are corrected."); }
   const aiService = new AIService({
-    apiKey: config.geminiApiKey || process.env.LLS_GEMINI_API_KEY || process.env.GEMINI_API_KEY
+    apiKey: getServiceCredential(savedEnv, "GEMINI_API_KEY"),
+    model: config.geminiModel,
+    backends: aiBackends,
+    contextRounds: config.aiContextRounds,
+    contextBytes: config.aiContextBytes,
   });
 
   const crashDecoder = new CrashDecoder({
@@ -547,6 +578,7 @@ async function main() {
     db,
     storage,
     aiService,
+    aiEnabled: config.aiEnabled,
     onDecoded: (record) => {
       const decodedContent = record.crashDecode || record.message || "";
       loki.forward({ ...record, tag: (record.tag || "") + ":crash-decode" });
@@ -622,6 +654,7 @@ async function main() {
 
   const shutdown = () => {
     console.log("Shutting down...");
+    clearInterval(retentionTimer);
     for (const t of stalePurgeTimers) {
       clearTimeout(t);
       clearInterval(t);
