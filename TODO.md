@@ -53,6 +53,10 @@ Review date: 2026-10-03. Completed items require focused regression coverage.
 - [x] **19. Base configuration fields missing.** The Service tab opens populated. Invalid AI configuration returns the complete form with a recoverable configuration error instead of hiding all settings. Covered by API and browser tests.
 - [x] **20. Deployment configuration compatibility.** Legacy quoted environment keys/models and existing provider settings load without rewriting the environment file. Embedded Loki URL credentials migrate to private fields with an owner-only backup. Upgrade behavior and repeat startup are covered by regression fixtures.
 - [x] **21. Responsive operational views.** Controller selection uses an accessible phone/tablet drawer; logs, controller cards, crash lists, and fullscreen decode views fit 320px, 390px, and 768px screens. Desktop columns remain unchanged. Covered by populated viewport tests.
+- [x] **22. CI runner/action updates and test reporting.** Pin Ubuntu 24.04, use Node 24 action runtimes, retain Node 22/24 application tests, publish inline/JUnit/check reports and browser HTML/trace artifacts, and retain fork-safe summaries. Report formats and workflow guards have regression coverage.
+- [x] **23. Background setup.** Run schema migration, legacy imports, pruning, and state restoration in a worker. Overlap independent configuration loading and repository preparation while retaining serialized crash jobs. Main-thread heartbeat and readiness-error tests pass.
+- [x] **24. Ingestion CPU starvation.** Replace per-packet retained-log scans and large OFFSET deletion with trigger-maintained byte/row usage and indexed oldest-row deletion. Below-budget ingestion, updates, IP changes, purges, and migrations have regression coverage.
+- [ ] **Operational follow-up:** deploy the permanent ingestion fix to 192.168.29.5 and restore its byte budget from the protected pre-mitigation backup. Byte-budget pruning is temporarily disabled there; row and age retention remain active, and HTTP health is responding.
 
 ## Credential Contract
 

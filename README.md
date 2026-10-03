@@ -154,6 +154,12 @@ Zero disables either limit. Pruning runs on startup, inserts, crash updates, and
 every five minutes; row-count limits continue to apply. Associated crash-report
 records are deleted through SQLite foreign-key cascades.
 
+Row and byte usage totals are maintained by SQLite triggers so normal ingestion
+does not rescan retained log text. Startup migrations, imports, initial pruning,
+and boot/controller-state restoration run in a worker before listeners become
+ready. Independent Loki loading and repository setup overlap; complete crash
+analysis jobs remain serialized. Ordinary runtime SQLite calls remain synchronous.
+
 Collected crash dumps and original firmware metadata are persisted separately
 from the received syslog record. Manual analysis uses that original build, not
 the controller's current firmware. Historical crashes without original metadata
@@ -287,6 +293,15 @@ podman manifest push --all lightinator-log-service:latest docker://ghcr.io/your-
 ## GitHub Actions CI
 
 Workflow file: `.github/workflows/container-image.yml`
+
+Jobs use pinned Ubuntu 24.04 runners and Node 24 action runtimes. Application
+tests still run on Node 22 and 24. `npm run test:ci` emits console output and
+JUnit results; each job publishes a summary with individual pass/fail/skip
+results. Same-repository runs also publish detailed test checks. Fork PRs retain
+summaries and downloadable reports without a write-enabled reporting token.
+Playwright publishes JUnit and HTML reports plus failure screenshots/traces.
+Reports are retained for 14 days and uploaded even when tests fail. Test failures
+still block image builds.
 
 Behavior:
 - On pull requests: build multi-arch image (`linux/amd64`, `linux/arm64`) without push.
