@@ -8,10 +8,16 @@ module.exports = defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["list"], ["github"]] : "list",
+  reporter: process.env.CI ? [
+    ["list"],
+    ["github"],
+    ["junit", { outputFile: "test-results/playwright.xml" }],
+    ["html", { outputFolder: "playwright-report", open: "never" }],
+  ] : "list",
   use: {
     browserName: "chromium",
     headless: true,
     screenshot: "only-on-failure",
+    trace: "retain-on-failure",
   },
 });

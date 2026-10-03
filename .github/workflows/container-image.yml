@@ -18,21 +18,24 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # needed to push build/<run_number> tags after a successful image push
-  packages: write
+  contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      checks: write
     strategy:
+      fail-fast: false
       matrix:
-        node: [22, 24] # Updated from [20, 22] to avoid deprecated Node 20 actions
+        node: [22, 24]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node ${{ matrix.node }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -44,16 +47,42 @@ jobs:
         env:
           # Dummy-Schlüssel für Tests, damit der Client im Testmodus initialisiert werden kann
           GEMINI_API_KEY: "test-dummy-key"
-        run: npm test
+        run: npm run test:ci
+
+      - name: Summarize Node test results
+        if: ${{ !cancelled() && hashFiles('test-results/node.xml') != '' }}
+        run: node scripts/report-tests.js test-results/node.xml "Node.js ${{ matrix.node }} tests"
+
+      - name: Upload Node test reports
+        if: ${{ !cancelled() && hashFiles('test-results/node.xml') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-test-results-${{ matrix.node }}
+          path: test-results/node.xml
+          retention-days: 14
+
+      - name: Publish Node test check
+        if: ${{ !cancelled() && hashFiles('test-results/node.xml') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: dorny/test-reporter@v3
+        with:
+          name: Node.js ${{ matrix.node }} test results
+          path: test-results/node.xml
+          reporter: java-junit
+          use-actions-summary: 'false'
+          fail-on-error: 'false'
+          fail-on-empty: 'true'
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      checks: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -67,21 +96,41 @@ jobs:
       - name: Run browser tests
         run: npm run test:e2e
 
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - name: Summarize browser test results
+        if: ${{ !cancelled() && hashFiles('test-results/playwright.xml') != '' }}
+        run: node scripts/report-tests.js test-results/playwright.xml "Playwright browser tests"
+
+      - name: Upload browser reports and failure artifacts
+        if: ${{ !cancelled() && hashFiles('test-results/playwright.xml') != '' }}
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-results
-          path: test-results/
-          retention-days: 7
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+
+      - name: Publish browser test check
+        if: ${{ !cancelled() && hashFiles('test-results/playwright.xml') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: dorny/test-reporter@v3
+        with:
+          name: Playwright browser test results
+          path: test-results/playwright.xml
+          reporter: jest-junit
+          use-actions-summary: 'false'
+          fail-on-error: 'false'
+          fail-on-empty: 'true'
 
   build:
     needs: [test, e2e]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history + build/* tags for the changelog
 
@@ -90,9 +139,10 @@ jobs:
         run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
 
       - name: Generate changelog (src/changelog.json)
         env:
@@ -101,14 +151,14 @@ jobs:
         run: npm run changelog
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -116,7 +166,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -128,7 +178,7 @@ jobs:
 
       - name: Build (PR only)
         if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -142,7 +192,7 @@ jobs:
 
       - name: Build and push
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
