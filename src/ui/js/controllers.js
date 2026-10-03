@@ -1,10 +1,13 @@
 import { BASE, fetchJson, escHtml, timeAgo, safeHttpUrl } from './common.js';
+import { openFirmwareUpdate } from './firmware.js';
+let firmwareUpdatesEnabled = false;
 
 async function loadControllers() {
   const st = document.getElementById('ctrl-status');
   st.textContent = 'Loading…';
   try {
     const data = await fetchJson(`${BASE}/api/v1/controllers`);
+    firmwareUpdatesEnabled = data.firmwareUpdatesEnabled === true;
     renderControllerCards(data.items || []);
     st.textContent = `${(data.items||[]).length} controller(s)`;
   } catch (e) {
@@ -41,12 +44,14 @@ function renderControllerCards(items) {
       <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>
       <div class="ctrl-actions">
         <button class="toggle-btn ${toggleBtnClass}" ${toggleDisabled} data-ip="${ip}" data-enabled="${!logOn}">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
+        <button class="ctrl-update-btn" data-ip="${ip}" data-name="${escHtml(c.name || c.hostname || c.ip)}" data-available="${firmwareUpdatesEnabled}"${firmwareUpdatesEnabled ? '' : ' disabled'} title="${firmwareUpdatesEnabled ? 'Select firmware for this controller' : 'Enable controller firmware updates in Service settings'}">Update firmware</button>
         <span class="ctrl-status ${reachable?'ok':'unreachable'}">${reachable ? '● online' : '● offline'}</span>
         <span class="ctrl-log-received">last seen: ${timeAgo(c.lastSeen)} · last log received: ${timeAgo(c.lastLogReceived)}</span>
       </div>
     </div>`;
   }).join('');
   updateRemoveSelectedBtn();
+  document.dispatchEvent(new Event('controllersrendered'));
 }
 
 function selectedIps() {
@@ -109,6 +114,11 @@ async function removeStale(days, purgeLogs) {
 }
 
 document.getElementById('ctrl-grid').addEventListener('click', (e) => {
+  const update = e.target.closest('.ctrl-update-btn');
+  if (update) {
+    if (!update.disabled) openFirmwareUpdate(update.dataset.ip, update.dataset.name);
+    return;
+  }
   const toggle = e.target.closest('.toggle-btn');
   if (toggle) {
     if (!toggle.disabled) toggleLogging(toggle.dataset.ip, toggle.dataset.enabled === 'true');
@@ -210,6 +220,7 @@ document.getElementById('log-all-off-btn').addEventListener('click', () => setAl
 
 document.addEventListener('tabchange', (e) => { if (e.detail === 'controllers') loadControllers(); });
 window.toggleLogging = toggleLogging;
+document.addEventListener('firmwareupdated', loadControllers);
 loadControllers();
 
 export { loadControllers };

@@ -259,6 +259,28 @@ mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; p
 .cl-subject { color: #d4d4d4; word-break: break-word; }
 .cl-none { color: #666; font-size: 12px; padding: 4px 0; font-style: italic; }
 
+#firmware-overlay { display: none; position: fixed; inset: 0; z-index: 210; background: rgba(0, 0, 0, 0.7); align-items: center; justify-content: center; }
+#firmware-overlay.open { display: flex; }
+#firmware-dialog { width: 540px; max-width: 95vw; max-height: 90dvh; overflow-y: auto; padding: 18px; background: #252526; border: 1px solid #444; border-radius: 6px; }
+.firmware-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.firmware-heading h2 { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
+#firmware-close { width: 34px; height: 34px; padding: 0; flex-shrink: 0; font-size: 20px; background: transparent; }
+#firmware-device { color: #9cdcfe; margin-bottom: 12px; }
+.firmware-current { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; color: #888; }
+.firmware-current strong { color: #d4d4d4; font-weight: normal; overflow-wrap: anywhere; }
+#firmware-dialog label { display: flex; flex-direction: column; align-items: stretch; gap: 5px; min-width: 0; margin-bottom: 10px; }
+#firmware-dialog input, #firmware-dialog select { width: 100%; min-width: 0; padding: 7px 8px; color: #d4d4d4; background: #3c3c3c; border: 1px solid #555; border-radius: 4px; font-family: inherit; }
+.firmware-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+#firmware-target, #firmware-comment, #firmware-confirm-text, #firmware-status { overflow-wrap: anywhere; line-height: 1.5; margin: 8px 0; }
+#firmware-comment { white-space: pre-wrap; color: #aaa; }
+#firmware-progress { padding: 10px 0; color: #dcdcaa; }
+#firmware-progress[data-state="succeeded"] { color: #4ec9b0; }
+#firmware-progress[data-state="failed"], #firmware-progress[data-state="unverified"] { color: #f48771; }
+.firmware-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+.ctrl-update-btn { min-height: 30px; }
+button:disabled { cursor: not-allowed; opacity: 0.5; }
+@media (max-width: 600px) { #firmware-dialog { width: 100%; max-width: 100%; max-height: 100dvh; border-radius: 0; padding: 14px; } .firmware-filters { grid-template-columns: minmax(0, 1fr); gap: 0; } }
+
 @media (max-width: 900px) {
   body { height: 100dvh; overflow: hidden; }
   header { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 8px; padding: 8px; }

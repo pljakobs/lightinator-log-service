@@ -393,3 +393,53 @@ for (const width of [320, 390, 768]) {
     }
   });
 }
+
+test("per-controller firmware updates use the new catalogue flow and require verified completion", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/api/v1/controllers', route => route.fulfill({ json: { firmwareUpdatesEnabled: true, items: [{ ip: '192.0.2.50', name: 'Fixture controller', groups: [], reachable: true, gitVersion: 'V1.0-1-develop', buildType: 'debug' }] } }));
+  const versions = [{ version: 'V1.0-2-develop', soc: 'esp8266', branch: 'develop', type: 'debug', url: 'https://lightinator.de/rom.bin', comment: '<img src=x onerror=alert(1)> release notes' }];
+  await page.route('**/api/v1/controllers/192.0.2.50/firmware?*', route => route.fulfill({ json: { current: { version: 'V1.0-1-develop', soc: 'esp8266', type: 'debug' }, branches: ['develop'], types: ['debug'], branch: 'develop', type: 'debug', versions } }));
+  let submitted = false;
+  await page.route('**/api/v1/controllers/192.0.2.50/firmware', route => {
+    expect(route.request().method()).toBe('POST');
+    expect(route.request().postDataJSON()).toEqual({ branch: 'develop', type: 'debug', version: 'V1.0-2-develop', password: 'ui-private-password' });
+    submitted = true;
+    return route.fulfill({ status: 202, json: { id: 'job', ip: '192.0.2.50', version: versions[0].version, state: 'updating', message: 'Downloading and flashing' } });
+  });
+  await page.route('**/api/v1/controllers/192.0.2.50/firmware/job', route => route.fulfill({ json: { id: 'job', ip: '192.0.2.50', version: versions[0].version, state: 'succeeded', message: 'Verified installed firmware V1.0-2-develop' } }));
+  await page.locator('.tab[data-tab="controllers"]').click();
+  await page.locator('.ctrl-update-btn').click();
+  await expect(page.locator('#firmware-version')).toHaveValue(versions[0].version);
+  await expect(page.locator('#firmware-comment img')).toHaveCount(0);
+  await expect(page.locator('#firmware-comment')).toContainText('<img');
+  const bounds = await page.locator('#firmware-dialog').boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  await page.locator('#firmware-password').fill('ui-private-password');
+  await page.locator('#firmware-start').click();
+  expect(submitted).toBe(false);
+  await expect(page.locator('#firmware-confirm-text')).toContainText('192.0.2.50');
+  await page.locator('#firmware-install').click();
+  await expect(page.locator('#firmware-progress')).toHaveText('Installed V1.0-2-develop');
+  await expect(page.locator('#firmware-status')).toContainText('Verified installed firmware');
+  await expect(page.locator('#firmware-password')).toHaveValue('');
+  expect(submitted).toBe(true);
+});
+
+test("firmware controls are opt-in and failed updates are not displayed as installed", async ({ page }) => {
+  await page.route('**/api/v1/controllers', route => route.fulfill({ json: { firmwareUpdatesEnabled: false, items: [{ ip: '192.0.2.51', name: 'Fixture', groups: [], reachable: true }] } }));
+  await page.locator('.tab[data-tab="controllers"]').click();
+  await expect(page.locator('.ctrl-update-btn')).toBeDisabled();
+  await page.unroute('**/api/v1/controllers');
+  await page.route('**/api/v1/controllers', route => route.fulfill({ json: { firmwareUpdatesEnabled: true, items: [{ ip: '192.0.2.51', name: 'Fixture', groups: [], reachable: true }] } }));
+  await page.route('**/api/v1/controllers/192.0.2.51/firmware?*', route => route.fulfill({ json: { current: { version: 'V1.0-1-develop', soc: 'esp8266', type: 'debug' }, branches: ['develop'], types: ['debug'], branch: 'develop', type: 'debug', versions: [{ version: 'V1.0-2-develop', soc: 'esp8266', branch: 'develop', type: 'debug', url: 'https://lightinator.de/rom.bin' }] } }));
+  await page.route('**/api/v1/controllers/192.0.2.51/firmware', route => route.fulfill({ status: 202, json: { id: 'failed-job', ip: '192.0.2.51', version: 'V1.0-2-develop', state: 'submitting', message: 'Sending update' } }));
+  await page.route('**/api/v1/controllers/192.0.2.51/firmware/failed-job', route => route.fulfill({ json: { id: 'failed-job', ip: '192.0.2.51', version: 'V1.0-2-develop', state: 'failed', message: 'Controller OTA authentication failed' } }));
+  await page.evaluate(async () => { await (await import('/js/controllers.js')).loadControllers(); });
+  await page.locator('.ctrl-update-btn').click();
+  await expect(page.locator('#firmware-start')).toBeEnabled();
+  await page.locator('#firmware-start').click();
+  await page.locator('#firmware-install').click();
+  await expect(page.locator('#firmware-progress')).toHaveText('Update failed');
+  await expect(page.locator('#firmware-status')).toContainText('authentication failed');
+});

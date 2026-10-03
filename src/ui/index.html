@@ -168,6 +168,28 @@
   </div>
 </div>
 
+<div id="firmware-overlay">
+  <section id="firmware-dialog" role="dialog" aria-modal="true" aria-labelledby="firmware-title">
+    <div class="firmware-heading"><h2 id="firmware-title">Update firmware</h2><button id="firmware-close" type="button" title="Close firmware update" aria-label="Close firmware update">&times;</button></div>
+    <div id="firmware-device"></div>
+    <div class="firmware-current"><span>Installed</span><strong id="firmware-current"></strong></div>
+    <div id="firmware-selection">
+      <div class="firmware-filters">
+        <label>Branch<select id="firmware-branch"></select></label>
+        <label>Build type<select id="firmware-type"></select></label>
+      </div>
+      <label>Version<select id="firmware-version"></select></label>
+      <div id="firmware-target"></div>
+      <p id="firmware-comment"></p>
+      <label>OTA password<input id="firmware-password" type="password" autocomplete="new-password" /></label>
+    </div>
+    <div id="firmware-confirm" hidden><p id="firmware-confirm-text"></p><div class="firmware-actions"><button id="firmware-cancel-confirm" type="button">Cancel</button><button id="firmware-install" type="button" class="danger">Install firmware</button></div></div>
+    <div id="firmware-progress" role="status" hidden></div>
+    <p id="firmware-status" role="status" aria-live="polite"></p>
+    <div class="firmware-actions"><button id="firmware-start" type="button" disabled>Review update</button></div>
+  </section>
+</div>
+
 <div id="crash-modal-overlay">
   <div id="crash-modal">
     <div id="crash-modal-header">
