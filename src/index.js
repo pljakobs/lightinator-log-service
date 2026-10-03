@@ -16,6 +16,7 @@ const { LokiForwarder } = require("./loki");
 const { ControllerDiscovery } = require("./discovery");
 const { CrashDecoder } = require("./crashDecoder");
 const { CrashReporter } = require("./crashReporter");
+const { FirmwareUpdater } = require("./firmwareUpdater");
 const { version: pkgVersion } = require("../package.json");
 const { AIService } = require("./aiService");
 const version = process.env.APP_VERSION || pkgVersion;
@@ -93,6 +94,8 @@ function getLiveValues() {
     LLS_CORS_ORIGIN: config.corsOrigin,
     LLS_SERVICE_NAME: config.serviceName,
     LLS_ELF_BASE_URL: config.elfBaseUrl,
+    LLS_FIRMWARE_API_URL: config.firmwareApiUrl,
+    LLS_FIRMWARE_UPDATES_ENABLED: String(config.firmwareUpdatesEnabled),
   };
 }
 
@@ -159,6 +162,13 @@ async function main() {
 
   discovery.controllers = new Map(initialState.controllers.map(controller => [controller.ip, controller]));
   discovery.start({ loadState: false });
+  let firmwareUpdater;
+  const updateOptions = { getController: ip => discovery.controllers.get(ip), controllerPort: config.discoveryControllerPort };
+  try { firmwareUpdater = new FirmwareUpdater({ ...updateOptions, apiUrl: config.firmwareApiUrl, enabled: config.firmwareUpdatesEnabled }); }
+  catch {
+    console.warn("Invalid firmware catalogue configuration; firmware updates disabled.");
+    firmwareUpdater = new FirmwareUpdater(updateOptions);
+  }
 
   const app = express();
   app.use(cors({ origin: config.corsOrigin }));
@@ -451,7 +461,30 @@ async function main() {
   });
 
   app.get("/api/v1/controllers", (_req, res) => {
-    res.json({ items: discovery.getAll() });
+    res.json({ items: discovery.getAll(), firmwareUpdatesEnabled: firmwareUpdater.enabled });
+  });
+
+  app.get("/api/v1/controllers/:ip/firmware", async (req, res) => {
+    try {
+      res.json(await firmwareUpdater.options(req.params.ip, { branch: req.query.branch, type: req.query.type }));
+    } catch (error) { res.status(error.status || 502).json({ error: error.status ? error.message : "Could not load controller firmware options" }); }
+  });
+
+  app.post("/api/v1/controllers/:ip/firmware", async (req, res) => {
+    try {
+      const origin = req.get("origin");
+      if (req.get("sec-fetch-site") === "cross-site" || (origin && new URL(origin).host !== req.get("host"))) {
+        return res.status(403).json({ error: "Cross-origin firmware update requests are not allowed" });
+      }
+      const job = await firmwareUpdater.start(req.params.ip, req.body);
+      res.status(202).json(job);
+    } catch (error) { res.status(error.status || 400).json({ error: error.status ? error.message : "Could not start firmware update" }); }
+    finally { if (req.body) delete req.body.password; }
+  });
+
+  app.get("/api/v1/controllers/:ip/firmware/:jobId", (req, res) => {
+    try { res.json(firmwareUpdater.status(req.params.ip, req.params.jobId)); }
+    catch (error) { res.status(error.status || 400).json({ error: error.status ? error.message : "Could not load firmware update status" }); }
   });
 
   app.post("/api/v1/controllers/refresh", async (_req, res) => {
@@ -658,6 +691,7 @@ async function main() {
 
   const shutdown = () => {
     console.log("Shutting down...");
+    firmwareUpdater.stop();
     clearInterval(retentionTimer);
     for (const t of stalePurgeTimers) {
       clearTimeout(t);

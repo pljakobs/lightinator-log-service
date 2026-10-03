@@ -128,6 +128,8 @@ const SETTINGS_SCHEMA = [
   { key: "LLS_CORS_ORIGIN", label: "Allowed browser origin", type: "text", description: "Browser origin allowed by CORS, or *." },
   { key: "LLS_SERVICE_NAME", label: "Service name", type: "text", description: "Service identity advertised over mDNS." },
   { key: "LLS_ELF_BASE_URL", label: "Firmware artifact URL", type: "url", description: "Base HTTP(S) URL for firmware ELF and map files." },
+  { key: "LLS_FIRMWARE_API_URL", label: "Firmware catalogue API", type: "url", default: "https://lightinator.de/api", description: "Lightinator version catalogue API base URL." },
+  { key: "LLS_FIRMWARE_UPDATES_ENABLED", label: "Enable controller firmware updates", type: "boolean", default: "false", description: "Allow explicit single-controller firmware ROM updates on this trusted network." },
 ];
 
 const GEMINI_KEYS = ["LLS_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"];

@@ -39,6 +39,8 @@ function loadConfig() {
   aiEnabled: process.env.LLS_AI_ENABLED !== "false",
   aiContextRounds: envInt("LLS_AI_CONTEXT_ROUNDS", 3),
   aiContextBytes: envInt("LLS_AI_CONTEXT_BYTES", 120_000),
+  firmwareApiUrl: process.env.LLS_FIRMWARE_API_URL || "https://lightinator.de/api",
+  firmwareUpdatesEnabled: process.env.LLS_FIRMWARE_UPDATES_ENABLED === "true",
   };
 }
 
