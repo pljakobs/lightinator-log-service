@@ -9,28 +9,44 @@
 "use strict";
 
 const { GoogleGenAI } = require("@google/genai");
+const { OpenAI } = require("openai");
+const { Ollama } = require("ollama");
+const { defaultAIBackends, parseAIBackends } = require("./aiConfig");
 
 class AIService {
-  constructor({ apiKey, model = "gemini-3.8-flash" } = {}) {
-    this.apiKey = apiKey || process.env.LLS_GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  constructor({ apiKey, model = "gemini-3.8-flash", backends, contextRounds = 3, contextBytes = 120_000 } = {}) {
+    this.apiKey = apiKey ?? process.env.LLS_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
     
     // Trace key resolution and source
-    const source = apiKey ? "constructor argument" 
+    const source = apiKey != null ? "constructor argument" 
                  : (process.env.LLS_GEMINI_API_KEY ? "LLS_GEMINI_API_KEY" 
                  : (process.env.GOOGLE_API_KEY ? "GOOGLE_API_KEY" : "none"));
                  
-    const maskedKey = this.apiKey ? `${this.apiKey.slice(0, 4)}...${this.apiKey.slice(-4)}` : "MISSING";
-    console.log(`[AIService] Resolved key from [${source}] (masked:${maskedKey})`);
+    console.log(`[AIService] Resolved key from [${source}] (configured:${Boolean(this.apiKey)})`);
 
     this.model = model;
-    if (this.apiKey) {
-      this.ai = new GoogleGenAI({ apiKey: this.apiKey });
-    }
+    this.contextRounds = Math.max(0, Math.min(10, Number(contextRounds) || 0));
+    this.contextBytes = Math.max(1024, Number(contextBytes) || 120_000);
+    this.backends = parseAIBackends(backends ?? defaultAIBackends(this.apiKey || "", model)).map(backend => {
+      let client = null;
+      if (backend.type === "gemini" && backend.token) {
+        client = new GoogleGenAI({ apiKey: backend.token, httpOptions: { baseUrl: backend.baseUrl, timeout: 60_000 } });
+      } else if (backend.type === "openai") {
+        client = new OpenAI({ apiKey: backend.token || "local", baseURL: backend.baseUrl, timeout: 60_000, maxRetries: 0 });
+      } else if (backend.type === "ollama") {
+        client = new Ollama({ host: backend.baseUrl,
+          headers: backend.token ? { Authorization: `Bearer ${backend.token}` } : {},
+          fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(60_000) }),
+        });
+      }
+      return { ...backend, client };
+    });
+    this.ai = this.backends.find(backend => backend.type === "gemini")?.client;
     this._queue = Promise.resolve();
   }
 
   isAvailable() {
-    return Boolean(this.ai);
+    return this.backends.some(backend => backend.client);
   }
 
   /**
@@ -46,33 +62,70 @@ class AIService {
    * Executes content generation with automatic sequential model fallback downgrade.
    */
   async _generateWithFallback(prompt) {
-    if (!this.ai) throw new Error("AI service is not configured.");
-
-    const fallbackChain = [
-      this.model,
-      "gemini-3.7-flash",
-      "gemini-3.6-flash",
-      "gemini-3.5-flash"
-    ];
-
-    const models = [...new Set(fallbackChain.filter(Boolean))];
-    let lastError;
-
-    for (const modelName of models) {
-      try {
-        console.log(`[AIService] Attempting generation with model: ${modelName}`);
-        const response = await this.ai.models.generateContent({
-          model: modelName,
-          contents: prompt,
-        });
-        return response.text || "No analysis generated.";
-      } catch (err) {
-        lastError = err;
-        console.warn(`[AIService] Model [${modelName}] failed:${err.message}. Downgrading to next tier...`);
+    if (!this.isAvailable()) throw new Error("AI service is not configured.");
+    for (const backend of this.backends) {
+      if (!backend.client) continue;
+      for (const modelName of backend.models) {
+        try {
+          let text;
+          if (backend.type === "gemini") {
+            text = (await backend.client.models.generateContent({ model: modelName, contents: prompt })).text;
+          } else if (backend.type === "openai") {
+            text = (await backend.client.chat.completions.create({ model: modelName, messages: [{ role: "user", content: prompt }] })).choices?.[0]?.message?.content;
+          } else {
+            text = (await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: false })).message?.content;
+          }
+          if (typeof text !== "string" || !text.trim()) throw new Error("Empty model response");
+          return text;
+        } catch {
+          console.warn(`[AIService] Backend ${backend.id}, model ${modelName} failed; trying next model.`);
+        }
       }
     }
+    throw new Error("All configured AI backends and models failed.");
+  }
 
-    throw new Error(`All model fallback tiers failed. Final error: ${lastError ? lastError.message : "Unknown error"}`);
+  _contextRequests(text) {
+    const candidates = [...text.matchAll(/```json\s*([\s\S]*?)```/gi)].map(match => match[1]);
+    candidates.push(text.slice(text.indexOf("["), text.lastIndexOf("]") + 1));
+    for (const candidate of candidates) {
+      try {
+        const requests = JSON.parse(candidate);
+        if (Array.isArray(requests)) return requests.filter(request => typeof (request?.file || request?.path) === "string")
+          .sort((first, second) => Number(second.priority === "required") - Number(first.priority === "required")).slice(0, 20);
+      } catch {}
+    }
+    return [];
+  }
+
+  async analyzeCrash({ harvester, repoPaths, codeSnippets = [], ...evidence }) {
+    const snippets = [];
+    const seen = new Set();
+    let bytes = 0;
+    const gaps = [];
+    const add = snippet => {
+      const key = `${snippet.repo}:${snippet.path || snippet.file}:${snippet.startLine || snippet.targetLine}:${snippet.stopLine || ""}`;
+      if (seen.has(key)) return false;
+      const size = Buffer.byteLength(snippet.snippet || "", "utf8");
+      if (bytes + size > this.contextBytes) { gaps.push(`Source omitted due to context budget: ${snippet.file}`); return false; }
+      seen.add(key);
+      bytes += size;
+      snippets.push(snippet);
+      return true;
+    };
+    codeSnippets.forEach(add);
+    let pass1 = "";
+    for (let round = 0; round <= this.contextRounds; round++) {
+      pass1 = await this.runPass1({ ...evidence, codeSnippets: snippets });
+      const requests = this._contextRequests(pass1);
+      if (!requests.length) break;
+      if (round === this.contextRounds) { gaps.push("Maximum context rounds reached; outstanding requests remain unresolved."); break; }
+      const supplemental = await harvester.getContextFiles(requests, repoPaths, { maxBytes: Math.max(0, this.contextBytes - bytes) });
+      let added = false;
+      for (const snippet of supplemental) added = add(snippet) || added;
+      if (!added) { gaps.push("Requested source was unavailable, already retrieved, or exceeded the context budget."); break; }
+    }
+    return this.runPass2({ ...evidence, pass1Result: `${pass1}\n\nContext limitations:\n${gaps.join("\n") || "None recorded."}`, supplementalSnippets: snippets });
   }
 
   /**
@@ -338,6 +391,8 @@ async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disasse
     `- end_line`,
     `- reason`,
     `- priority`,
+    `Use full_file: true only when the entire file is necessary; otherwise request bounded line ranges.`,
+    `Do not repeat a request whose source is already included. Return an empty array when context is sufficient.`,
     ``,
 
     `Priority must be one of:`,
@@ -396,7 +451,7 @@ async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disasse
  * Pass 2: Independent root-cause validation, causal-chain isolation,
  * remediation strategy, patch generation, and verification.
  */
-async runPass2({ pass1Result, supplementalSnippets, mapSymbols, disassembly }) {
+async runPass2({ pass1Result, supplementalSnippets, mapSymbols, disassembly, decodedText }) {
   const prompt = [
     `You are an expert embedded firmware engineer specializing in Sming and Xtensa/RISC-V based ESP8266/ESP32 systems.`,
     `You are performing the final forensic analysis of a firmware crash.`,
@@ -417,6 +472,11 @@ async runPass2({ pass1Result, supplementalSnippets, mapSymbols, disassembly }) {
     `### Pass 1 Analysis & Gap Assessment`,
     `\`\`\`text`,
     pass1Result || "No Pass 1 result available.",
+    `\`\`\``,
+    ``,
+    `### Original Decoded Crash Evidence`,
+    `\`\`\`text`,
+    decodedText || "No decoded evidence supplied.",
     `\`\`\``,
     ``,
 
