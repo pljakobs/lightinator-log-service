@@ -80,19 +80,21 @@ const SOC_CONFIG = {
 };
 
 class CrashDecoder {
-  constructor({ elfCacheDir, elfBaseUrl, discovery = null, db = null, storage = null, aiService = null, onDecoded = null }) {
+  constructor({ elfCacheDir, elfBaseUrl, discovery = null, db = null, storage = null, aiService = null, aiEnabled = true, onDecoded = null }) {
     this.elfCacheDir = elfCacheDir;
     this.elfBaseUrl  = elfBaseUrl;
     this.discovery   = discovery;
     this.db          = db;
     this.storage     = storage;
     this.aiService   = aiService;
+    this.aiEnabled   = aiEnabled;
     this.onDecoded   = onDecoded;
 
     this.harvester = new AIContextHarvester({ elfBaseUrl });
     this.harvester.init().catch(() => {});
 
     this._collecting = new Map();
+    this._decodeQueue = Promise.resolve();
   }
 
   feed(record) {
@@ -109,10 +111,16 @@ class CrashDecoder {
 
         const isStackHeader = STACK_HEADER_RE.test(cleanMsg);
         const triggerRecordId = record.id;
+        const known = this.discovery?.controllers.get(ip);
 
         this._collecting.set(ip, {
           triggerRecordId,
-          triggerRecord: record,
+          triggerRecord: {
+            ...record,
+            gitVersion: record.gitVersion || known?.gitVersion,
+            soc: record.soc || known?.soc,
+            buildType: record.buildType || known?.buildType,
+          },
           lines: [cleanMsg],
           inStack: isStackHeader,
           timer: setTimeout(() => this._finalize(ip), 5000),
@@ -203,8 +211,26 @@ class CrashDecoder {
     return info;
   }
 
-  async _decode(ip, triggerRecordId, triggerRecord, lines) {
-    const info = await this._resolveTargetInfo(ip);
+  _enqueueDecode(task) {
+    if (this.aiService) return this.aiService.enqueue(task);
+    const result = this._decodeQueue.then(task);
+    this._decodeQueue = result.catch(() => {});
+    return result;
+  }
+
+  _decode(ip, triggerRecordId, triggerRecord, lines) {
+    return this._enqueueDecode(() => this._decodeRecord(ip, triggerRecordId, triggerRecord, lines));
+  }
+
+  async _decodeRecord(ip, triggerRecordId, triggerRecord, lines) {
+    const info = triggerRecord.gitVersion && triggerRecord.soc
+      ? { git_version: triggerRecord.gitVersion, soc: triggerRecord.soc, build_type: triggerRecord.buildType }
+      : await this._resolveTargetInfo(ip);
+    if (this.storage && triggerRecordId) {
+      await this.storage.updateCrashDecode(triggerRecordId, "[Crash dump detected, decoding in progress...]", {
+        gitVersion: info?.git_version, soc: info?.soc, buildType: info?.build_type || "debug", rawDump: lines.join("\n"),
+      });
+    }
     if (!info || !info.git_version || !info.soc) {
       const msg = `[Crash decode skipped: target metadata missing for ${ip}]`;
       if (this.storage && triggerRecordId) {
@@ -244,43 +270,22 @@ class CrashDecoder {
 
     await this._ensureScript(cfg);
 
+    const repoPaths = await this._getSourceRepos(git_version);
     let decoded;
+    let codeSnippets = [];
     try {
-      decoded = await this._runDecode(cfg, elfPath, lines);
+      ({ decoded, codeSnippets } = await this._decodeWithContext(cfg, elfPath, lines, repoPaths));
     } catch (err) {
       decoded = `[Crash decode error: ${err.message}]\n\nRaw dump:\n` + lines.join("\n");
     }
 
     // Execute Multi-Pass AI Analysis if available
-   let aiAnalysisResult = null;
-    if (this.aiService && this.aiService.isAvailable()) {
+    let aiAnalysisResult = null;
+    if (this.aiEnabled !== false && this.aiService && this.aiService.isAvailable()) {
       try {
-        console.log(`CrashDecoder [${ip}]: Initiating multi-pass AI analysis...`);
-        
-        aiAnalysisResult = await this.aiService.enqueue(async () => {
-          const smingPath = await this.harvester.ensureRepo("Sming", "https://github.com/pljakobs/Sming.git", "develop");
-          const fwRepoPath = await this.harvester.ensureRepo("esp-rgbww-firmware", "https://github.com/pljakobs/esp-rgbww-firmware.git", branch);
-          
-          const mapSymbols = await this.harvester.fetchMapFile(git_version, socKey, type);
-          const codeSnippets = await this.harvester.extractSnippets(decoded, { Sming: smingPath, "esp-rgbww-firmware": fwRepoPath });
-
-          const pass1 = await this.aiService.runPass1({
-            soc: socKey,
-            gitVersion: git_version,
-            decodedText: decoded,
-            codeSnippets,
-            mapSymbols,
-          });
-
-          const pass2 = await this.aiService.runPass2({
-            pass1Result: pass1,
-            supplementalSnippets: codeSnippets,
-          });
-
-          return `### AI Pass 1: Anatomical & Gap Analysis\n${pass1}\n\n### AI Pass 2: Root-Cause Remediation\n${pass2}`;
-        });
-
-        decoded = `${decoded}\n\n---\n\n${aiAnalysisResult}`;
+        console.log(`CrashDecoder [${ip}]: Initiating context-aware AI analysis...`);
+        aiAnalysisResult = await this._analyzeDecoded(decoded, codeSnippets, repoPaths, git_version, socKey, type);
+        decoded = `${decoded}\n\n--- AI Analysis ---\n\n${aiAnalysisResult}`;
       } catch (aiErr) {
         console.warn(`CrashDecoder [${ip}]: AI analysis pipeline failed:${aiErr.message}`);
       }
@@ -426,12 +431,16 @@ class CrashDecoder {
     await fsp.rename(tmpPath, localPath);
   }
 
-  async analyzeRecord(triggerRecordId) {
+  analyzeRecord(triggerRecordId) {
+    return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId));
+  }
+
+  async _analyzeRecord(triggerRecordId) {
     let rawLog = null;
     let ip = null;
     let git_version = null;
     let soc = null;
-    let build_type = "debug";
+    let build_type = null;
 
     if (this.storage && typeof this.storage.getCrashRecord === "function") {
       const rec = this.storage.getCrashRecord(triggerRecordId);
@@ -440,15 +449,15 @@ class CrashDecoder {
         ip = rec.sourceIp || rec.ip;
         git_version = rec.gitVersion;
         soc = rec.soc;
-        build_type = rec.buildType || "debug";
+        build_type = rec.buildType;
       }
     }
 
     if (!rawLog && this.db) {
       try {
-        const row = this.db.prepare("SELECT message, source_ip, git_version, soc, build_type, crash_decode FROM logs WHERE id = ?").get(triggerRecordId);
+        const row = this.db.prepare("SELECT message, source_ip, git_version, soc, build_type, crash_raw FROM logs WHERE id = ? AND crash_decode IS NOT NULL").get(triggerRecordId);
         if (row) {
-          rawLog = row.crash_decode || row.message;
+          rawLog = row.crash_raw || row.message;
           ip = row.source_ip;
           git_version = row.git_version;
           soc = row.soc;
@@ -463,17 +472,8 @@ class CrashDecoder {
       throw new Error("Crash log or raw dump not found for analysis.");
     }
 
-    if ((!git_version || !soc) && ip) {
-      const info = await this._resolveTargetInfo(ip);
-      if (info) {
-        git_version = git_version || info.git_version;
-        soc = soc || info.soc;
-        build_type = build_type || info.build_type;
-      }
-    }
-
     if (!git_version || !soc) {
-      throw new Error("Target metadata (git_version or soc) missing for analysis.");
+      throw new Error("Original crash firmware metadata (git_version or soc) missing for analysis.");
     }
 
     const socKey = soc.toLowerCase();
@@ -492,10 +492,12 @@ class CrashDecoder {
     await this._ensureElf(elfUrl, elfPath);
     await this._ensureScript(cfg);
 
+    const repoPaths = await this._getSourceRepos(git_version);
     const lines = rawLog.split("\n");
     let decoded;
+    let codeSnippets = [];
     try {
-      decoded = await this._runDecode(cfg, elfPath, lines);
+      ({ decoded, codeSnippets } = await this._decodeWithContext(cfg, elfPath, lines, repoPaths));
     } catch (err) {
       decoded = rawLog;
     }
@@ -504,28 +506,8 @@ class CrashDecoder {
       throw new Error("AI service is not configured.");
     }
 
-    const smingPath = await this.harvester.ensureRepo("Sming", "https://github.com/pljakobs/Sming.git", "develop");
-
-    const fwRepoPath = await this.harvester.ensureRepo("esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", git_version ? git_version.toLowerCase() : null);
-
-    const mapSymbols = await this.harvester.fetchMapFile(git_version, socKey, type);
-    const codeSnippets = await this.harvester.extractSnippets(decoded, { Sming: smingPath, "esp-rgbww-firmware": fwRepoPath });
-
-    const pass1 = await this.aiService.runPass1({
-      soc: socKey,
-      gitVersion: git_version,
-      decodedText: decoded,
-      codeSnippets,
-      mapSymbols,
-    });
-
-    const pass2 = await this.aiService.runPass2({
-      pass1Result: pass1,
-      supplementalSnippets: codeSnippets,
-    });
-
-    const aiAnalysisResult = `### AI Pass 1: Anatomical & Gap Analysis\n${pass1}\n\n### AI Pass 2: Root-Cause Remediation\n${pass2}`;
-    const finalDecoded = `${decoded}\n\n---\n\n${aiAnalysisResult}`;
+    const aiAnalysisResult = await this._analyzeDecoded(decoded, codeSnippets, repoPaths, git_version, socKey, type);
+    const finalDecoded = `${decoded}\n\n--- AI Analysis ---\n\n${aiAnalysisResult}`;
 
     if (this.storage && typeof this.storage.updateCrashDecode === "function") {
       await this.storage.updateCrashDecode(triggerRecordId, finalDecoded, {
@@ -538,7 +520,49 @@ class CrashDecoder {
     return finalDecoded;
   }
 
-  _runDecode(cfg, elfPath, lines) {
+  async _analyzeDecoded(decoded, codeSnippets, repoPaths, gitVersion, soc, buildType) {
+    const mapSymbols = await this.harvester.fetchMapFile(gitVersion, soc, buildType);
+    const disassembly = stripAnsi(decoded).match(/Disassembly around[^\n]*\n(?:[ \t]*[0-9a-f]+:[^\n]*(?:\n|$))+/gi)?.join("\n") || "";
+    return this.aiService.analyzeCrash({
+      soc, gitVersion, decodedText: decoded.split("\n\nSource context:\n")[0], codeSnippets, mapSymbols, disassembly,
+      harvester: this.harvester, repoPaths,
+    });
+  }
+
+  async _getSourceRepos(gitVersion) {
+    const repoPaths = {};
+    const repos = [
+      ["Sming", "https://github.com/pljakobs/Sming.git", "develop"],
+      ["esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", gitVersion.toLowerCase()],
+    ];
+    for (const [name, url, ref] of repos) {
+      try {
+        repoPaths[name] = await this.harvester.ensureRepo(name, url, ref);
+      } catch (err) {
+        console.warn(`CrashDecoder: source context unavailable for ${name} (${ref}): ${err.message}`);
+      }
+    }
+    return repoPaths;
+  }
+
+  async _decodeWithContext(cfg, elfPath, lines, repoPaths) {
+    let decoded = await this._runDecode(cfg, elfPath, lines, repoPaths);
+    let codeSnippets = [];
+    try {
+      codeSnippets = await this.harvester.extractSnippets(decoded, repoPaths);
+      if (codeSnippets.length) {
+        const sourceContext = codeSnippets.map(({ repo, file, targetLine, snippet }) =>
+          `${repo}/${file}:${targetLine}\n${snippet}`
+        ).join("\n\n");
+        decoded += `\n\nSource context:\n${sourceContext}`;
+      }
+    } catch (err) {
+      console.warn(`CrashDecoder: could not extract source context: ${err.message}`);
+    }
+    return { decoded, codeSnippets };
+  }
+
+  _runDecode(cfg, elfPath, lines, repoPaths = {}) {
     return new Promise((resolve, reject) => {
       const env = {
         ...process.env,
@@ -547,8 +571,9 @@ class CrashDecoder {
         SMING_ARCH: cfg.smingArch,
       };
 
-      const proc = spawn("python3", [cfg.script, elfPath], {
+      const proc = spawn("python3", [cfg.script, path.resolve(elfPath)], {
         env,
+        cwd: repoPaths["esp-rgbww-firmware"] || repoPaths.Sming,
         stdio: ["pipe", "pipe", "pipe"],
       });
 
