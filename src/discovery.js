@@ -137,9 +137,9 @@ async function resolveSeedToIpv4(seed) {
   }
 }
 
-function fetchJson(url, options = {}) {
+function fetchJson(host, port, requestPath, options = {}) {
   return new Promise((resolve, reject) => {
-    const targetUrl = new URL(url);
+    const targetUrl = new URL(requestPath, `http://${host}:${port}`);
     const lib = targetUrl.protocol === 'https:' ? https : http;
     
     const reqOptions = {
