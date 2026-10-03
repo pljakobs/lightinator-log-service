@@ -1,4 +1,4 @@
-import { BASE, fetchJson, escHtml, fmtLogTime, currentTab } from './common.js';
+import { BASE, fetchJson, escHtml, fmtLogTime, currentTab, safeHttpUrl } from './common.js';
 import { selectSource, fetchLogs } from './logs.js';
 import { handleCrashBtnClick } from './crash.js';
 
@@ -62,8 +62,9 @@ function render() {
     const fp = c.fingerprint ? `<span class="crash-fp" title="Fingerprint">${escHtml(c.fingerprint.slice(0, 12))}</span>` : '';
     const pending = c.pending ? '<span class="crash-pending">&#x23F3; decoding…</span>' : '';
     const text = c.summary ? escHtml(c.summary) : `<span class="crash-msg">${escHtml(c.message || '')}</span>`;
-    const issue = c.issueUrl
-      ? `<a href="${escHtml(c.issueUrl)}" target="_blank" rel="noopener" title="Open GitHub issue">#${escHtml(c.issueNumber ?? '')}</a>`
+    const issueUrl = safeHttpUrl(c.issueUrl);
+    const issue = issueUrl
+      ? `<a href="${escHtml(issueUrl)}" target="_blank" rel="noopener" title="Open GitHub issue">#${escHtml(c.issueNumber ?? '')}</a>`
       : '';
     const meta = [c.soc, c.gitVersion].filter(Boolean).map(escHtml).join(' · ');
     parts.push(

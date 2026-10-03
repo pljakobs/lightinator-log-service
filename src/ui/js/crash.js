@@ -1,4 +1,4 @@
-import { BASE, fetchJson, ansi_up } from './common.js';
+import { BASE, fetchJson, ansi_up, escHtml } from './common.js';
 
 let _currentCrashDecode = '';
 let _currentCrashId = null;
@@ -6,8 +6,9 @@ let _currentCrashId = null;
 function renderModalContent() {
   const body = document.getElementById('crash-modal-body');
   const rawToggle = document.getElementById('crash-raw-toggle');
+  body.classList.toggle('raw-text', rawToggle.checked || !window.DOMPurify);
 
-  if (rawToggle.checked) {
+  if (rawToggle.checked || !window.DOMPurify) {
     body.textContent = _currentCrashDecode;
     return;
   }
@@ -17,24 +18,24 @@ function renderModalContent() {
   if (_currentCrashDecode.includes(aiDelimiter)) {
     const parts = _currentCrashDecode.split(aiDelimiter);
     const ansiLog = ansi_up.ansi_to_html(parts[0]);
-    const markdownAnalysis = window.marked ? window.marked.parse(parts[1]) : parts[1];
+    const markdownAnalysis = window.marked ? window.marked.parse(parts[1]) : escHtml(parts[1]);
 
-    body.innerHTML = `
+    body.innerHTML = window.DOMPurify.sanitize(`
       <div class="ansi-block">${ansiLog}</div>
       <div class="ai-analysis-block">
         <h3 style="color:#4ec9b0;margin-bottom:8px">&#10024; AI Analysis</h3>
         ${markdownAnalysis}
       </div>
-    `;
+    `, { USE_PROFILES: { html: true } });
     return;
   }
 
   // Fallback: Escape ANSI to HTML spans first, then pass through Markdown parser
   const ansiHtml = ansi_up.ansi_to_html(_currentCrashDecode);
   if (window.marked) {
-    body.innerHTML = window.marked.parse(ansiHtml, { gfm: true, breaks: true });
+    body.innerHTML = window.DOMPurify.sanitize(window.marked.parse(ansiHtml, { gfm: true, breaks: true }), { USE_PROFILES: { html: true } });
   } else {
-    body.innerHTML = ansiHtml;
+    body.innerHTML = window.DOMPurify.sanitize(ansiHtml, { USE_PROFILES: { html: true } });
   }
 }
 

@@ -1,4 +1,4 @@
-import { BASE, fetchJson, escHtml, timeAgo } from './common.js';
+import { BASE, fetchJson, escHtml, timeAgo, safeHttpUrl } from './common.js';
 
 async function loadControllers() {
   const st = document.getElementById('ctrl-status');
@@ -35,12 +35,12 @@ function renderControllerCards(items) {
     const displayBuildType = c.buildType ? escHtml(c.buildType) : '–';
     const ip = escHtml(c.ip);
     return `<div class="${cardClass}" data-ip="${ip}">
-      <div class="ctrl-name"><input type="checkbox" class="ctrl-select" data-ip="${ip}" title="Select for removal" /><a href="http://${ip}/" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none" title="Open device UI">${escHtml(c.name || c.hostname || c.ip)}</a><span class="class-badge">${escHtml(classLabel)}</span>${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}${buildBadge}<button class="ctrl-remove-btn" data-ip="${ip}" title="Remove this controller">✕ Remove</button></div>
+      <div class="ctrl-name"><input type="checkbox" class="ctrl-select" data-ip="${ip}" title="Select for removal" /><a href="${escHtml(safeHttpUrl(`http://${c.ip}/`))}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none" title="Open device UI">${escHtml(c.name || c.hostname || c.ip)}</a><span class="class-badge">${escHtml(classLabel)}</span>${sb ? '<span class="split-brain-badge" title="This controller is not visible to all peers">⚠ split-brain</span>' : ''}${buildBadge}<button class="ctrl-remove-btn" data-ip="${ip}" title="Remove this controller">✕ Remove</button></div>
       <div class="ctrl-ip">${ip} · ${escHtml(c.hostname||'')} · id:${escHtml(String(c.deviceId||''))}</div>
       <div class="ctrl-fw">fw: <span class="${isDebug ? 'fw-debug' : 'fw-release'}">${displayBuildType}</span> · ${displayVersion}</div>
       <div class="ctrl-groups">Groups: ${escHtml(groups)}</div>
       <div class="ctrl-actions">
-        <button class="toggle-btn ${toggleBtnClass}" ${toggleDisabled} onclick="${isDebug ? `toggleLogging('${ip}',${!logOn})` : 'void 0'}">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
+        <button class="toggle-btn ${toggleBtnClass}" ${toggleDisabled} data-ip="${ip}" data-enabled="${!logOn}">${logOn ? 'Logging ON' : 'Logging OFF'}</button>
         <span class="ctrl-status ${reachable?'ok':'unreachable'}">${reachable ? '● online' : '● offline'}</span>
         <span class="ctrl-log-received">last seen: ${timeAgo(c.lastSeen)} · last log received: ${timeAgo(c.lastLogReceived)}</span>
       </div>
@@ -109,6 +109,11 @@ async function removeStale(days, purgeLogs) {
 }
 
 document.getElementById('ctrl-grid').addEventListener('click', (e) => {
+  const toggle = e.target.closest('.toggle-btn');
+  if (toggle) {
+    if (!toggle.disabled) toggleLogging(toggle.dataset.ip, toggle.dataset.enabled === 'true');
+    return;
+  }
   const btn = e.target.closest('.ctrl-remove-btn');
   if (!btn) return;
   const ip = btn.dataset.ip;
