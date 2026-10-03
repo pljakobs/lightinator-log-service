@@ -1,29 +1,18 @@
-# ── Stage 1: extract Xtensa/RISC-V addr2line tools + decode scripts ──────────
-# The pjakobs/sming image has all ESP toolchains installed.
-# We copy only the addr2line binaries and the two decode-stacktrace.py scripts
-# so the final image stays small.
-# Pin to linux/amd64: pjakobs/sming is amd64-only; Docker multi-stage allows
-# using an amd64 build stage even when the final image targets arm64.
-FROM --platform=linux/amd64 docker.io/pjakobs/sming:latest AS sming-tools
-
-RUN set -e; \
-    source /opt/Sming/Tools/export.sh > /dev/null 2>&1; \
-    mkdir -p /extract/tools; \
-    for tool in xtensa-lx106-elf-addr2line xtensa-esp32-elf-addr2line riscv32-esp-elf-addr2line; do \
-        bin=$(which $tool 2>/dev/null || find /opt -name "$tool" -type f 2>/dev/null | head -1); \
-        if [ -z "$bin" ]; then \
-            echo "ERROR: $tool not found in sming image" >&2; exit 1; \
-        fi; \
-        echo "Found $tool at $bin"; \
-        cp "$bin" /extract/; \
-    done; \
-    cp /opt/Sming/Sming/Arch/Esp8266/Tools/decode-stacktrace.py /extract/tools/decode-esp8266.py; \
-    cp /opt/Sming/Sming/Arch/Esp32/Tools/decode-stacktrace.py   /extract/tools/decode-esp32.py
+FROM node:22-bookworm AS decoder-tools
+ARG TARGETARCH
+WORKDIR /build
+RUN apt-get update && apt-get install -y --no-install-recommends python3 binutils-xtensa-lx106 xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+COPY config/decoder-toolchains.json ./config/decoder-toolchains.json
+COPY scripts/install-decoder-tools.js scripts/test-decoder-tools.js ./scripts/
+RUN node scripts/install-decoder-tools.js /extract "$TARGETARCH"
+ENV PATH="/extract/bin:${PATH}"
+RUN node scripts/test-decoder-tools.js /extract/tools
 
 # ── Stage 2: production service image ────────────────────────────────────────
 # Use full Debian node image (not alpine) for glibc compatibility with the
 # pre-built Espressif toolchain binaries.
-FROM node:22 AS base
+FROM node:22-bookworm AS base
 
 ENV NODE_ENV=production
 WORKDIR /app
@@ -37,16 +26,15 @@ ENV BUILD_NUMBER=$BUILD_NUMBER
 
 # Python3 is required to run decode-stacktrace.py
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 \
+    && apt-get install -y --no-install-recommends python3 binutils-xtensa-lx106 \
     && rm -rf /var/lib/apt/lists/*
 
-# addr2line binaries from Sming toolchains
-COPY --from=sming-tools /extract/xtensa-lx106-elf-addr2line  /usr/local/bin/
-COPY --from=sming-tools /extract/xtensa-esp32-elf-addr2line  /usr/local/bin/
-COPY --from=sming-tools /extract/riscv32-esp-elf-addr2line   /usr/local/bin/
+COPY --from=decoder-tools /extract/bin/ /usr/local/bin/
 
 # decode-stacktrace.py scripts (one per architecture)
-COPY --from=sming-tools /extract/tools/ /app/tools/
+COPY --from=decoder-tools /extract/tools/ /app/tools/
+COPY scripts/test-decoder-tools.js /app/scripts/test-decoder-tools.js
+RUN node /app/scripts/test-decoder-tools.js
 
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --no-audit --no-fund
