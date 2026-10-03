@@ -10,6 +10,7 @@ const { parseSyslogLine } = require("./syslogParser");
 const { BootTracker } = require("./bootTracker");
 const { LogStorage } = require("./storage");
 const { openDatabase } = require("./db");
+const { initializeServiceData } = require("./startupWorker");
 const { advertiseMdns } = require("./mdns");
 const { LokiForwarder } = require("./loki");
 const { ControllerDiscovery } = require("./discovery");
@@ -102,6 +103,13 @@ async function main() {
 
   await fs.mkdir(path.dirname(config.lokiConfigFile), { recursive: true });
 
+  const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
+  const [initialState] = await Promise.all([
+    initializeServiceData({ dbPath: config.dbPath, dataDir: config.dataDir,
+      controllerStatePath: config.controllerStatePath, maxRowsPerIp: config.maxRowsPerIp,
+      retentionDays: config.retentionDays, maxBytesPerIp: config.maxBytesPerIp }),
+    loki.loadConfig(),
+  ]);
   const db = openDatabase(config.dbPath);
 
   const storage = new LogStorage({
@@ -111,20 +119,15 @@ async function main() {
     retentionDays: config.retentionDays,
     maxBytesPerIp: config.maxBytesPerIp,
   });
-  await storage.init();
-  storage.prune();
   const retentionTimer = setInterval(() => {
     try { storage.prune(); } catch (err) { console.warn(`Log pruning failed: ${err.message}`); }
   }, 300_000);
   retentionTimer.unref();
 
   const bootTracker = new BootTracker();
-  for (const src of storage.listSources()) {
-    bootTracker.restore(src.ip, await storage.lastBootFor(src.ip), storage.lastBootNonceFor(src.ip));
+  for (const boot of initialState.boots) {
+    bootTracker.restore(boot.ip, boot.boot, boot.nonce);
   }
-
-  const loki = new LokiForwarder({ configPath: config.lokiConfigFile });
-  await loki.loadConfig();
 
   const advertiseHost = resolveAdvertiseHost(config.discoverySeedHosts);
   if (advertiseHost) {
@@ -154,7 +157,8 @@ async function main() {
     },
   });
 
-  discovery.start();
+  discovery.controllers = new Map(initialState.controllers.map(controller => [controller.ip, controller]));
+  discovery.start({ loadState: false });
 
   const app = express();
   app.use(cors({ origin: config.corsOrigin }));

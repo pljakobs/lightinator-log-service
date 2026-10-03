@@ -535,13 +535,13 @@ class CrashDecoder {
       ["Sming", "https://github.com/pljakobs/Sming.git", "develop"],
       ["esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", gitVersion.toLowerCase()],
     ];
-    for (const [name, url, ref] of repos) {
+    await Promise.all(repos.map(async ([name, url, ref]) => {
       try {
         repoPaths[name] = await this.harvester.ensureRepo(name, url, ref);
       } catch (err) {
         console.warn(`CrashDecoder: source context unavailable for ${name} (${ref}): ${err.message}`);
       }
-    }
+    }));
     return repoPaths;
   }
 

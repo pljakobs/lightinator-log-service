@@ -241,8 +241,8 @@ class ControllerDiscovery {
     }
   }
 
-  start() {
-    this._loadState().then(() => {
+  start({ loadState = true } = {}) {
+    (loadState ? this._loadState() : Promise.resolve()).then(() => {
       this.refresh().catch(() => {});
     });
     if (this.refreshIntervalMs > 0) {
