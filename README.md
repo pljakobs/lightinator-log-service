@@ -4,7 +4,13 @@ Local-first UDP log collector and diagnostic viewer for Lightinator controllers.
 
 ## Web Interface & Key Features
 
-The browser UI is accessible at `http://<host>:4821/` in a browser. No build step or CDN dependency required — the UI is a single self-contained HTML file served directly from the container.
+The browser UI is accessible at `http://<host>:4821/`. No frontend build step is
+required; ANSI and Markdown rendering helpers currently load from a CDN.
+
+On phones and tablets, controller selection opens in a slide-out drawer. Log
+metadata stacks above each message, controller cards and crash rows wrap, and
+decoded crashes use a fullscreen modal with independently scrollable code blocks.
+The desktop sidebar and resizable log columns remain available on wider screens.
 
 ### Log Viewer
 
@@ -58,6 +64,110 @@ Configure Loki forwarding and service integrations without restarting the contai
 * **Persistent Storage:** Settings are persisted to `data/loki.json` (the already-mounted data volume).
 
 ---
+
+## Credentials and API Security
+
+GitHub tokens, Gemini API keys, and Loki passwords are write-only through the
+HTTP API. Settings reads return `credentialsConfigured` flags for service keys
+and `passwordConfigured` for Loki, not existing secret values. The UI displays
+empty password inputs and configured-state indicators.
+
+Omit a secret or send an empty string to keep it unchanged. Send a new value to
+replace it, or JSON `null` to clear it explicitly. Service keys take effect after
+a service restart; Loki changes apply immediately. Changing the Loki URL or
+username requires replacing or clearing its password.
+
+Backend integrations obtain credentials directly from private configuration and
+the persisted settings, never through HTTP. No caller-locality exception is
+needed. Saved configuration files use owner-only permissions but still contain
+plaintext credentials; protect the host, data volume, and backups accordingly.
+
+Authentication and authorization for configuration writes and destructive APIs
+are not implemented. Restrict network access using a firewall or authenticated
+reverse proxy before exposing the service beyond a trusted network. Write-only
+credentials do not prevent unauthorized changes, deletion, or restart.
+
+Storage, cache, migration-source, and bootstrap file paths are deployment-only
+environment settings. They are not returned by the public settings/service-info
+APIs and cannot be changed through the UI. Existing deployment paths are retained
+when user-facing settings are saved.
+
+## Configuration Upgrades
+
+Existing GitHub tokens, Gemini key aliases, selected Gemini models, provider
+ladders, and Loki credentials remain usable when the new image starts. Legacy
+quoted environment-file values are normalized in memory; the file is not
+rewritten just to adapt the default Gemini backend. Keep the same mounted data
+volume and deployment environment when replacing a container.
+
+The installer does not need to run again for data/configuration migration.
+Once the new image is published for the installed tag, restarting a current
+template Quadlet service pulls and recreates the container. A plain
+`podman restart` or `docker restart` keeps using the old image: pull and recreate
+instead. Older non-template units also require an explicit image update. Reuse
+the same image tag, data mount, and environment-file configuration.
+
+Legacy Loki credentials embedded in the URL are moved to the private username
+and password fields for the same destination. That migration writes atomically
+and retains `loki.json.pre-write-only.bak` with owner-only permissions. Treat the
+backup as sensitive. If the data volume is read-only, the credentials remain
+usable in memory and the service reports that persistence was unavailable.
+
+## AI Providers and Context
+
+Settings open on Service, followed by Loki, AI, and GitHub tabs. The AI tab
+controls automatic analysis, provider order, model fallback lists, endpoints,
+write-only tokens, maximum context rounds, and the aggregate source-byte budget.
+Changes take effect after restarting the service.
+
+`LLS_AI_BACKENDS` is a JSON array tried in order. Each entry has `id`, `type`
+(`gemini`, `openai`, or `ollama`), `baseUrl`, `models`, and an optional `token`.
+OpenAI-compatible endpoints include local Ollama, vLLM, and LM Studio servers;
+the `ollama` type uses Ollama's native API. Models must already be available on
+the selected backend. With host networking, a local backend can use loopback.
+
+```dotenv
+LLS_AI_BACKENDS=[{"id":"local","type":"ollama","baseUrl":"http://127.0.0.1:11434","models":["qwen3:8b"]}]
+LLS_AI_CONTEXT_ROUNDS=3
+LLS_AI_CONTEXT_BYTES=120000
+LLS_AI_ENABLED=true
+```
+
+The legacy Gemini key/model settings provide the default backend when no
+provider list is configured. Keeping that default in the UI retains a reference
+to the legacy key rather than duplicating it. Explicit backend tokens are
+independent. Reads expose only `tokenConfigured`, and changing a credential's
+provider type or destination requires replacing or explicitly clearing it.
+
+Intermediate passes request prioritized source ranges, optionally expanding to
+full files within the byte budget. Only the final report is displayed and stored;
+unresolved requests and budget limits are supplied to the final pass. These
+controls improve grounding but do not guarantee hallucination-free results.
+Disabling automatic analysis does not disable an explicitly requested manual
+analysis.
+
+## Storage and Decoder Validation
+
+`LLS_RETENTION_DAYS` prunes expired log rows. `LLS_MAX_BYTES_PER_IP` limits stored
+UTF-8 log/crash text per controller, excluding SQLite indexes and page overhead.
+Zero disables either limit. Pruning runs on startup, inserts, crash updates, and
+every five minutes; row-count limits continue to apply. Associated crash-report
+records are deleted through SQLite foreign-key cascades.
+
+Collected crash dumps and original firmware metadata are persisted separately
+from the received syslog record. Manual analysis uses that original build, not
+the controller's current firmware. Historical crashes without original metadata
+cannot be reliably re-analyzed and report that limitation.
+
+Both container recipes install native AMD64/ARM64 host binutils, including
+addr2line, nm, and objdump. Espressif archives are version-pinned and verified
+against SHA256 checksums. Each build stage assembles fixture ELFs and checks
+source context and disassembly for ESP8266, ESP32, and ESP32-C3. Repeat the smoke
+check in a built image with:
+
+```bash
+podman run --rm --entrypoint node lightinator-log-service:dev /app/scripts/test-decoder-tools.js
+```
 
 ## One-Command User Setup (No make required)
 
