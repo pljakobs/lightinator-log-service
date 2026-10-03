@@ -2,28 +2,47 @@ import { BASE, fetchJson, escHtml } from './common.js';
 
 const settingsOverlay = document.getElementById('settings-overlay');
 let _lokiCfg = {};
+let _clearLokiPassword = false;
+let _svcLoaded = false;
+
+function lokiPasswordUpdate() {
+  if (_clearLokiPassword) return { password: null };
+  const password = document.getElementById('loki-pass').value;
+  return password ? { password } : {};
+}
+
+document.getElementById('loki-clear-pass').addEventListener('click', () => {
+  _clearLokiPassword = true;
+  const input = document.getElementById('loki-pass');
+  input.value = '';
+  input.placeholder = 'Cleared on save';
+});
+document.getElementById('loki-pass').addEventListener('input', () => {
+  _clearLokiPassword = false;
+});
 
 document.getElementById('settings-btn').addEventListener('click', async () => {
   settingsOverlay.classList.add('open');
-  activateSettingsTab('loki');
-  await loadLokiConfig();
+  activateSettingsTab('svc');
+  await loadSvcSettings();
 });
 document.getElementById('settings-close').addEventListener('click', () => settingsOverlay.classList.remove('open'));
 settingsOverlay.addEventListener('click', (e) => { if (e.target === settingsOverlay) settingsOverlay.classList.remove('open'); });
 
 function activateSettingsTab(name) {
   document.querySelectorAll('.stab').forEach(b => b.classList.toggle('active', b.dataset.stab === name));
-  document.getElementById('stab-loki').style.display = name === 'loki' ? '' : 'none';
-  document.getElementById('stab-svc').style.display  = name === 'svc'  ? '' : 'none';
+  for (const tab of ['svc', 'loki', 'ai', 'github']) {
+    document.getElementById(`stab-${tab}`).style.display = tab === name ? '' : 'none';
+  }
   document.getElementById('stab-footer-loki').style.display = name === 'loki' ? 'flex' : 'none';
-  document.getElementById('stab-footer-svc').style.display  = name === 'svc'  ? 'flex' : 'none';
+  document.getElementById('stab-footer-svc').style.display  = name !== 'loki' ? 'flex' : 'none';
 }
 
 document.querySelectorAll('.stab').forEach(btn => {
   btn.addEventListener('click', async () => {
     activateSettingsTab(btn.dataset.stab);
     if (btn.dataset.stab === 'loki') await loadLokiConfig();
-    if (btn.dataset.stab === 'svc')  await loadSvcSettings();
+    if (btn.dataset.stab !== 'loki' && !_svcLoaded) await loadSvcSettings();
   });
 });
 
@@ -153,7 +172,9 @@ async function loadLokiConfig() {
     document.getElementById('loki-enabled').checked = !!cfg.enabled;
     document.getElementById('loki-url').value = cfg.url || 'http://localhost:3100';
     document.getElementById('loki-user').value = cfg.username || '';
-    document.getElementById('loki-pass').value = cfg.password || '';
+    _clearLokiPassword = false;
+    document.getElementById('loki-pass').value = '';
+    document.getElementById('loki-pass').placeholder = cfg.passwordConfigured ? 'Configured' : 'Not configured';
     document.getElementById('loki-labels').value = labelsToString(cfg.labels);
     document.getElementById('loki-batch').value = cfg.batchSize || 100;
     document.getElementById('loki-interval').value = cfg.flushIntervalMs || 5000;
@@ -176,7 +197,7 @@ document.getElementById('loki-save').addEventListener('click', async () => {
         enabled: document.getElementById('loki-enabled').checked,
         url: document.getElementById('loki-url').value.trim(),
         username: document.getElementById('loki-user').value,
-        password: document.getElementById('loki-pass').value,
+        ...lokiPasswordUpdate(),
         labels: labelsFromString(document.getElementById('loki-labels').value),
         groups: collectGroups(),
         controllers: collectControllers(),
@@ -184,7 +205,9 @@ document.getElementById('loki-save').addEventListener('click', async () => {
         flushIntervalMs: Number(document.getElementById('loki-interval').value) || 5000,
       }),
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    await loadLokiConfig();
     st.textContent = '✓ Saved'; st.style.color = '#4ec9b0';
   } catch (e) {
     st.textContent = '✗ ' + e.message; st.style.color = '#f48771';
@@ -198,7 +221,7 @@ document.getElementById('loki-test').addEventListener('click', async () => {
     const testBody = {
       url: document.getElementById('loki-url').value.trim(),
       username: document.getElementById('loki-user').value,
-      password: document.getElementById('loki-pass').value,
+      ...lokiPasswordUpdate(),
     };
     const r = await fetch(`${BASE}/api/v1/loki/test`, {
       method: 'POST',
@@ -219,36 +242,111 @@ document.getElementById('loki-test').addEventListener('click', async () => {
 
 let _svcSchema = [];
 
+function backendRowHtml(backend) {
+  return `<div class="ai-backend-row" data-backend-id="${escHtml(backend.id)}">
+    <label>API type<select data-ai-field="type">${['gemini', 'openai', 'ollama'].map(type => `<option value="${type}"${backend.type === type ? ' selected' : ''}>${type === 'openai' ? 'OpenAI-compatible' : type === 'ollama' ? 'Ollama' : 'Gemini'}</option>`).join('')}</select></label>
+    <label>Base URL<input data-ai-field="baseUrl" type="url" value="${escHtml(backend.baseUrl || '')}" /></label>
+    <label>Models<input data-ai-field="models" type="text" value="${escHtml((backend.models || []).join(', '))}" /></label>
+    <label>Token<div class="ai-token-control"><input data-ai-field="token" type="password" autocomplete="new-password" value="" placeholder="${backend.tokenConfigured ? 'Configured' : 'Not configured'}" /><button type="button" data-ai-action="clear" title="Clear backend token" aria-label="Clear backend token">&times;</button></div></label>
+    <div class="ai-backend-actions"><button type="button" data-ai-action="up" title="Move backend up" aria-label="Move backend up">&#8593;</button><button type="button" data-ai-action="down" title="Move backend down" aria-label="Move backend down">&#8595;</button><button type="button" data-ai-action="remove" title="Remove backend" aria-label="Remove backend">&times;</button></div>
+  </div>`;
+}
+
+function collectAIBackends(container) {
+  return [...container.querySelectorAll('.ai-backend-row')].map(row => {
+    const field = name => row.querySelector(`[data-ai-field="${name}"]`);
+    const token = field('token');
+    return {
+      id: row.dataset.backendId, type: field('type').value, baseUrl: field('baseUrl').value.trim(),
+      models: field('models').value.split(',').map(model => model.trim()).filter(Boolean),
+      ...(token.dataset.clearToken === 'true' ? { token: null } : token.value ? { token: token.value } : {}),
+    };
+  });
+}
+
 async function loadSvcSettings() {
   const st = document.getElementById('svc-status');
   st.textContent = 'Loading…'; st.style.color = '#888';
   try {
     const data = await fetchJson(`${BASE}/api/v1/service-config`);
     _svcSchema = data.schema || [];
-    renderSvcFields(data.schema, data.values, data.liveValues);
-    st.textContent = '';
+    renderSvcFields(data.schema || [], data.values || {}, data.liveValues || {}, data.credentialsConfigured);
+    _svcLoaded = true;
+    st.textContent = (data.configurationErrors || []).join(' ');
   } catch (e) {
     st.textContent = 'Error: ' + e.message; st.style.color = '#f48771';
   }
 }
 
-function renderSvcFields(schema, savedValues, liveValues) {
-  const container = document.getElementById('svc-fields');
+function renderSvcFields(schema, savedValues, liveValues, credentialsConfigured = {}) {
+  const container = document.createElement('div');
   const detectedHost = window.location.hostname;
   container.innerHTML = schema.map(s => {
-    const saved = savedValues[s.key] ?? '';
+    const saved = savedValues[s.key] ?? liveValues[s.key] ?? s.default ?? '';
     const live = liveValues[s.key] ?? '';
+    const secret = s.writeOnly || s.type === 'password';
+    const configured = credentialsConfigured[s.key] === true;
     let hint = `<div class="field-hint">Currently active: <code style="color:#9cdcfe">${escHtml(live || '(default)')}</code></div>`;
+    if (secret) hint = `<div class="field-hint">${configured ? 'Configured' : 'Not configured'}</div>`;
     if (s.autoDetect) {
       hint += `<div class="field-hint">Detected from your browser URL: <a href="#" class="detect-link" data-key="${escHtml(s.key)}" data-val="${escHtml(detectedHost)}" style="color:#4ec9b0">${escHtml(detectedHost)}</a></div>`;
     }
-    return `<div class="field-row" style="margin-bottom:8px">
+    let control;
+    if (s.type === 'ai-backends') {
+      let backends = [];
+      try { backends = JSON.parse(saved || '[]'); } catch {}
+      control = `<div id="svc-field-${escHtml(s.key)}" class="ai-backends"><div class="ai-backend-list">${backends.map(backendRowHtml).join('')}</div><button type="button" data-ai-action="add">Add backend</button></div>`;
+      hint = '';
+    } else if (secret) {
+      control = `<div style="display:flex;gap:6px"><input id="svc-field-${escHtml(s.key)}" type="password" value="" autocomplete="new-password" data-secret="true" placeholder="${configured ? 'Configured' : 'Not configured'}" style="min-width:0;flex:1" /><button type="button" class="svc-clear-secret" data-key="${escHtml(s.key)}" title="Clear saved credential" aria-label="Clear ${escHtml(s.label)}">&times;</button></div>`;
+    } else if (s.type === 'boolean') {
+      const checked = (savedValues[s.key] ?? liveValues[s.key] ?? s.default) === 'true';
+      control = `<input id="svc-field-${escHtml(s.key)}" type="checkbox"${checked ? ' checked' : ''} />`;
+    } else {
+      control = `<input id="svc-field-${escHtml(s.key)}" type="${['number', 'url'].includes(s.type) ? s.type : 'text'}" value="${escHtml(saved)}"${s.readOnly ? ' readonly' : ''} placeholder="${escHtml(s.placeholder || '')}" style="font-family:monospace" />`;
+    }
+    return `<div class="field-row" data-category="${escHtml(s.category || 'Service')}" style="margin-bottom:8px">
       <label>${escHtml(s.label)}</label>
-      <input id="svc-field-${escHtml(s.key)}" type="${s.type === 'number' ? 'number' : 'text'}" value="${escHtml(saved)}" placeholder="${escHtml(s.placeholder || '')}" style="font-family:monospace" />
+      ${control}
       ${hint}
       <div class="field-hint" style="color:#555">${escHtml(s.description)}</div>
     </div>`;
   }).join('');
+  container.querySelectorAll('.ai-backends').forEach(editor => {
+    editor.addEventListener('click', event => {
+      const action = event.target.closest('[data-ai-action]')?.dataset.aiAction;
+      if (!action) return;
+      const list = editor.querySelector('.ai-backend-list');
+      const row = event.target.closest('.ai-backend-row');
+      if (action === 'add') {
+        const element = document.createElement('div');
+        element.innerHTML = backendRowHtml({ id: `backend-${Date.now()}`, type: 'openai', baseUrl: 'http://127.0.0.1:11434/v1', models: [] });
+        list.appendChild(element.firstElementChild);
+      } else if (action === 'remove') row.remove();
+      else if (action === 'up' && row.previousElementSibling) list.insertBefore(row, row.previousElementSibling);
+      else if (action === 'down' && row.nextElementSibling) list.insertBefore(row.nextElementSibling, row);
+      else if (action === 'clear') {
+        const input = row.querySelector('[data-ai-field="token"]');
+        input.value = '';
+        input.dataset.clearToken = 'true';
+        input.placeholder = 'Cleared on save';
+      }
+    });
+    editor.addEventListener('input', event => {
+      if (event.target.dataset.aiField === 'token') delete event.target.dataset.clearToken;
+    });
+  });
+  container.querySelectorAll('.svc-clear-secret').forEach(button => {
+    button.addEventListener('click', () => {
+      const input = document.getElementById(`svc-field-${button.dataset.key}`);
+      input.value = '';
+      input.dataset.clearSecret = 'true';
+      input.placeholder = 'Cleared on save';
+    });
+  });
+  container.querySelectorAll('[data-secret]').forEach(input => {
+    input.addEventListener('input', () => { delete input.dataset.clearSecret; });
+  });
   container.querySelectorAll('.detect-link').forEach(a => {
     a.addEventListener('click', e => {
       e.preventDefault();
@@ -256,13 +354,29 @@ function renderSvcFields(schema, savedValues, liveValues) {
       if (input) input.value = a.dataset.val;
     });
   });
+  const targets = {
+    Service: document.getElementById('svc-fields'),
+    'AI Integration': document.getElementById('ai-fields'),
+    'GitHub Integration': document.getElementById('github-fields'),
+  };
+  for (const target of Object.values(targets)) target.replaceChildren();
+  for (const field of [...container.children]) (targets[field.dataset.category] || targets.Service).appendChild(field);
 }
 
 function collectSvcValues() {
   const values = {};
   for (const s of _svcSchema) {
+    if (s.readOnly) continue;
     const el = document.getElementById(`svc-field-${s.key}`);
-    if (el) values[s.key] = el.value.trim();
+    if (!el) continue;
+    if (s.type === 'ai-backends') {
+      values[s.key] = JSON.stringify(collectAIBackends(el));
+    } else if (el.dataset.secret) {
+      if (el.dataset.clearSecret === 'true') values[s.key] = null;
+      else if (el.value) values[s.key] = el.value;
+    } else {
+      values[s.key] = el.type === 'checkbox' ? String(el.checked) : el.value.trim();
+    }
   }
   return values;
 }
@@ -278,6 +392,7 @@ async function saveSvcSettings(andRestart) {
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    await loadSvcSettings();
     if (andRestart) {
       st.textContent = 'Saved. Restarting…'; st.style.color = '#4ec9b0';
       await fetch(`${BASE}/api/v1/service-config/restart`, { method: 'POST' });

@@ -5,25 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lightinator Log Viewer</title>
   <link rel="stylesheet" href="styles.css" />
+  <script src="/vendor/dompurify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 <header>
+  <button id="sources-toggle" class="source-menu-btn" type="button" title="Choose controller" aria-label="Choose controller" aria-controls="sources-panel" aria-expanded="false">&#9776;</button>
   <h1>&#9889; Lightinator Logs</h1>
   <input id="filter-input" type="search" placeholder="Filter messages…" />
+  <div id="header-status-controls">
   <label title="Lines of context around each search hit. -1 = show all lines (matches highlighted, rest dimmed)">Context: <input id="context-input" type="number" min="-1" max="50" value="0" style="width:46px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:3px 6px;font-family:inherit;font-size:13px;text-align:center" /></label>
-  <label><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (5s)</label>
+  <label><input type="checkbox" id="auto-refresh" checked /><span class="desktop-label">Auto-refresh (5s)</span><span class="mobile-label">Live</span></label>
   <span id="build-info" class="build-badge" role="button" tabindex="0" title="What's new">Build #--</span>
   <span id="status">Loading…</span>
   <span id="loki-dot" title="Loki: checking…" style="font-size:16px;line-height:1;color:#555;cursor:default" aria-label="Loki status">&#9679;</span>
+  </div>
   <button id="settings-btn" style="background:#3c3c3c;margin-left:4px" title="Settings">&#9881; Settings</button>
 </header>
 <main>
-  <div id="sources-panel">
-    <h2>Sources</h2>
+  <button id="sources-backdrop" type="button" aria-label="Close controller selector" tabindex="-1" hidden></button>
+  <aside id="sources-panel" aria-label="Controller sources">
+    <div class="sources-heading"><h2>Sources</h2><button id="sources-close" class="source-menu-btn" type="button" title="Close controller selector" aria-label="Close controller selector">&times;</button></div>
     <div id="sources-list"></div>
-  </div>
-  <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+  </aside>
+  <div id="workspace-panel" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
     <div class="tab-bar">
       <div class="tab active" data-tab="logs">Logs</div>
       <div class="tab" data-tab="controllers">Controllers</div>
@@ -94,8 +99,10 @@
       <button id="settings-close" style="background:none;color:#888;border:none;font-size:18px;cursor:pointer;line-height:1">&#x2715;</button>
     </div>
     <div style="display:flex;border-bottom:1px solid #3c3c3c;margin-bottom:12px;flex-shrink:0">
-      <button class="stab active" data-stab="loki">Loki</button>
-      <button class="stab" data-stab="svc">Service</button>
+      <button class="stab active" data-stab="svc">Service</button>
+      <button class="stab" data-stab="loki">Loki</button>
+      <button class="stab" data-stab="ai">AI</button>
+      <button class="stab" data-stab="github">GitHub</button>
     </div>
     <div id="stab-loki" class="stab-content">
       <div class="section-title" style="margin-top:0">Connection</div>
@@ -108,7 +115,7 @@
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="field-row"><label>Username <span style="color:#555">(optional)</span></label><input id="loki-user" type="text" autocomplete="off" /></div>
-        <div class="field-row"><label>Password <span style="color:#555">(optional)</span></label><input id="loki-pass" type="password" autocomplete="new-password" /></div>
+        <div class="field-row"><label>Password <span style="color:#555">(optional)</span></label><div style="display:flex;gap:6px"><input id="loki-pass" type="password" autocomplete="new-password" style="min-width:0;flex:1" /><button id="loki-clear-pass" type="button" title="Clear saved password" aria-label="Clear saved password">&times;</button></div></div>
       </div>
 
       <div class="section-title">Global Labels <span style="color:#555;text-transform:none;font-size:10px">applied to every log entry</span></div>
@@ -146,6 +153,8 @@
       <p style="color:#888;font-size:12px;margin:0 0 12px">Changes are written to <code style="color:#9cdcfe">data/service.env</code> and require a service restart to take effect.</p>
       <div id="svc-fields"></div>
     </div>
+    <div id="stab-ai" class="stab-content" style="display:none"><div id="ai-fields"></div></div>
+    <div id="stab-github" class="stab-content" style="display:none"><div id="github-fields"></div></div>
     <div id="stab-footer-loki" style="display:flex;align-items:center;gap:8px;margin-top:12px;flex-shrink:0;border-top:1px solid #3c3c3c;padding-top:12px">
       <button id="loki-save">Save</button>
       <button id="loki-test" style="background:#3c3c3c">Test connection</button>
