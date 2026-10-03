@@ -32,41 +32,94 @@ class LokiForwarder {
     return { ...this._status };
   }
 
-  getConfig() {
-    return { url: this.config.url, enabled: this.config.enabled };
-  }
   async loadConfig() {
     try {
       const raw = await fs.readFile(this.configPath, "utf8");
       const parsed = JSON.parse(raw);
-      this.config = { ...DEFAULT_CONFIG, ...parsed };
+      const legacyUrl = new URL(parsed.url || DEFAULT_CONFIG.url);
+      const migrated = { ...parsed };
+      const migrationNeeded = Boolean(legacyUrl.username || legacyUrl.password);
+      if (migrationNeeded) {
+        migrated.username = parsed.username || decodeURIComponent(legacyUrl.username);
+        migrated.password = parsed.password || decodeURIComponent(legacyUrl.password);
+        legacyUrl.username = "";
+        legacyUrl.password = "";
+        migrated.url = legacyUrl.href;
+      }
+      if (migrated.password != null && typeof migrated.password !== "string") throw new Error("Invalid saved password");
+      this.config = { ...this._withOverrides({ ...migrated, password: null }), password: migrated.password || "" };
+      if (migrationNeeded) {
+        const backup = this.configPath + ".pre-write-only.bak";
+        const temporary = this.configPath + `.migration-${process.pid}.tmp`;
+        try {
+          try { await fs.writeFile(backup, raw, { encoding: "utf8", mode: 0o600, flag: "wx" }); }
+          catch (error) { if (error.code !== "EEXIST") throw error; }
+          await fs.chmod(backup, 0o600);
+          await fs.writeFile(temporary, JSON.stringify(migrated, null, 2), { encoding: "utf8", mode: 0o600 });
+          await fs.rename(temporary, this.configPath);
+        } catch {
+          await fs.unlink(temporary).catch(() => {});
+          console.warn("Loki: using migrated credentials in memory; migration could not be persisted.");
+        }
+      }
       console.log(`Loki: config loaded (enabled=${this.config.enabled}, url=${this.config.url})`);
     } catch (err) {
       if (err.code !== "ENOENT") {
-        console.warn("Loki: failed to read config:", err.message);
+        console.warn("Loki: failed to load saved configuration; check the configuration file.");
       }
     }
     this._restartTimer();
   }
 
   async saveConfig(incoming) {
-    const updated = { ...DEFAULT_CONFIG, ...this.config };
-    for (const key of Object.keys(incoming)) {
-      // Sentinel value means "keep existing password"
-      if (key === "password" && incoming.password === MASK) continue;
-      updated[key] = incoming[key];
-    }
+    const updated = this._withOverrides(incoming);
+    await fs.writeFile(this.configPath, JSON.stringify(updated, null, 2), { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(this.configPath, 0o600);
     this.config = updated;
-    await fs.writeFile(this.configPath, JSON.stringify(this.config, null, 2), "utf8");
     this._restartTimer();
     console.log(`Loki: config saved (enabled=${this.config.enabled}, url=${this.config.url})`);
   }
 
   getConfig() {
     return {
-      ...this.config,
-      password: this.config.password ? MASK : "",
+      ...Object.fromEntries(Object.keys(DEFAULT_CONFIG).filter(key => key !== "password").map(key => [key, this.config[key]])),
+      passwordConfigured: Boolean(this.config.password),
     };
+  }
+
+  _withOverrides(incoming = {}) {
+    if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+      throw Object.assign(new Error("Invalid Loki settings"), { status: 400 });
+    }
+    const updated = { ...this.config };
+    for (const key of Object.keys(DEFAULT_CONFIG)) {
+      if (!Object.hasOwn(incoming, key) || incoming[key] === undefined) continue;
+      if (key === "password") {
+        if (incoming.password === "" || incoming.password === MASK) continue;
+        if (incoming.password !== null && typeof incoming.password !== "string") {
+          throw Object.assign(new Error("Invalid Loki password"), { status: 400 });
+        }
+        updated.password = incoming.password ?? "";
+      } else {
+        updated[key] = incoming[key];
+      }
+    }
+    let target;
+    try {
+      target = new URL(updated.url);
+    } catch {
+      throw Object.assign(new Error("Invalid Loki URL"), { status: 400 });
+    }
+    if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) {
+      throw Object.assign(new Error("Loki URL must use HTTP(S) without embedded credentials"), { status: 400 });
+    }
+    const destinationChanged = target.href !== new URL(this.config.url).href || updated.username !== this.config.username;
+    const passwordChanged = incoming.password === null ||
+      (typeof incoming.password === "string" && incoming.password !== "" && incoming.password !== MASK);
+    if (this.config.password && destinationChanged && !passwordChanged) {
+      throw Object.assign(new Error("Changing Loki URL or username requires replacing or clearing the password"), { status: 400 });
+    }
+    return updated;
   }
 
   _restartTimer() {
@@ -103,20 +156,20 @@ class LokiForwarder {
     }
   }
 
-  _resolveLabels(sourceIp) {
-    const global = { ...(this.config.labels || {}) };
-    const controllerCfg = (this.config.controllers || {})[sourceIp] || {};
+  _resolveLabels(sourceIp, pushConfig = this.config) {
+    const global = { ...(pushConfig.labels || {}) };
+    const controllerCfg = (pushConfig.controllers || {})[sourceIp] || {};
     const groupName = controllerCfg.group || "";
-    const groupLabels = groupName ? (this.config.groups || {})[groupName] || {} : {};
+    const groupLabels = groupName ? (pushConfig.groups || {})[groupName] || {} : {};
     const controllerLabels = controllerCfg.labels || {};
     return { ...global, ...groupLabels, ...controllerLabels };
   }
 
-  _buildPayload(records) {
+  _buildPayload(records, pushConfig = this.config) {
     const streams = new Map();
     for (const r of records) {
       const streamKey = {
-        ...this._resolveLabels(r.sourceIp || "unknown"),
+        ...this._resolveLabels(r.sourceIp || "unknown", pushConfig),
         host: r.tag || r.sourceIp || "unknown",
         source_ip: r.sourceIp || "unknown",
         tag: r.tag || "unknown",
@@ -130,16 +183,16 @@ class LokiForwarder {
     return { streams: Array.from(streams.values()) };
   }
 
-  _push(records) {
+  _push(records, pushConfig = this.config) {
     return new Promise((resolve, reject) => {
       let baseUrl;
       try {
-        baseUrl = new URL(this.config.url);
+        baseUrl = new URL(pushConfig.url);
       } catch {
-        return reject(new Error(`Invalid Loki URL: ${this.config.url}`));
+        return reject(new Error("Invalid Loki URL"));
       }
 
-      const payload = JSON.stringify(this._buildPayload(records));
+      const payload = JSON.stringify(this._buildPayload(records, pushConfig));
       const isHttps = baseUrl.protocol === "https:";
       const lib = isHttps ? https : http;
 
@@ -147,9 +200,9 @@ class LokiForwarder {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(payload),
       };
-      if (this.config.username && this.config.password) {
+      if (pushConfig.username && pushConfig.password) {
         headers["Authorization"] =
-          "Basic " + Buffer.from(`${this.config.username}:${this.config.password}`).toString("base64");
+          "Basic " + Buffer.from(`${pushConfig.username}:${pushConfig.password}`).toString("base64");
       }
 
       const req = lib.request(
@@ -162,12 +215,10 @@ class LokiForwarder {
           timeout: 10_000,
         },
         (res) => {
-          const chunks = [];
-          res.on("data", (chunk) => chunks.push(chunk));
+          res.resume();
           res.on("end", () => {
-            const body = Buffer.concat(chunks).toString("utf8").trim();
             if (res.statusCode >= 400) {
-              reject(new Error(`Loki returned HTTP ${res.statusCode}${body ? `: ${body}` : ""}`));
+              reject(new Error(`Loki returned HTTP ${res.statusCode}`));
             } else {
               resolve();
             }
@@ -186,10 +237,8 @@ class LokiForwarder {
   }
 
   async testConnection(overrideConfig = null) {
-    const savedConfig = this.config;
-    if (overrideConfig) this.config = { ...savedConfig, ...overrideConfig };
-    try {
-      await this._push([
+    const effectiveConfig = this._withOverrides(overrideConfig || {});
+    await this._push([
       {
         id: "lls-test",
         receivedAt: new Date().toISOString(),
@@ -201,10 +250,7 @@ class LokiForwarder {
         message: "Loki connection test from Lightinator Log Service",
         raw: "",
       },
-    ]);
-    } finally {
-      if (overrideConfig) this.config = savedConfig;
-    }
+    ], effectiveConfig);
   }
 
   stop() {
