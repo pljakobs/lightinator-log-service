@@ -1,7 +1,8 @@
-import { BASE, fetchJson, escHtml, timeAgo, severityClass, fmtLogTime, ansi_up, activateTab } from './common.js';
+import { BASE, fetchJson, escHtml, timeAgo, severityClass, fmtLogTime, ansi_up, activateTab, setSourceDrawer } from './common.js';
 import { handleCrashBtnClick } from './crash.js';
 
 let currentIp = null;
+let sourceGeneration = 0;
 let nextBefore = null;
 // cursor for newer rows; null = window ends at the live tail
 let nextAfter = null;
@@ -53,7 +54,9 @@ function renderSources(items) {
     return;
   }
   for (const src of items) {
-    const el = document.createElement('div');
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.dataset.ip = src.ip;
     el.className = 'source-item' + (src.ip === currentIp ? ' active' : '');
     const label = src.name && src.name !== src.ip ? `<span class="source-ip">${escHtml(src.name)}</span><span class="source-meta">${escHtml(src.ip)}</span>` :
       `<span class="source-ip">${escHtml(src.ip)}</span>`;
@@ -65,8 +68,10 @@ function renderSources(items) {
 }
 
 async function selectSource(ip) {
+  setSourceDrawer(false);
   activateTab('logs');
   currentIp = ip;
+  sourceGeneration++;
   allRows = [];
   nextBefore = null;
   nextAfter = null;
@@ -74,7 +79,7 @@ async function selectSource(ip) {
   loadOlderBtn.style.display = 'none';
   purgeBtn.style.display = '';
   document.querySelectorAll('.source-item').forEach(el => {
-    el.classList.toggle('active', el.querySelector('.source-ip').textContent === ip);
+    el.classList.toggle('active', el.dataset.ip === ip);
   });
   await fetchLogs();
 }
@@ -84,27 +89,56 @@ async function selectSource(ip) {
 async function fetchLogs({ before = null, from = null, mode = 'tail' } = {}) {
   if (!currentIp) return;
   if (mode === 'tail' && nextAfter != null) return;
+  if (mode === 'jump') sourceGeneration++;
+  const requestIp = currentIp;
+  const generation = sourceGeneration;
   try {
-    let url = `${BASE}/api/v1/logs?ip=${encodeURIComponent(currentIp)}&limit=200`;
+    const baseUrl = `${BASE}/api/v1/logs?ip=${encodeURIComponent(requestIp)}&limit=200`;
+    let url = baseUrl;
     if (from != null) url += `&from=${from}`;
     else if (before != null) url += `&before=${before}`;
     const data = await fetchJson(url);
+    if (generation !== sourceGeneration) return;
+    if (mode === 'tail' && allRows.length && data.items.length) {
+      const lastLoadedId = Math.max(...allRows.map(row => row.id));
+      const targetId = data.items[data.items.length - 1].id;
+      let cursor = lastLoadedId + 1;
+      while (cursor <= targetId) {
+        const page = await fetchJson(`${baseUrl}&from=${cursor}`);
+        if (generation !== sourceGeneration) return;
+        data.items.push(...page.items);
+        if (page.nextAfter == null || page.nextAfter <= cursor) break;
+        cursor = page.nextAfter;
+      }
+    }
+    if (mode === 'tail') {
+      const receivedIds = new Set(data.items.map(row => row.id));
+      const pending = allRows.filter(row => row.crashDecode?.includes('decoding in progress') && !receivedIds.has(row.id));
+      const updated = await Promise.all(pending.map(async row => {
+        try {
+          const result = await fetchJson(`${BASE}/api/v1/logs/${row.id}/crash-decode`);
+          return { ...row, crashDecode: result.crashDecode };
+        } catch { return row; }
+      }));
+      if (generation !== sourceGeneration) return;
+      data.items.push(...updated);
+    }
 
-    const existingIds = new Set(allRows.map(r => r.id));
-    const newItems = data.items.filter(r => !existingIds.has(r.id));
+    const merged = new Map(allRows.map(row => [row.id, row]));
+    for (const row of data.items) merged.set(row.id, { ...merged.get(row.id), ...row });
     if (mode === 'jump') {
       allRows = data.items;
       nextBefore = data.nextBefore;
       nextAfter = data.nextAfter;
     } else if (mode === 'older') {
-      allRows = [...newItems, ...allRows];
+      allRows = [...merged.values()].sort((first, second) => first.id - second.id);
       nextBefore = data.nextBefore;
     } else if (mode === 'newer') {
-      allRows = [...allRows, ...newItems];
+      allRows = [...merged.values()].sort((first, second) => first.id - second.id);
       nextAfter = data.nextAfter;
     } else {
       const wasEmpty = allRows.length === 0;
-      allRows = [...allRows, ...newItems];
+      allRows = [...merged.values()].sort((first, second) => first.id - second.id);
       if (wasEmpty) nextBefore = data.nextBefore;
       nextAfter = null;
     }
@@ -116,7 +150,8 @@ async function fetchLogs({ before = null, from = null, mode = 'tail' } = {}) {
     renderLogs(mode === 'tail' ? 'keep' : mode === 'jump' ? 'top' : mode);
     updateBootNavButtons();
   } catch (e) {
-    logList.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+    if (generation !== sourceGeneration) return;
+    logList.innerHTML = `<div class="empty">Error: ${escHtml(e.message)}</div>`;
   }
 }
 

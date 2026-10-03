@@ -78,3 +78,20 @@ export function activateTab(name) {
 export function currentTab() {
   return document.querySelector('.tab.active')?.dataset.tab || 'logs';
 }
+
+export function setSourceDrawer(open) {
+  const panel = document.getElementById('sources-panel');
+  const toggle = document.getElementById('sources-toggle');
+  const mobile = window.matchMedia('(max-width: 900px)').matches;
+  const visible = mobile && open;
+  const wasOpen = panel.classList.contains('drawer-open');
+  panel.classList.toggle('drawer-open', visible);
+  panel.inert = mobile && !visible;
+  if (mobile && !visible) panel.setAttribute('aria-hidden', 'true');
+  else panel.removeAttribute('aria-hidden');
+  toggle.setAttribute('aria-expanded', String(visible));
+  document.getElementById('sources-backdrop').hidden = !visible;
+  document.getElementById('workspace-panel').inert = visible;
+  if (visible) document.getElementById('sources-close').focus();
+  else if (mobile && wasOpen) toggle.focus();
+}

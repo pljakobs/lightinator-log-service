@@ -170,3 +170,226 @@ test("build badge opens the what's-new modal; Escape closes it", async ({ page }
   await page.locator("#changelog-close-btn").click();
   await expect(overlay).not.toHaveClass(/open/);
 });
+
+test("HTML escaping prevents attribute injection and unsafe link protocols", async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const { escHtml, safeHttpUrl } = await import('/js/common.js');
+    const value = `ordinary" data-injected="yes'`;
+    const container = document.createElement('div');
+    container.innerHTML = `<input value="${escHtml(value)}" />`;
+    return {
+      value: container.firstChild.value,
+      injected: container.firstChild.hasAttribute('data-injected'),
+      unsafeUrl: safeHttpUrl('javascript:alert(1)'),
+      credentialUrl: safeHttpUrl('https://user:password@example.test/'),
+      safeUrl: safeHttpUrl('https://example.test/issues/1'),
+    };
+  });
+  expect(result).toEqual({ value: `ordinary" data-injected="yes'`, injected: false, unsafeUrl: '', credentialUrl: '', safeUrl: 'https://example.test/issues/1' });
+});
+
+test("controller values cannot inject inline event handlers", async ({ page }) => {
+  const ip = `127.0.0.1');window.__injected=true;//`;
+  await page.route('**/api/v1/controllers', route => route.fulfill({ json: { items: [{ ip, name: 'review', groups: [], loggingEnabled: true }] } }));
+  await page.locator('.tab[data-tab="controllers"]').click();
+  const toggle = page.locator('#ctrl-grid .toggle-btn');
+  await expect(toggle).toHaveCount(1);
+  await expect(toggle).toHaveAttribute('data-ip', ip);
+  expect(await toggle.getAttribute('onclick')).toBeNull();
+});
+
+test("crash Markdown sanitizes injected handlers and unsafe links", async ({ page }) => {
+  await page.route('**/invalid', route => route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') }));
+  await page.evaluate(async () => {
+    const { openCrashModal } = await import('/js/crash.js');
+    openCrashModal({ crashDecode: 'dump\n--- AI Analysis ---\n**Safe analysis**\n<img src="invalid" onerror="window.__injected=true">\n[unsafe](javascript:alert(1))' });
+  });
+  const body = page.locator('#crash-modal-body');
+  await expect(body.locator('strong')).toHaveText('Safe analysis');
+  await expect(body.locator('[onerror], script, a[href^="javascript:"]')).toHaveCount(0);
+  expect(await page.evaluate(() => Boolean(window.__injected))).toBe(false);
+  await page.evaluate(async () => {
+    delete window.DOMPurify;
+    const { openCrashModal } = await import('/js/crash.js');
+    openCrashModal({ crashDecode: '<img src="invalid" onerror="window.__injected=true">' });
+  });
+  await expect(body.locator('img')).toHaveCount(0);
+  await expect(body).toHaveText('<img src="invalid" onerror="window.__injected=true">');
+});
+
+test("credential settings are write-only and support replacement, preservation, and clearing", async ({ page }) => {
+  const save = await page.request.post(srv.baseUrl + '/api/v1/service-config', {
+    data: { values: { LLS_GITHUB_TOKEN: 'browser-private-token', GEMINI_API_KEY: 'browser-private-key' } },
+  });
+  expect(save.ok()).toBe(true);
+  await page.locator('#settings-btn').click();
+  await page.locator('.stab[data-stab="github"]').click();
+  const github = page.locator('#svc-field-LLS_GITHUB_TOKEN');
+  const gemini = page.locator('#svc-field-GEMINI_API_KEY');
+  await expect(github).toHaveAttribute('type', 'password');
+  await expect(github).toHaveValue('');
+  await expect(github).toHaveAttribute('placeholder', 'Configured');
+  await expect(gemini).toHaveValue('');
+  expect(await page.locator('#svc-fields').innerHTML()).not.toContain('browser-private');
+  await page.locator('#svc-save').click();
+  await expect(page.locator('#svc-status')).toContainText('Saved');
+  let settings = await (await page.request.get(srv.baseUrl + '/api/v1/service-config')).json();
+  expect(settings.credentialsConfigured.LLS_GITHUB_TOKEN).toBe(true);
+  await github.fill('replacement-private-token');
+  await page.locator('#svc-save').click();
+  await expect(github).toHaveValue('');
+  await page.locator('.svc-clear-secret[data-key="LLS_GITHUB_TOKEN"]').click();
+  await page.locator('#svc-save').click();
+  await expect(github).toHaveAttribute('placeholder', 'Not configured');
+  settings = await (await page.request.get(srv.baseUrl + '/api/v1/service-config')).json();
+  expect(settings.credentialsConfigured).toEqual({ LLS_GITHUB_TOKEN: false, GEMINI_API_KEY: true });
+  await page.request.post(srv.baseUrl + '/api/v1/service-config', { data: { values: { GEMINI_API_KEY: null } } });
+
+  expect((await page.request.put(srv.baseUrl + '/api/v1/loki/config', {
+    data: { username: 'user', password: 'browser-private-password' },
+  })).ok()).toBe(true);
+  await page.locator('.stab[data-stab="loki"]').click();
+  const password = page.locator('#loki-pass');
+  await expect(password).toHaveValue('');
+  await expect(password).toHaveAttribute('placeholder', 'Configured');
+  await page.locator('#loki-save').click();
+  await expect(page.locator('#loki-status')).toContainText('Saved');
+  expect((await (await page.request.get(srv.baseUrl + '/api/v1/loki/config')).json()).passwordConfigured).toBe(true);
+  await page.locator('#loki-clear-pass').click();
+  await page.locator('#loki-save').click();
+  await expect(password).toHaveAttribute('placeholder', 'Not configured');
+});
+
+test("live refresh updates existing crashes and catches up bursts beyond 200 rows", async ({ page }) => {
+  let phase = 0;
+  const row = id => ({ id, sourceIp: '192.0.2.10', message: `entry ${id}`, receivedAt: new Date().toISOString(), boot: 1 });
+  await page.route('**/api/v1/logs?*', async route => {
+    const params = new URL(route.request().url()).searchParams;
+    if (phase < 2) {
+      await route.fulfill({ json: { items: [{ ...row(1), crashDecode: phase === 0 ? '[decoding in progress]' : 'finished decode' }], total: 1, nextBefore: null, nextAfter: null } });
+      return;
+    }
+    const start = Number(params.get('from')) || 202;
+    const stop = Math.min(401, start + 199);
+    await route.fulfill({ json: { items: Array.from({ length: stop - start + 1 }, (_, index) => row(start + index)), total: 401, nextBefore: start > 1 ? start : null, nextAfter: stop < 401 ? stop + 1 : null } });
+  });
+  await page.evaluate(async () => {
+    const checkbox = document.getElementById('auto-refresh');
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event('change'));
+    await (await import('/js/logs.js')).selectSource('192.0.2.10');
+  });
+  phase = 1;
+  await page.evaluate(async () => { await (await import('/js/logs.js')).fetchLogs(); });
+  expect(await page.evaluate(async () => (await import('/js/logs.js')).getRows()[0].crashDecode)).toBe('finished decode');
+  phase = 2;
+  await page.evaluate(async () => { await (await import('/js/logs.js')).fetchLogs(); });
+  const ids = await page.evaluate(async () => (await import('/js/logs.js')).getRows().map(record => record.id));
+  expect(ids).toEqual(Array.from({ length: 401 }, (_, index) => index + 1));
+  await expect(page.locator('#pager-info')).toHaveText('All 401 entries');
+});
+
+test("AI provider settings edit fallback order and preserve write-only backend tokens", async ({ page }) => {
+  const initial = [{ id: 'local', type: 'ollama', baseUrl: 'http://127.0.0.1:11434', models: ['local-model'], token: 'provider-private-token' }];
+  expect((await page.request.post(srv.baseUrl + '/api/v1/service-config', { data: { values: { LLS_AI_BACKENDS: JSON.stringify(initial) } } })).ok()).toBe(true);
+  await page.locator('#settings-btn').click();
+  await page.locator('.stab[data-stab="ai"]').click();
+  const editor = page.locator('#svc-field-LLS_AI_BACKENDS');
+  await expect(editor.locator('.ai-backend-row')).toHaveCount(1);
+  await expect(editor.locator('[data-ai-field="token"]')).toHaveValue('');
+  await expect(editor.locator('[data-ai-field="token"]')).toHaveAttribute('placeholder', 'Configured');
+  expect(await editor.innerHTML()).not.toContain('provider-private-token');
+  await editor.locator('[data-ai-action="add"]').click();
+  const added = editor.locator('.ai-backend-row').last();
+  await added.locator('[data-ai-field="models"]').fill('first-model, second-model');
+  await added.locator('[data-ai-action="up"]').click();
+  await page.locator('#svc-field-LLS_AI_CONTEXT_ROUNDS').fill('5');
+  await page.locator('#svc-save').click();
+  await expect(page.locator('#svc-status')).toContainText('Saved');
+  let settings = await (await page.request.get(srv.baseUrl + '/api/v1/service-config')).json();
+  let backends = JSON.parse(settings.values.LLS_AI_BACKENDS);
+  expect(backends.map(backend => backend.type)).toEqual(['openai', 'ollama']);
+  expect(backends[0].models).toEqual(['first-model', 'second-model']);
+  expect(backends[1].tokenConfigured).toBe(true);
+  expect(settings.values.LLS_AI_CONTEXT_ROUNDS).toBe('5');
+  await editor.locator('.ai-backend-row').last().locator('[data-ai-action="clear"]').click();
+  await page.locator('#svc-save').click();
+  await expect(editor.locator('.ai-backend-row').last().locator('[data-ai-field="token"]')).toHaveAttribute('placeholder', 'Not configured');
+  settings = await (await page.request.get(srv.baseUrl + '/api/v1/service-config')).json();
+  backends = JSON.parse(settings.values.LLS_AI_BACKENDS);
+  expect(backends[1].tokenConfigured).toBe(false);
+  expect(JSON.stringify(settings)).not.toContain('provider-private-token');
+});
+
+test("settings open populated Service first with Loki second and dedicated AI and GitHub tabs", async ({ page }) => {
+  await page.locator('#settings-btn').click();
+  await expect(page.locator('.stab')).toHaveText(['Service', 'Loki', 'AI', 'GitHub']);
+  await expect(page.locator('.stab[data-stab="svc"]')).toHaveClass(/active/);
+  await expect(page.locator('#svc-field-LLS_HTTP_PORT')).toBeVisible();
+  await expect(page.locator('#svc-fields .field-row')).not.toHaveCount(0);
+  const settings = await (await page.request.get(srv.baseUrl + '/api/v1/service-config')).json();
+  expect(JSON.stringify(settings)).not.toContain('/tmp/lls-e2e-');
+  await expect(page.locator('#svc-field-LLS_DB_PATH, #svc-field-LLS_SERVICE_ENV, #svc-field-LLS_DATA_DIR')).toHaveCount(0);
+  for (const field of settings.schema) {
+    const control = page.locator(`#svc-field-${field.key}`);
+    await expect(control).toHaveCount(1);
+    if (field.type === 'ai-backends') await expect(control).toHaveClass(/ai-backends/);
+    else await expect(control).toHaveAttribute('type', field.type === 'boolean' ? 'checkbox' : field.type);
+    if (field.readOnly) await expect(control).toHaveAttribute('readonly', '');
+  }
+  await page.locator('#svc-field-LLS_RETENTION_DAYS').fill('9');
+  await page.locator('.stab[data-stab="ai"]').click();
+  await expect(page.locator('#svc-field-LLS_AI_ENABLED')).toHaveAttribute('type', 'checkbox');
+  await expect(page.locator('#svc-field-LLS_AI_BACKENDS')).toBeVisible();
+  await page.locator('.stab[data-stab="github"]').click();
+  await expect(page.locator('#svc-field-LLS_GITHUB_TOKEN')).toHaveAttribute('type', 'password');
+  await expect(page.locator('#svc-field-LLS_AUTO_CREATE_ISSUES')).toHaveAttribute('type', 'checkbox');
+  await page.locator('.stab[data-stab="svc"]').click();
+  await expect(page.locator('#svc-field-LLS_RETENTION_DAYS')).toHaveValue('9');
+});
+
+for (const width of [320, 390, 768]) {
+  test(`mobile views fit at ${width}px with an accessible source drawer`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const mobile = width <= 900;
+    await page.route('**/api/v1/controllers', route => route.fulfill({ json: { items: [{ ip: '192.0.2.25', name: 'Long controller name for a small display', hostname: 'controller-with-a-long-hostname.local', groups: [{ name: 'Long controller group name' }], gitVersion: 'V1.0.0-123-feature-with-a-long-branch-name', reachable: true, loggingEnabled: true }] } }));
+    await page.route('**/api/v1/crashes?*', route => route.fulfill({ json: { total: 1, items: [{ id: 1, ip: '192.0.2.25', boot: 2, receivedAt: new Date().toISOString(), summary: 'A long decoded crash summary containing a firmware source location and exception details' }] } }));
+    const menu = page.locator('#sources-toggle');
+    if (mobile) {
+      await expect(menu).toBeVisible();
+      await expect(menu).toHaveAttribute('aria-expanded', 'false');
+      await menu.click();
+      await expect(page.locator('#sources-panel')).toHaveClass(/drawer-open/);
+      await expect(page.locator('#sources-close')).toBeFocused();
+    }
+    await page.locator('.source-item').first().click();
+    if (mobile) await expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('.log-row')).toHaveCount(15);
+    const fits = selector => page.locator(selector).evaluateAll(elements => elements.filter(element => element.getBoundingClientRect().width > 0).every(element => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.left >= -1 && bounds.right <= innerWidth + 1;
+    }));
+    expect(await fits('#workspace-panel, #log-toolbar, #log-toolbar button, #log-toolbar label, .log-row')).toBe(true);
+    await page.locator('.tab[data-tab="controllers"]').click();
+    await expect(page.locator('.ctrl-card')).toHaveCount(1);
+    expect(await fits('#controllers-panel, .ctrl-card, .ctrl-actions, .ctrl-log-received')).toBe(true);
+    await page.locator('.tab[data-tab="crashes"]').click();
+    await expect(page.locator('.crash-row')).toHaveCount(1);
+    expect(await fits('.crash-row, .crash-row .col-actions')).toBe(true);
+    await page.evaluate(async () => {
+      const { openCrashModal } = await import('/js/crash.js');
+      openCrashModal({ id: 1, sourceIp: '192.0.2.1', crashDecode: 'PC=0x40201000\n\n--- AI Analysis ---\n## Final analysis\nA long source location /build/source/components/controller/long_filename.cpp:123\n```cpp\nvoid long_function_name() { call_with_long_arguments(); }\n```' });
+    });
+    expect(await fits('#crash-modal, #crash-modal-header, #crash-modal-body')).toBe(true);
+    await expect(page.locator('#crash-close-btn')).toBeVisible();
+    await page.locator('#crash-raw-toggle').check();
+    await expect(page.locator('#crash-modal-body')).toHaveClass(/raw-text/);
+    await page.locator('#crash-close-btn').click();
+    if (mobile) {
+      await menu.click();
+      await page.keyboard.press('Escape');
+      await expect(menu).toHaveAttribute('aria-expanded', 'false');
+      await expect(menu).toBeFocused();
+    }
+  });
+}

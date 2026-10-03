@@ -258,3 +258,72 @@ mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; p
 .cl-sha { color: #666; flex-shrink: 0; }
 .cl-subject { color: #d4d4d4; word-break: break-word; }
 .cl-none { color: #666; font-size: 12px; padding: 4px 0; font-style: italic; }
+
+@media (max-width: 900px) {
+  body { height: 100dvh; overflow: hidden; }
+  header { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 8px; padding: 8px; }
+  header h1 { grid-column: 2; grid-row: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+  #sources-toggle { display: block; grid-column: 1; grid-row: 1; width: 36px; height: 36px; padding: 0; font-size: 19px; }
+  #settings-btn { grid-column: 3; grid-row: 1; margin-left: 0 !important; min-height: 36px; padding: 4px 8px; }
+  #filter-input { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; min-height: 34px; }
+  #header-status-controls { display: flex; grid-column: 1 / -1; grid-row: 3; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #header-status-controls label { white-space: nowrap; }
+  #header-status-controls #build-info { margin-left: auto; }
+  #status, .desktop-label { display: none; }
+  .mobile-label { display: inline; }
+  #sources-panel { position: fixed; inset: 0 auto 0 0; width: min(300px, 88vw); z-index: 80; transform: translateX(-100%); transition: transform 160ms ease; }
+  #sources-panel.drawer-open { transform: translateX(0); }
+  #sources-close { display: block; width: 40px; height: 40px; margin: 8px; font-size: 22px; padding: 0; }
+  #sources-backdrop:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 70; border-radius: 0; background: rgba(0, 0, 0, 0.55); }
+  .source-item { min-height: 48px; padding: 10px 12px; }
+  .tab-bar { flex-shrink: 0; }
+  .tab { flex: 1; min-width: 0; padding: 10px 6px; text-align: center; }
+  #log-toolbar { flex-wrap: wrap; gap: 6px; padding: 8px; flex-shrink: 0; }
+  #log-toolbar button { min-height: 32px; }
+  #log-title { flex: 1 1 140px; overflow-wrap: anywhere; min-width: 0; }
+  #log-count { flex: 1 1 auto; }
+  #log-toolbar label { flex-wrap: wrap; font-size: 11px !important; }
+  #log-header-row { display: none; }
+  .log-row:not(.raw-row) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; gap: 3px 8px; padding: 7px 8px; }
+  .log-row > span { min-width: 0; }
+  .log-row .col-time { grid-column: 1; grid-row: 1; }
+  .log-row .col-tag { grid-column: 2; grid-row: 1; text-align: right; }
+  .log-row .col-app { grid-column: 1 / -1; grid-row: 2; font-size: 11px; }
+  .log-row .col-msg { grid-column: 1 / -1; grid-row: 3; overflow-wrap: anywhere; word-break: normal; line-height: 1.5; }
+  #boot-picker { min-width: 0; width: 100%; max-height: 60dvh; }
+  .boot-item, .boot-hdr { grid-template-columns: 42px minmax(0, 1fr) minmax(0, 1fr) 40px 20px; gap: 5px; padding: 6px 8px; white-space: normal; overflow-wrap: anywhere; }
+  #pager { flex-wrap: wrap; gap: 6px; padding: 7px 8px; flex-shrink: 0; }
+  #pager-info { min-width: 0; overflow-wrap: anywhere; }
+  #controllers-panel { padding: 8px; }
+  .ctrl-grid { grid-template-columns: minmax(0, 1fr); }
+  .ctrl-card { min-width: 0; }
+  .ctrl-name a, .ctrl-ip, .ctrl-fw, .ctrl-groups { min-width: 0; overflow-wrap: anywhere; }
+  .ctrl-actions { flex-wrap: wrap; }
+  .ctrl-actions button, .ctrl-remove-btn { min-height: 34px; }
+  .ctrl-log-received { flex-basis: 100%; overflow-wrap: anywhere; }
+  #crashes-toolbar, #search-toolbar { padding: 8px; gap: 6px; }
+  #crashes-toolbar label { min-width: 0; flex-wrap: wrap; }
+  #crashes-ip-sel { max-width: 100%; }
+  .crash-hdr { display: none; }
+  .crash-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 8px; }
+  .crash-row .col-time { grid-column: 1; grid-row: 1; }
+  .crash-row .col-ip { grid-column: 1; grid-row: 2; }
+  .crash-row .col-boot { grid-column: 2; grid-row: 1; }
+  .crash-row .col-summary { grid-column: 1 / -1; grid-row: 3; white-space: normal; overflow-wrap: anywhere; }
+  .crash-row .col-actions { grid-column: 1 / -1; grid-row: 4; flex-wrap: wrap; }
+  .crash-row .col-actions button { min-height: 34px; }
+  #crash-modal { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border: 0; border-radius: 0; }
+  #crash-modal-header { position: relative; padding: 10px 46px 10px 10px; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+  #crash-modal-header > div { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+  #crash-modal-header > div:last-child { width: 100%; }
+  #crash-modal-meta { overflow-wrap: anywhere; }
+  #crash-close-btn { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; padding: 0; }
+  #crash-modal-body { min-width: 0; padding: 12px 10px; overflow-wrap: anywhere; word-break: normal; }
+  #crash-modal-body pre { max-width: 100%; overflow-x: auto; white-space: pre; word-break: normal; }
+  #crash-modal-body table { display: block; max-width: 100%; overflow-x: auto; }
+  #crash-modal-body img { max-width: 100%; height: auto; }
+  #settings-panel, #changelog-modal { max-width: 100%; width: 100%; max-height: 100dvh; border-radius: 0; }
+  #settings-panel { padding: 12px; }
+  #changelog-header { flex-wrap: wrap; gap: 6px; }
+}
+@media (prefers-reduced-motion: reduce) { #sources-panel { transition: none; } }
