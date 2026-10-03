@@ -92,6 +92,33 @@ environment settings. They are not returned by the public settings/service-info
 APIs and cannot be changed through the UI. Existing deployment paths are retained
 when user-facing settings are saved.
 
+## Controller Firmware Updates
+
+Single-controller ROM updates are available from each controller card. Enable
+`LLS_FIRMWARE_UPDATES_ENABLED=true` in Service settings and restart; updates are
+disabled by default. `LLS_FIRMWARE_API_URL` defaults to
+`https://lightinator.de/api` and uses its SoC/branch/build-type/version catalogue.
+Select a version, review the target, and explicitly confirm installation.
+
+The optional OTA password is used once with the controller's `admin` Basic-auth
+account, never saved or returned by the service, and cleared from the form.
+Commands are not automatically resent after an ambiguous network failure.
+Disconnects are not success: the controller must report the selected firmware
+version, SoC, and build type before the job is marked installed. Monitoring
+continues when the dialog is closed; recent jobs are kept in memory, not across
+service restarts.
+
+This first implementation updates firmware ROMs only, not webapp/filesystem
+artifacts or entire swarms. It is isolated from Vue/Python UIs for later shared
+client extraction. Supported legacy Lightinator devices lack explicit firmware
+identity; devices that advertise a different firmware ID are refused.
+
+OTA is a destructive operation. Restrict access using a trusted network or an
+authenticated reverse proxy before enabling it; the opt-in and same-origin
+browser checks do not replace service authentication. Device API traffic uses
+the controller's existing HTTP protocol, so keep OTA credentials on a trusted
+network. Tests use local controller/catalogue fixtures and do not flash devices.
+
 ## Configuration Upgrades
 
 Existing GitHub tokens, Gemini key aliases, selected Gemini models, provider
