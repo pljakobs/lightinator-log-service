@@ -15,6 +15,11 @@ const Database = require("better-sqlite3");
 const fs = require("fs");
 const path = require("path");
 
+function logTextBytes(prefix = "") {
+  return ["message", "raw", "crash_decode", "crash_raw"]
+    .map(column => `COALESCE(length(CAST(${prefix}${column} AS BLOB)), 0)`).join(" + ");
+}
+
 /**
  * Open the application database, running DDL if this is a fresh file.
  *
@@ -115,9 +120,35 @@ function openDatabase(dbPath) {
 
   db.exec("CREATE INDEX IF NOT EXISTS idx_logs_ip_boot ON logs (ip, boot)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_logs_received_at ON logs (received_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_logs_ip_received_at ON logs (ip, received_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_logs_crash ON logs (crash_decode) WHERE crash_decode IS NOT NULL");
+
+  db.transaction(() => {
+    const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'log_usage'").get();
+    db.exec(`CREATE TABLE IF NOT EXISTS log_usage (
+      ip TEXT PRIMARY KEY, row_count INTEGER NOT NULL, text_bytes INTEGER NOT NULL
+    )`);
+    if (!exists) db.exec(`INSERT INTO log_usage (ip, row_count, text_bytes)
+      SELECT ip, COUNT(*), SUM(${logTextBytes()}) FROM logs GROUP BY ip`);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS logs_usage_insert AFTER INSERT ON logs BEGIN
+        INSERT INTO log_usage (ip, row_count, text_bytes) VALUES (NEW.ip, 1, ${logTextBytes("NEW.")})
+        ON CONFLICT(ip) DO UPDATE SET row_count = row_count + 1, text_bytes = text_bytes + excluded.text_bytes;
+      END;
+      CREATE TRIGGER IF NOT EXISTS logs_usage_delete AFTER DELETE ON logs BEGIN
+        UPDATE log_usage SET row_count = row_count - 1, text_bytes = text_bytes - (${logTextBytes("OLD.")}) WHERE ip = OLD.ip;
+        DELETE FROM log_usage WHERE ip = OLD.ip AND row_count = 0;
+      END;
+      CREATE TRIGGER IF NOT EXISTS logs_usage_update AFTER UPDATE ON logs BEGIN
+        UPDATE log_usage SET row_count = row_count - 1, text_bytes = text_bytes - (${logTextBytes("OLD.")}) WHERE ip = OLD.ip;
+        INSERT INTO log_usage (ip, row_count, text_bytes) VALUES (NEW.ip, 1, ${logTextBytes("NEW.")})
+        ON CONFLICT(ip) DO UPDATE SET row_count = row_count + 1, text_bytes = text_bytes + excluded.text_bytes;
+        DELETE FROM log_usage WHERE ip = OLD.ip AND row_count = 0;
+      END;
+    `);
+  }).immediate();
 
   return db;
 }
 
-module.exports = { openDatabase };
+module.exports = { openDatabase, logTextBytes };

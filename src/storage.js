@@ -1,5 +1,6 @@
 const fs = require("fs/promises");
 const path = require("path");
+const { logTextBytes } = require("./db");
 
 // Placeholder text written by CrashDecoder while a dump is being decoded.
 const CRASH_PENDING_MARKER = "decoding in progress";
@@ -42,18 +43,12 @@ class LogStorage {
     this.maxRowsPerIp = maxRowsPerIp;
     this.retentionDays = retentionDays;
     this.maxBytesPerIp = maxBytesPerIp;
-    this._stmtPruneAge = db.prepare("DELETE FROM logs WHERE received_at < ? AND (? IS NULL OR ip = ?)");
-    this._stmtPruneBytes = db.prepare(`
-      DELETE FROM logs WHERE id IN (
-        SELECT id FROM (
-          SELECT id, SUM(
-            COALESCE(length(CAST(message AS BLOB)), 0) + COALESCE(length(CAST(raw AS BLOB)), 0) +
-            COALESCE(length(CAST(crash_decode AS BLOB)), 0) + COALESCE(length(CAST(crash_raw AS BLOB)), 0)
-          ) OVER (PARTITION BY ip ORDER BY id DESC) AS stored_bytes
-          FROM logs WHERE (? IS NULL OR ip = ?)
-        ) WHERE stored_bytes > ?
-      )
-    `);
+    this._stmtPruneAge = db.prepare("DELETE FROM logs WHERE received_at < ?");
+    this._stmtPruneAgeIp = db.prepare("DELETE FROM logs WHERE ip = ? AND received_at < ?");
+    this._stmtUsage = db.prepare("SELECT row_count AS cnt, text_bytes AS bytes FROM log_usage WHERE ip = ?");
+    this._stmtOldest = db.prepare(`SELECT id, ${logTextBytes()} AS bytes FROM logs WHERE ip = ? ORDER BY id ASC LIMIT 128`);
+    this._stmtDeleteId = db.prepare("DELETE FROM logs WHERE id = ?");
+    this._stmtOverBudget = db.prepare("SELECT ip FROM log_usage WHERE text_bytes > ?");
 
     // Pre-compile frequently used statements (better-sqlite3 is synchronous)
     this._stmtInsert = db.prepare(`
@@ -69,12 +64,10 @@ class LogStorage {
       SELECT crash_decode FROM logs WHERE id = ?
     `);
     this._stmtTrimCheck = db.prepare(
-      "SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?",
+      "SELECT row_count AS cnt FROM log_usage WHERE ip = ?",
     );
     this._stmtTrim = db.prepare(`
-      DELETE FROM logs WHERE ip = ? AND id < (
-        SELECT id FROM logs WHERE ip = ? ORDER BY id DESC LIMIT 1 OFFSET ?
-      )
+      DELETE FROM logs WHERE id IN (SELECT id FROM logs WHERE ip = ? ORDER BY id ASC LIMIT ?)
     `);
     this._stmtLastBoot = db.prepare(
       "SELECT boot FROM logs WHERE ip = ? AND boot IS NOT NULL ORDER BY id DESC LIMIT 1",
@@ -240,7 +233,7 @@ class LogStorage {
     // are deleted, leaving exactly maxRowsPerIp rows.
     const { cnt } = this._stmtTrimCheck.get(ip);
     if (cnt > this.maxRowsPerIp) {
-      this._stmtTrim.run(ip, ip, this.maxRowsPerIp - 1);
+      this._stmtTrim.run(ip, cnt - this.maxRowsPerIp);
     }
     this.prune({ ip });
 
@@ -265,9 +258,23 @@ class LogStorage {
       let deleted = 0;
       if (this.retentionDays > 0) {
         const cutoff = new Date(now - this.retentionDays * 86_400_000).toISOString();
-        deleted += this._stmtPruneAge.run(cutoff, ip, ip).changes;
+        deleted += ip == null ? this._stmtPruneAge.run(cutoff).changes : this._stmtPruneAgeIp.run(ip, cutoff).changes;
       }
-      if (this.maxBytesPerIp > 0) deleted += this._stmtPruneBytes.run(ip, ip, this.maxBytesPerIp).changes;
+      if (this.maxBytesPerIp > 0) {
+        const sources = ip == null ? this._stmtOverBudget.all(this.maxBytesPerIp).map(source => source.ip) : [ip];
+        for (const source of sources) {
+          let bytes = this._stmtUsage.get(source)?.bytes || 0;
+          while (bytes > this.maxBytesPerIp) {
+            const oldest = this._stmtOldest.all(source);
+            if (!oldest.length) break;
+            for (const row of oldest) {
+              if (bytes <= this.maxBytesPerIp) break;
+              deleted += this._stmtDeleteId.run(row.id).changes;
+              bytes -= row.bytes;
+            }
+          }
+        }
+      }
       return deleted;
     })();
   }

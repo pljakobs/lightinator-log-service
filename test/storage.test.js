@@ -219,3 +219,27 @@ test("byte pruning counts UTF-8 and crash text per IP and enforces updates", asy
   assert.equal((await logs.getLogs({ ip: "192.0.2.1" })).total, 0);
   assert.equal((await logs.getLogs({ ip: "192.0.2.2" })).total, 1);
 });
+
+test("ingestion uses incremental usage totals and does not rescan retained rows below budget", async context => {
+  const isolated = openDatabase(":memory:");
+  context.after(() => isolated.close());
+  const logs = new LogStorage({ db: isolated, dataDir: tmpDir, maxRowsPerIp: 3, maxBytesPerIp: 1000 });
+  const scan = context.mock.method(logs._stmtOldest, "all", () => { assert.fail("Below-budget ingestion must not scan old text"); });
+  for (let index = 0; index < 10; index++) await logs.append("192.0.2.1", { message: "éé" });
+  assert.equal(scan.mock.callCount(), 0);
+  assert.deepEqual(isolated.prepare("SELECT row_count, text_bytes FROM log_usage WHERE ip = ?").get("192.0.2.1"), { row_count: 3, text_bytes: 12 });
+  const id = (await logs.getLogs({ ip: "192.0.2.1" })).items[0].id;
+  await logs.updateCrashDecode(id, "decode", { rawDump: "dump" });
+  assert.equal(isolated.prepare("SELECT text_bytes FROM log_usage WHERE ip = ?").get("192.0.2.1").text_bytes, 22);
+  await logs.purgeIp("192.0.2.1");
+  assert.equal(isolated.prepare("SELECT COUNT(*) AS count FROM log_usage").get().count, 0);
+});
+
+test("usage totals remain correct for direct SQL updates and IP changes", async context => {
+  const isolated = openDatabase(":memory:");
+  context.after(() => isolated.close());
+  const logs = new LogStorage({ db: isolated, dataDir: tmpDir });
+  const id = await logs.append("192.0.2.1", { message: "abc" });
+  isolated.prepare("UPDATE logs SET ip = ?, message = ? WHERE id = ?").run("192.0.2.2", "12345", id);
+  assert.deepEqual(isolated.prepare("SELECT ip, row_count, text_bytes FROM log_usage").all(), [{ ip: "192.0.2.2", row_count: 1, text_bytes: 5 }]);
+});
