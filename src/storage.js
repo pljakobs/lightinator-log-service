@@ -21,7 +21,11 @@ function rowToRecord(row) {
     bootNonce:   row.boot_nonce  != null ? row.boot_nonce  : undefined,
     deviceTime:  row.device_time != null ? row.device_time : undefined,
     raw:         row.raw,
+    crashRaw:    row.crash_raw || null,
     crashDecode: row.crash_decode || null,
+    gitVersion:  row.git_version || null,
+    soc:         row.soc || null,
+    buildType:   row.build_type || null,
   };
 }
 
@@ -32,18 +36,34 @@ class LogStorage {
    * @param {string} opts.dataDir      Legacy NDJSON directory — used only once for migration.
    * @param {number} opts.maxRowsPerIp Max rows kept per IP (oldest trimmed on insert).
    */
-  constructor({ db, dataDir, maxRowsPerIp = 10_000 }) {
+  constructor({ db, dataDir, maxRowsPerIp = 10_000, retentionDays = 0, maxBytesPerIp = 0 }) {
     this.db = db;
     this.dataDir = dataDir;
     this.maxRowsPerIp = maxRowsPerIp;
+    this.retentionDays = retentionDays;
+    this.maxBytesPerIp = maxBytesPerIp;
+    this._stmtPruneAge = db.prepare("DELETE FROM logs WHERE received_at < ? AND (? IS NULL OR ip = ?)");
+    this._stmtPruneBytes = db.prepare(`
+      DELETE FROM logs WHERE id IN (
+        SELECT id FROM (
+          SELECT id, SUM(
+            COALESCE(length(CAST(message AS BLOB)), 0) + COALESCE(length(CAST(raw AS BLOB)), 0) +
+            COALESCE(length(CAST(crash_decode AS BLOB)), 0) + COALESCE(length(CAST(crash_raw AS BLOB)), 0)
+          ) OVER (PARTITION BY ip ORDER BY id DESC) AS stored_bytes
+          FROM logs WHERE (? IS NULL OR ip = ?)
+        ) WHERE stored_bytes > ?
+      )
+    `);
 
     // Pre-compile frequently used statements (better-sqlite3 is synchronous)
     this._stmtInsert = db.prepare(`
-      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot, boot_nonce, device_time, raw, crash_decode)
-      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot, @boot_nonce, @device_time, @raw, @crash_decode)
+      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot, boot_nonce, device_time, raw, crash_decode, crash_raw, git_version, soc, build_type)
+      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot, @boot_nonce, @device_time, @raw, @crash_decode, @crash_raw, @git_version, @soc, @build_type)
     `);
     this._stmtUpdateCrashDecode = db.prepare(`
-      UPDATE logs SET crash_decode = ? WHERE id = ?
+      UPDATE logs SET crash_decode = ?, git_version = COALESCE(?, git_version),
+        soc = COALESCE(?, soc), build_type = COALESCE(?, build_type), crash_raw = COALESCE(?, crash_raw)
+      WHERE id = ?
     `);
     this._stmtGetCrashDecode = db.prepare(`
       SELECT crash_decode FROM logs WHERE id = ?
@@ -117,7 +137,8 @@ class LogStorage {
     );
     this._stmtCrashes = db.prepare(`
       SELECT l.id, l.ip, l.received_at, l.boot, l.message, l.crash_decode,
-             c.fingerprint, c.issue_url, c.issue_number, c.soc, c.git_version
+             c.fingerprint, c.issue_url, c.issue_number,
+             COALESCE(l.soc, c.soc) AS soc, COALESCE(l.git_version, c.git_version) AS git_version
       FROM logs l
       LEFT JOIN crash_reports c ON c.log_id = l.id
       WHERE l.crash_decode IS NOT NULL AND (? IS NULL OR l.ip = ?)
@@ -174,6 +195,11 @@ class LogStorage {
             boot_nonce:  rec.bootNonce  ?? null,
             device_time: rec.deviceTime ?? null,
             raw:         rec.raw        || null,
+            crash_decode: rec.crashDecode || null,
+            crash_raw:   rec.crashRaw || null,
+            git_version: rec.gitVersion || null,
+            soc:         rec.soc || null,
+            build_type:  rec.buildType || null,
           }));
 
         insertMany(records);
@@ -199,6 +225,10 @@ class LogStorage {
       device_time:  record.deviceTime ?? null,
       raw:          record.raw        || null,
       crash_decode: record.crashDecode || null,
+      crash_raw:    record.crashRaw || null,
+      git_version:  record.gitVersion || null,
+      soc:          record.soc || null,
+      build_type:   record.buildType || null,
     });
 
     if (info && info.lastInsertRowid) {
@@ -212,13 +242,34 @@ class LogStorage {
     if (cnt > this.maxRowsPerIp) {
       this._stmtTrim.run(ip, ip, this.maxRowsPerIp - 1);
     }
+    this.prune({ ip });
 
     return Promise.resolve(record.id);
   }
 
-  updateCrashDecode(logId, decodedText) {
-    this._stmtUpdateCrashDecode.run(decodedText, logId);
+  updateCrashDecode(logId, decodedText, metadata = {}) {
+    this._stmtUpdateCrashDecode.run(decodedText, metadata.gitVersion ?? null, metadata.soc ?? null,
+      metadata.buildType ?? null, metadata.rawDump ?? null, logId);
+    const row = this.db.prepare("SELECT ip FROM logs WHERE id = ?").get(logId);
+    if (row) this.prune({ ip: row.ip });
     return Promise.resolve();
+  }
+
+  getCrashRecord(logId) {
+    const row = this.db.prepare("SELECT * FROM logs WHERE id = ? AND crash_decode IS NOT NULL").get(logId);
+    return row ? { ...rowToRecord(row), raw: row.crash_raw || null } : null;
+  }
+
+  prune({ ip = null, now = Date.now() } = {}) {
+    return this.db.transaction(() => {
+      let deleted = 0;
+      if (this.retentionDays > 0) {
+        const cutoff = new Date(now - this.retentionDays * 86_400_000).toISOString();
+        deleted += this._stmtPruneAge.run(cutoff, ip, ip).changes;
+      }
+      if (this.maxBytesPerIp > 0) deleted += this._stmtPruneBytes.run(ip, ip, this.maxBytesPerIp).changes;
+      return deleted;
+    })();
   }
 
   getCrashDecode(logId) {

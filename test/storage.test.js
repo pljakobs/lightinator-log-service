@@ -162,3 +162,60 @@ test("listCrashes returns decoded crashes newest first with pending flag and ip 
   assert.equal(joined.soc, "esp8266");
   assert.equal(joined.gitVersion, "v1.2.3");
 });
+
+test("crash persistence retains full raw dumps and original firmware metadata", async () => {
+  const id = await storage.append("192.0.2.50", { message: "Fatal exception", raw: "original syslog record" });
+  const rawDump = "Fatal exception\npc=0x40201000\nStack dump:\n3ffff000: 40201000";
+  await storage.updateCrashDecode(id, "decoded plus previous AI analysis", {
+    rawDump, gitVersion: "V1.0.0-1-develop", soc: "esp8266", buildType: "release",
+  });
+  await storage.updateCrashDecode(id, "replacement analysis");
+  const record = storage.getCrashRecord(id);
+  assert.equal(record.raw, rawDump);
+  assert.equal(record.gitVersion, "V1.0.0-1-develop");
+  assert.equal(record.buildType, "release");
+  assert.equal(storage.listCrashes({ ip: "192.0.2.50" }).items[0].gitVersion, "V1.0.0-1-develop");
+  assert.equal(db.prepare("SELECT raw FROM logs WHERE id = ?").get(id).raw, "original syslog record");
+});
+
+test("NDJSON migration imports legacy crash bindings once", async () => {
+  const legacyDir = fs.mkdtempSync(path.join(tmpDir, "legacy-"));
+  const filePath = path.join(legacyDir, "192.0.2.51.ndjson");
+  fs.writeFileSync(filePath, JSON.stringify({ sourceIp: "192.0.2.51", message: "legacy crash", crashDecode: "legacy decoded", crashRaw: "legacy full dump", gitVersion: "original-version", soc: "esp32", buildType: "release" }) + "\ninvalid JSON\n");
+  const migration = new LogStorage({ db, dataDir: legacyDir });
+  await migration.init();
+  await migration.init();
+  const records = (await migration.getLogs({ ip: "192.0.2.51" })).items;
+  assert.equal(records.length, 1);
+  assert.equal(records[0].crashDecode, "legacy decoded");
+  assert.equal(records[0].crashRaw, "legacy full dump");
+  assert.equal(records[0].gitVersion, "original-version");
+  assert.ok(fs.existsSync(filePath + ".imported"));
+});
+
+test("age pruning removes expired logs and cascades crash reports while keeping recent records", async context => {
+  const isolated = openDatabase(":memory:");
+  context.after(() => isolated.close());
+  const logs = new LogStorage({ db: isolated, dataDir: tmpDir });
+  const old = await logs.append("192.0.2.1", { message: "old", receivedAt: new Date(Date.now() - 3 * 86_400_000).toISOString() });
+  await logs.append("192.0.2.1", { message: "recent" });
+  isolated.prepare("INSERT INTO crash_reports (fingerprint, log_id, issue_url, issue_number, created_at) VALUES ('old', ?, 'https://example.test', 1, '2026-01-01')").run(old);
+  logs.retentionDays = 1;
+  assert.equal(logs.prune(), 1);
+  assert.deepEqual((await logs.getLogs({ ip: "192.0.2.1" })).items.map(record => record.message), ["recent"]);
+  assert.equal(isolated.prepare("SELECT COUNT(*) AS count FROM crash_reports").get().count, 0);
+});
+
+test("byte pruning counts UTF-8 and crash text per IP and enforces updates", async context => {
+  const isolated = openDatabase(":memory:");
+  context.after(() => isolated.close());
+  const logs = new LogStorage({ db: isolated, dataDir: tmpDir, maxBytesPerIp: 6 });
+  await logs.append("192.0.2.1", { message: "éé" });
+  const newest = await logs.append("192.0.2.1", { message: "éé" });
+  await logs.append("192.0.2.2", { message: "123456" });
+  assert.deepEqual((await logs.getLogs({ ip: "192.0.2.1" })).items.map(record => record.id), [newest]);
+  assert.equal((await logs.getLogs({ ip: "192.0.2.2" })).total, 1);
+  await logs.updateCrashDecode(newest, "123", { rawDump: "456" });
+  assert.equal((await logs.getLogs({ ip: "192.0.2.1" })).total, 0);
+  assert.equal((await logs.getLogs({ ip: "192.0.2.2" })).total, 1);
+});
