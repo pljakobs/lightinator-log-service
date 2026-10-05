@@ -20,6 +20,10 @@ function stripAnsi(str) {
   return String(str || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").trim();
 }
 
+function logExcerpt(text, maxLength = 800) {
+  return stripAnsi(text).replace(/\s+/g, " ").slice(0, maxLength);
+}
+
 function extractCrashFingerprint(decodedText) {
   if (!decodedText || typeof decodedText !== "string") {
     return { exccause: "", pcFrame: "", tosFrame: "", fingerprint: "" };
@@ -112,6 +116,7 @@ class CrashDecoder {
         const isStackHeader = STACK_HEADER_RE.test(cleanMsg);
         const triggerRecordId = record.id;
         const known = this.discovery?.controllers.get(ip);
+        this._log(ip, triggerRecordId, `Crash detected; collecting dump${isStackHeader ? " (stack header present)" : ""}`);
 
         this._collecting.set(ip, {
           triggerRecordId,
@@ -168,11 +173,18 @@ class CrashDecoder {
     this._collecting.delete(ip);
 
     const { triggerRecordId, triggerRecord, lines } = state;
+    this._log(ip, triggerRecordId,
+      `Dump collection complete: ${lines.length} lines, ${Buffer.byteLength(lines.join("\n"))} bytes; queueing decode`);
     setImmediate(() => {
       this._decode(ip, triggerRecordId, triggerRecord, lines).catch(e => {
-        console.warn(`CrashDecoder [${ip}]: decode failed —${e.message}`);
+        this._log(ip, triggerRecordId, `Decode pipeline failed: ${e.stack || e.message}`, "error");
       });
     });
+  }
+
+  _log(ip, recordId, message, level = "info") {
+    const logger = console[level] || console.log;
+    logger.call(console, `CrashDecoder [${ip}]${recordId != null ? ` record=${recordId}` : ""}: ${message}`);
   }
 
   async _resolveTargetInfo(ip) {
@@ -226,6 +238,9 @@ class CrashDecoder {
   }
 
   async _decodeRecord(ip, triggerRecordId, triggerRecord, lines) {
+    this._log(ip, triggerRecordId, `Starting decode for ${lines.length} captured lines`);
+    const metadataSource = triggerRecord.gitVersion && triggerRecord.soc ? "log record" : "controller lookup";
+    this._log(ip, triggerRecordId, `Resolving firmware metadata from ${metadataSource}`);
     const info = triggerRecord.gitVersion && triggerRecord.soc
       ? { git_version: triggerRecord.gitVersion, sming_version: triggerRecord.smingVersion, soc: triggerRecord.soc, build_type: triggerRecord.buildType }
       : await this._resolveTargetInfo(ip);
@@ -236,6 +251,7 @@ class CrashDecoder {
     }
     if (!info || !info.git_version || !info.soc) {
       const msg = `[Crash decode skipped: target metadata missing for ${ip}]`;
+      this._log(ip, triggerRecordId, `${msg}; info=${JSON.stringify(info || null)}`, "warn");
       if (this.storage && triggerRecordId) {
         await this.storage.updateCrashDecode(triggerRecordId, msg);
       }
@@ -248,6 +264,7 @@ class CrashDecoder {
 
     if (!cfg) {
       const msg = `[Crash decode skipped: unsupported SOC "${soc}"]`;
+      this._log(ip, triggerRecordId, msg, "warn");
       if (this.storage && triggerRecordId) {
         await this.storage.updateCrashDecode(triggerRecordId, msg);
       }
@@ -257,28 +274,44 @@ class CrashDecoder {
     const vMatch = git_version.match(/^V[\d.]+-\d+-(.+)$/i);
     const branch = vMatch ? vMatch[1] : "develop";
     const type   = build_type || "debug";
+    this._log(ip, triggerRecordId,
+      `Target firmware=${git_version}, Sming=${sming_version || "unknown"}, soc=${socKey}, build=${type}`);
 
     const elfUrl  = `${this.elfBaseUrl}/${branch}/${git_version}/${socKey}/${type}/${cfg.elfFile}`;
     const elfPath = path.join(this.elfCacheDir, `${git_version}-${socKey}-${type}.elf`);
 
     try {
+      this._log(ip, triggerRecordId, `Preparing ELF ${path.basename(elfPath)}`);
       await this._ensureElf(elfUrl, elfPath);
     } catch (err) {
       const msg = `[Crash decode error: failed downloading ELF: ${err.message}]`;
+      this._log(ip, triggerRecordId, `${msg}; url=${elfUrl}`, "error");
       if (this.storage && triggerRecordId) {
         await this.storage.updateCrashDecode(triggerRecordId, msg);
       }
       return;
     }
 
-    await this._ensureScript(cfg);
+    this._log(ip, triggerRecordId, `Preparing decoder script ${cfg.script}`);
+    const scriptReady = await this._ensureScript(cfg);
+    if (scriptReady === false) {
+      const msg = `[Crash decode error: decoder script unavailable at ${cfg.script}]`;
+      this._log(ip, triggerRecordId, msg, "error");
+      if (this.storage && triggerRecordId) await this.storage.updateCrashDecode(triggerRecordId, msg);
+      return;
+    }
 
+    this._log(ip, triggerRecordId, "Loading source repositories for recorded builds");
     const repoPaths = await this._getSourceRepos(git_version, sming_version);
     let decoded;
     let codeSnippets = [];
     try {
+      this._log(ip, triggerRecordId, "Running stacktrace decoder");
       ({ decoded, codeSnippets } = await this._decodeWithContext(cfg, elfPath, lines, repoPaths));
+      this._log(ip, triggerRecordId,
+        `Stacktrace decoder succeeded: ${Buffer.byteLength(decoded)} output bytes, ${codeSnippets.length} source snippets`);
     } catch (err) {
+      this._log(ip, triggerRecordId, `Stacktrace decoder failed: ${err.stack || err.message}`, "error");
       decoded = `[Crash decode error: ${err.message}]\n\nRaw dump:\n` + lines.join("\n");
     }
 
@@ -290,8 +323,10 @@ class CrashDecoder {
         aiAnalysisResult = await this._analyzeDecoded(decoded, codeSnippets, repoPaths, git_version, socKey, type);
         decoded = `${decoded}\n\n--- AI Analysis ---\n\n${aiAnalysisResult}`;
       } catch (aiErr) {
-        console.warn(`CrashDecoder [${ip}]: AI analysis pipeline failed:${aiErr.message}`);
+        this._log(ip, triggerRecordId, `AI analysis failed: ${aiErr.stack || aiErr.message}`, "error");
       }
+    } else {
+      this._log(ip, triggerRecordId, "AI analysis skipped (disabled or unavailable)", "debug");
     }
     
     if (this.storage && triggerRecordId) {
@@ -301,6 +336,7 @@ class CrashDecoder {
         soc: socKey,
         buildType: type
       }).catch(() => {});
+      this._log(ip, triggerRecordId, `Stored decoded output (${Buffer.byteLength(decoded)} bytes)`);
     }
 
     if (this.onDecoded) {
@@ -353,7 +389,7 @@ class CrashDecoder {
               resolve({
                 git_version: j?.app?.git_version ?? j?.git_version ?? null,
                 sming_version: j?.app?.sming_git_version ?? j?.app?.sming_version ??
-                  j?.sming?.git_version ?? j?.sming_git_version ?? j?.sming_version ?? null,
+                  j?.sming?.git_version ?? j?.sming?.version ?? j?.sming_git_version ?? j?.sming_version ?? null,
                 soc:         j?.device?.soc       ?? j?.soc         ?? null,
                 build_type:  j?.app?.build_type   ?? j?.build_type   ?? "debug",
               });
@@ -369,10 +405,17 @@ class CrashDecoder {
   }
 
   async _ensureScript(cfg) {
-    if (fs.existsSync(cfg.script)) return;
-    if (!cfg.remoteScriptUrl) return;
+    if (fs.existsSync(cfg.script)) {
+      console.info(`CrashDecoder: decoder script cached at ${cfg.script}`);
+      return true;
+    }
+    if (!cfg.remoteScriptUrl) {
+      console.warn(`CrashDecoder: decoder script missing and no download URL configured: ${cfg.script}`);
+      return false;
+    }
 
     try {
+      console.info(`CrashDecoder: downloading decoder script from ${cfg.remoteScriptUrl}`);
       await fsp.mkdir(path.dirname(cfg.script), { recursive: true });
       const tmpPath = cfg.script + ".tmp";
       await new Promise((resolve, reject) => {
@@ -396,8 +439,11 @@ class CrashDecoder {
       });
       await fsp.chmod(tmpPath, 0o755);
       await fsp.rename(tmpPath, cfg.script);
+      console.info(`CrashDecoder: decoder script ready at ${cfg.script}`);
+      return true;
     } catch (err) {
-      console.warn(`CrashDecoder: could not download script: ${err.message}`);
+      console.warn(`CrashDecoder: could not download script ${cfg.remoteScriptUrl}: ${err.stack || err.message}`);
+      return false;
     }
   }
 
@@ -405,9 +451,11 @@ class CrashDecoder {
     await fsp.mkdir(path.dirname(localPath), { recursive: true });
     try {
       await fsp.access(localPath);
+      console.info(`CrashDecoder: ELF cache hit at ${localPath}`);
       return;
     } catch {}
 
+    console.info(`CrashDecoder: downloading ELF from ${url}`);
     const tmpPath = localPath + ".tmp";
     const download = (targetUrl, redirectsLeft) => {
       return new Promise((resolve, reject) => {
@@ -436,6 +484,8 @@ class CrashDecoder {
 
     await download(url, maxRedirects);
     await fsp.rename(tmpPath, localPath);
+    const { size } = await fsp.stat(localPath);
+    console.info(`CrashDecoder: ELF ready at ${localPath} (${size} bytes)`);
   }
 
   analyzeRecord(triggerRecordId) {
@@ -447,6 +497,7 @@ class CrashDecoder {
   }
 
   async _analyzeRecord(triggerRecordId, analyzeWithAI = true) {
+    this._log("manual", triggerRecordId, `${analyzeWithAI ? "Starting AI re-analysis" : "Starting decoder rerun"}`);
     let rawLog = null;
     let ip = null;
     let git_version = null;
@@ -483,12 +534,17 @@ class CrashDecoder {
     }
 
     if (!rawLog) {
+      this._log(ip || "manual", triggerRecordId, "Cannot rerun: saved crash dump was not found", "error");
       throw new Error("Crash log or raw dump not found for analysis.");
     }
 
     if (!git_version || !soc) {
+      this._log(ip || "manual", triggerRecordId, "Cannot rerun: saved firmware version or SoC metadata is missing", "error");
       throw new Error("Original crash firmware metadata (git_version or soc) missing for analysis.");
     }
+
+    this._log(ip || "unknown", triggerRecordId,
+      `Using saved metadata firmware=${git_version}, Sming=${sming_version || "unknown"}, soc=${soc}, build=${build_type || "debug"}`);
 
     const socKey = soc.toLowerCase();
     const cfg = SOC_CONFIG[socKey];
@@ -588,9 +644,11 @@ class CrashDecoder {
         SMING_ARCH: cfg.smingArch,
       };
 
+      const cwd = repoPaths["esp-rgbww-firmware"] || repoPaths.Sming;
+      console.info(`CrashDecoder: spawning python3 script=${cfg.script} elf=${path.resolve(elfPath)} cwd=${cwd || process.cwd()}`);
       const proc = spawn("python3", [cfg.script, path.resolve(elfPath)], {
         env,
-        cwd: repoPaths["esp-rgbww-firmware"] || repoPaths.Sming,
+        cwd,
         stdio: ["pipe", "pipe", "pipe"],
       });
 
@@ -599,10 +657,21 @@ class CrashDecoder {
       proc.stdout.on("data", d => (stdout += d));
       proc.stderr.on("data", d => (stderr += d));
 
-      proc.on("error", reject);
+      proc.on("error", err => {
+        console.error(`CrashDecoder: could not start python3 decoder: ${err.stack || err.message}`);
+        reject(err);
+      });
       proc.on("close", (code) => {
+        console.info(`CrashDecoder: decoder process exited code=${code}, stdout=${Buffer.byteLength(stdout)} bytes, stderr=${Buffer.byteLength(stderr)} bytes`);
+        if (stderr.trim()) {
+          const message = `CrashDecoder: decoder stderr: ${logExcerpt(stderr)}`;
+          (code === 0 ? console.debug : console.error)(message);
+        }
+        if (code !== 0 && stdout) {
+          console.error(`CrashDecoder: decoder returned partial stdout despite exit code ${code}: ${logExcerpt(stdout)}`);
+        }
         if (code !== 0 && !stdout) {
-          reject(new Error(`decode-stacktrace exited ${code}:${stderr.slice(0, 500)}`));
+          reject(new Error(`decode-stacktrace exited ${code}: ${logExcerpt(stderr) || "no stderr output"}`));
         } else {
           resolve(stdout || stderr);
         }

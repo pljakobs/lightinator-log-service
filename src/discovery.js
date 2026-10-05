@@ -28,6 +28,7 @@ const fs = require("fs/promises");
 const path = require("path");
 const dns = require("dns").promises;
 const { Bonjour } = require("bonjour-service");
+const { setTimeout: delay } = require("node:timers/promises");
 
 // ── SQLite helpers ────────────────────────────────────────────────────────────
 
@@ -161,7 +162,10 @@ function fetchJson(host, port, requestPath, options = {}) {
     const req = lib.request(reqOptions, (res) => {
       if (res.statusCode < 200 || res.statusCode >= 300) {
         res.resume();
-        return reject(new Error(`HTTP ${res.statusCode} from ${targetUrl.hostname}${targetUrl.pathname}`));
+        const error = new Error(`HTTP ${res.statusCode} from ${targetUrl.hostname}${targetUrl.pathname}`);
+        error.statusCode = res.statusCode;
+        error.retryAfter = res.headers["retry-after"];
+        return reject(error);
       }
       let body = '';
       res.setEncoding('utf8');
@@ -185,10 +189,30 @@ function fetchJson(host, port, requestPath, options = {}) {
   });
 }
 
+async function fetchJsonWithRetryAfter(host, port, requestPath, options = {}, maxRetries = 3) {
+  let retries = 0;
+  while (true) {
+    try {
+      return await fetchJson(host, port, requestPath, options);
+    } catch (error) {
+      if (error.statusCode !== 429 || retries >= maxRetries) throw error;
+      retries++;
+      const retryAfter = error.retryAfter;
+      const seconds = Number(retryAfter);
+      const retryAt = Date.parse(retryAfter);
+      const waitMs = retryAfter != null && Number.isFinite(seconds)
+        ? Math.max(0, seconds * 1000)
+        : (retryAfter && Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : 1000 * retries);
+      console.warn(`Discovery: ${host}${requestPath} returned HTTP 429; retry ${retries}/${maxRetries} in ${Math.ceil(waitMs / 1000)}s`);
+      await delay(waitMs);
+    }
+  }
+}
+
 async function fetchFirstJson(host, port, paths) {
   for (const p of paths) {
     try {
-      const body = await fetchJson(host, port, p);
+      const body = await fetchJsonWithRetryAfter(host, port, p);
       return { body, path: p };
     } catch {
       // try next path
@@ -226,6 +250,7 @@ class ControllerDiscovery {
     /** IPs seen via syslog that we haven't resolved yet */
     this.extraSeeds = new Set();
     this.bootNonces = new Map();
+    this.infoRequests = new Map();
 
     this._timer = null;
   }
@@ -238,8 +263,21 @@ class ControllerDiscovery {
     return this._saveState().then(() => !!controller);
   }
 
+  _fetchControllerInfo(ip, bootNonce) {
+    const requestKey = `${ip}:${bootNonce ?? "unknown"}`;
+    const activeRequest = this.infoRequests.get(requestKey);
+    if (activeRequest) return activeRequest;
+
+    const request = fetchJsonWithRetryAfter(ip, this.controllerPort, "/info?v=2")
+      .finally(() => {
+        if (this.infoRequests.get(requestKey) === request) this.infoRequests.delete(requestKey);
+      });
+    this.infoRequests.set(requestKey, request);
+    return request;
+  }
+
   async refreshControllerInfo(ip, expectedBootNonce) {
-    const info = await fetchJson(ip, this.controllerPort, "/info?v=2");
+    const info = await this._fetchControllerInfo(ip, expectedBootNonce);
     if (this.bootNonces.get(ip) !== expectedBootNonce) return false;
 
     const app = info?.app || {};
@@ -247,7 +285,7 @@ class ControllerDiscovery {
       soc: info?.device?.soc ?? info?.soc,
       buildType: app.build_type ?? info?.build_type,
       gitVersion: app.git_version ?? info?.git_version,
-      smingVersion: app.sming_git_version ?? app.sming_version ?? info?.sming?.git_version ??
+      smingVersion: app.sming_git_version ?? app.sming_version ?? info?.sming?.git_version ?? info?.sming?.version ??
         info?.sming_git_version ?? info?.sming_version,
     };
     for (const [key, value] of Object.entries(updates)) {
@@ -268,6 +306,7 @@ class ControllerDiscovery {
     };
     this.controllers.set(ip, { ...current, ...updates, bootNonce: expectedBootNonce, reachable: true });
     await this._saveState();
+    console.info(`Discovery: refreshed /info?v=2 after boot nonce ${expectedBootNonce} for ${ip}: firmware=${updates.gitVersion || current.gitVersion || "unknown"} sming=${updates.smingVersion || current.smingVersion || "unknown"}`);
     if (this.onUpdate) this.onUpdate(this.getAll());
     return true;
   }
@@ -533,7 +572,7 @@ class ControllerDiscovery {
           const requestedBootNonce = this.bootNonces.get(ip);
           const [cfg, info] = await Promise.all([
             fetchJson(ip, this.controllerPort, "/config").catch((e) => { console.debug(`Discovery: /config failed for ${ip}: ${e.message}`); return null; }),
-            fetchJson(ip, this.controllerPort, "/info?v=2").catch((e) => { console.debug(`Discovery: /info?v=2 failed for ${ip}: ${e.message}`); return null; }),
+            this._fetchControllerInfo(ip, requestedBootNonce).catch((e) => { console.debug(`Discovery: /info?v=2 failed for ${ip}: ${e.message}`); return null; }),
           ]);
           const entry = this.controllers.get(ip);
           if (!entry || this.bootNonces.get(ip) !== requestedBootNonce) return;
@@ -550,9 +589,9 @@ class ControllerDiscovery {
           if (info?.app?.git_version)  updates.gitVersion = info.app.git_version;
           else if (info?.git_version)  updates.gitVersion = info.git_version;
           const smingVersion = info?.app?.sming_git_version ?? info?.app?.sming_version ??
-            info?.sming?.git_version ?? info?.sming_git_version ?? info?.sming_version;
+            info?.sming?.git_version ?? info?.sming?.version ?? info?.sming_git_version ?? info?.sming_version;
           if (smingVersion) updates.smingVersion = smingVersion;
-          console.debug(`Discovery: /info?v=2 for ${ip}: ${info ? `soc=${info.device?.soc ?? info.soc} build=${info.app?.build_type ?? info.build_type} ver=${info.app?.git_version ?? info.git_version}` : "null"}`);
+          console.debug(`Discovery: /info?v=2 for ${ip}: ${info ? `soc=${info.device?.soc ?? info.soc} build=${info.app?.build_type ?? info.build_type} ver=${info.app?.git_version ?? info.git_version} sming=${info.sming?.version ?? info.sming?.git_version ?? info.app?.sming_version ?? info.app?.sming_git_version ?? "unknown"}` : "null"}`);
           if (Object.keys(updates).length) {
             this.controllers.set(ip, { ...entry, ...updates });
           }

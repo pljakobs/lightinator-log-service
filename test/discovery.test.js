@@ -74,7 +74,7 @@ test("HTTP discovery requests the configured port and paths and stores controlle
     "/hosts?all=true": { hosts: [{ ip_address: "127.0.0.1", hostname: "fixture", id: 1 }] },
     "/data": { controllers: [{ id: "device", name: "Fixture controller", "ip-address": "127.0.0.1" }], groups: [{ id: 2, name: "Fixture group", controller_ids: ["device"] }] },
     "/config": { network: { rsyslog: { enabled: false } } },
-    "/info?v=2": { device: { soc: "esp8266" }, app: { git_version: "V1.0.0-1-develop", build_type: "debug" } },
+    "/info?v=2": { device: { soc: "esp8266" }, app: { git_version: "V1.0.0-1-develop", build_type: "debug" }, sming: { version: "6.2.0" } },
   };
   const server = http.createServer((request, response) => {
     requests.push(request.url);
@@ -92,6 +92,7 @@ test("HTTP discovery requests the configured port and paths and stores controlle
   assert.equal(controller.loggingEnabled, false);
   assert.equal(controller.soc, "esp8266");
   assert.equal(controller.gitVersion, "V1.0.0-1-develop");
+  assert.equal(controller.smingVersion, "6.2.0");
   assert.deepEqual(controller.groups, [{ id: 2, name: "Fixture group" }]);
 });
 
@@ -128,4 +129,38 @@ test("boot info refresh preserves prior tags and ignores a delayed response from
   assert.equal(controller.bootNonce, 222);
   assert.equal(controller.gitVersion, "new-firmware");
   assert.equal(controller.smingVersion, "new-sming");
+});
+
+test("controller info retries HTTP 429 after Retry-After and reads the reported Sming version", async context => {
+  let requests = 0;
+  const server = http.createServer((_request, response) => {
+    requests++;
+    if (requests === 1) {
+      response.writeHead(429, { "Retry-After": "1" });
+      response.end();
+      return;
+    }
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({
+      version: 2,
+      device: { deviceid: 10964360, soc: "esp8266", current_rom: "rom1" },
+      app: { webapp_version: "V5.0-386-experimental", git_version: "V5.0.0-989-experimental", build_type: "debug" },
+      sming: { version: "6.2.0" },
+    }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise(resolve => server.close(resolve)));
+
+  const networkDiscovery = new ControllerDiscovery({ seedHosts: [], controllerPort: server.address().port, refreshIntervalMs: 0 });
+  networkDiscovery.controllers.set("127.0.0.1", { ip: "127.0.0.1", gitVersion: "previous", smingVersion: "6.1.0" });
+  await networkDiscovery.setBootNonce("127.0.0.1", 123);
+  const startedAt = Date.now();
+  assert.equal(await networkDiscovery.refreshControllerInfo("127.0.0.1", 123), true);
+
+  assert.ok(Date.now() - startedAt >= 900, "retry should wait for Retry-After");
+  assert.equal(requests, 2);
+  const controller = networkDiscovery.controllers.get("127.0.0.1");
+  assert.equal(controller.gitVersion, "V5.0.0-989-experimental");
+  assert.equal(controller.buildType, "debug");
+  assert.equal(controller.smingVersion, "6.2.0");
 });
