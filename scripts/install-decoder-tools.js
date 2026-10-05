@@ -42,10 +42,11 @@ async function install(output, architecture) {
         await execFileAsync(destination, ["--version"]);
       }
     }
-    for (const [arch, name] of [["Esp8266", "esp8266"], ["Esp32", "esp32"]]) {
-      const response = await fetch(`https://raw.githubusercontent.com/SmingHub/Sming/develop/Sming/Arch/${arch}/Tools/decode-stacktrace.py`);
-      if (!response.ok) throw new Error(`Decoder download failed: HTTP ${response.status}`);
-      await fsp.writeFile(path.join(output, "tools", `decode-${name}.py`), await response.text());
+    for (const name of ["esp8266", "esp32"]) {
+      const source = path.join(__dirname, "..", "tools", `decode-${name}.py`);
+      const destination = path.join(output, "tools", `decode-${name}.py`);
+      await fsp.copyFile(source, destination);
+      await fsp.chmod(destination, 0o755);
     }
   } finally {
     await fsp.rm(temp, { recursive: true, force: true });

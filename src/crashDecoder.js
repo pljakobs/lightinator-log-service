@@ -317,6 +317,8 @@ class CrashDecoder {
       return;
     }
 
+    await this._ensureMapFile(git_version, socKey, type, elfPath);
+
     this._log(ip, triggerRecordId, "Loading source repositories for recorded builds");
     const repoPaths = await this._getSourceRepos(git_version, sming_version);
     let decoded;
@@ -465,6 +467,34 @@ class CrashDecoder {
     console.info(`CrashDecoder: ELF ready at ${localPath} (${size} bytes)`);
   }
 
+  async _ensureMapFile(gitVersion, soc, buildType, elfPath) {
+    const mapPath = path.join(path.dirname(elfPath), `${path.basename(elfPath, path.extname(elfPath))}.map`);
+    try {
+      await fsp.access(mapPath);
+      console.info(`CrashDecoder: map cache hit at ${mapPath}`);
+      return true;
+    } catch {}
+
+    if (!this.harvester?.fetchMapFile) return false;
+    try {
+      const mapContent = await this.harvester.fetchMapFile(gitVersion, soc, buildType);
+      if (!mapContent) {
+        console.debug(`CrashDecoder: matching map file unavailable for ${gitVersion}/${soc}/${buildType}`);
+        return false;
+      }
+
+      await fsp.mkdir(path.dirname(mapPath), { recursive: true });
+      const temporaryPath = `${mapPath}.tmp`;
+      await fsp.writeFile(temporaryPath, mapContent, "utf8");
+      await fsp.rename(temporaryPath, mapPath);
+      console.info(`CrashDecoder: staged matching map at ${mapPath} (${Buffer.byteLength(mapContent)} bytes)`);
+      return true;
+    } catch (error) {
+      console.warn(`CrashDecoder: could not stage matching map ${mapPath}: ${error.message}`);
+      return false;
+    }
+  }
+
   analyzeRecord(triggerRecordId) {
     return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId, true));
   }
@@ -602,6 +632,7 @@ class CrashDecoder {
 
     await this._ensureElf(elfUrl, elfPath);
     await this._ensureScript(cfg);
+    await this._ensureMapFile(git_version, socKey, type, elfPath);
 
     const repoPaths = await this._getSourceRepos(git_version, sming_version);
     const lines = rawLog.split("\n");

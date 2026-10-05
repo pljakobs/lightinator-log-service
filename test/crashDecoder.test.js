@@ -221,6 +221,7 @@ test("automatic and manual requests serialize checkout, decode, AI passes, and s
   decoder._resolveTargetInfo = async () => ({ git_version: "auto", soc: "esp8266" });
   decoder._ensureElf = async () => {};
   decoder._ensureScript = async () => {};
+  decoder._ensureMapFile = async () => false;
   decoder._getSourceRepos = async version => {
     events.push(`checkout:${version}`);
     return { version };
@@ -501,6 +502,20 @@ test("map cache isolates firmware, SoC, and build type and selects architecture 
   assert.equal(requests.length, builds.length);
 });
 
+test("matching map is staged beside the ELF and reused by subsequent decodes", async context => {
+  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-elf-map-"));
+  context.after(() => fs.rm(cacheDir, { recursive: true, force: true }));
+  const decoder = Object.create(CrashDecoder.prototype);
+  const requests = [];
+  decoder.harvester = { fetchMapFile: async (...args) => { requests.push(args); return "map symbols"; } };
+  const elfPath = path.join(cacheDir, "V1.0.0-1-develop-esp8266-debug.elf");
+
+  assert.equal(await decoder._ensureMapFile("V1.0.0-1-develop", "esp8266", "debug", elfPath), true);
+  assert.equal(await fs.readFile(elfPath.replace(/\.elf$/, ".map"), "utf8"), "map symbols");
+  assert.equal(await decoder._ensureMapFile("V1.0.0-1-develop", "esp8266", "debug", elfPath), true);
+  assert.deepEqual(requests, [["V1.0.0-1-develop", "esp8266", "debug"]]);
+});
+
 test("automatic AI opt-out skips generation and decoded assembly reaches the final-only workflow", async () => {
   const decoder = Object.create(CrashDecoder.prototype);
   decoder.aiEnabled = false;
@@ -509,6 +524,7 @@ test("automatic AI opt-out skips generation and decoded assembly reaches the fin
   decoder._resolveTargetInfo = async () => ({ git_version: "version", soc: "esp8266" });
   decoder._ensureElf = async () => {};
   decoder._ensureScript = async () => {};
+  decoder._ensureMapFile = async () => false;
   decoder._getSourceRepos = async () => ({});
   decoder._decodeWithContext = async () => ({ decoded: "Disassembly around 0x40201000:\n40201000: l32i a2, a3, 0\n", codeSnippets: [] });
   decoder.harvester = { fetchMapFile: async () => "map" };

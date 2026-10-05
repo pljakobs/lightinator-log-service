@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 binutil
     && rm -rf /var/lib/apt/lists/*
 COPY config/decoder-toolchains.json ./config/decoder-toolchains.json
 COPY scripts/install-decoder-tools.js scripts/test-decoder-tools.js ./scripts/
+COPY tools/ ./tools/
 RUN node scripts/install-decoder-tools.js /extract "$TARGETARCH"
 ENV PATH="/extract/bin:${PATH}"
 RUN node scripts/test-decoder-tools.js /extract/tools
