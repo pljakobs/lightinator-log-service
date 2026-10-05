@@ -19,6 +19,10 @@ function stripAnsi(str) {
   return String(str || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").trim();
 }
 
+function normalizeCrashDumpLine(line) {
+  return stripAnsi(line).replace(/^[\w.$<>~]+(?:::[\w.$<>~]+)+:\s*/, "");
+}
+
 function logExcerpt(text, maxLength = 800) {
   return stripAnsi(text).replace(/\s+/g, " ").slice(0, maxLength);
 }
@@ -106,7 +110,7 @@ class CrashDecoder {
 
   feed(record) {
     const rawMsg = record.message || "";
-    const cleanMsg = stripAnsi(rawMsg).replace(/^Application::reportCrashDump:\s*/, "");
+    const cleanMsg = normalizeCrashDumpLine(rawMsg);
     const ip = record.sourceIp;
 
     if (!cleanMsg || !ip) return false;
@@ -622,6 +626,7 @@ class CrashDecoder {
   }
 
   async _decodeWithContext(cfg, elfPath, lines, repoPaths) {
+    lines = lines.map(normalizeCrashDumpLine);
     let decoded = await this._runDecode(cfg, elfPath, lines, repoPaths);
     let codeSnippets = [];
     try {
@@ -648,7 +653,9 @@ class CrashDecoder {
       };
 
       const cwd = repoPaths["esp-rgbww-firmware"] || repoPaths.Sming;
-      console.info(`CrashDecoder: spawning python3 script=${cfg.script} elf=${path.resolve(elfPath)} cwd=${cwd || process.cwd()}`);
+      const decoderInput = lines.join("\n") + "\n\n";
+      const stackRows = decoderInput.split("\n").filter(line => STACK_LINE_RE.test(line)).length;
+      console.info(`CrashDecoder: spawning python3 script=${cfg.script} elf=${path.resolve(elfPath)} cwd=${cwd || process.cwd()} input=${lines.length} lines/${stackRows} stack rows/${Buffer.byteLength(decoderInput)} bytes`);
       const proc = spawn("python3", [cfg.script, path.resolve(elfPath)], {
         env,
         cwd,
@@ -666,6 +673,11 @@ class CrashDecoder {
       });
       proc.on("close", (code) => {
         console.info(`CrashDecoder: decoder process exited code=${code}, stdout=${Buffer.byteLength(stdout)} bytes, stderr=${Buffer.byteLength(stderr)} bytes`);
+        if (stdout.trim()) {
+          const plainOutput = stripAnsi(stdout);
+          console.info(`CrashDecoder: decoder output markers register=${plainOutput.includes("Register decode")} stack=${plainOutput.includes("Stack Dump")} calculatedFrames=${plainOutput.includes("Calculated Stack Trace")}`);
+          console.info(`CrashDecoder: decoder stdout preview: ${logExcerpt(stdout, 700)}`);
+        }
         if (stderr.trim()) {
           const message = `CrashDecoder: decoder stderr: ${logExcerpt(stderr)}`;
           (code === 0 ? console.debug : console.error)(message);
@@ -680,7 +692,7 @@ class CrashDecoder {
         }
       });
 
-      proc.stdin.write(lines.join("\n") + "\n\n");
+      proc.stdin.write(decoderInput);
       proc.stdin.end();
     });
   }

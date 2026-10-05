@@ -30,6 +30,40 @@ test("crash collection strips the firmware report prefix from ESP8266 stack rows
   ]);
 });
 
+test("crash collection passes every row from a full ESP8266 dump to the decoder", async () => {
+  const decoder = Object.create(CrashDecoder.prototype);
+  decoder._collecting = new Map();
+  decoder.discovery = null;
+  let decodedLines;
+  decoder._decode = async (_ip, _id, _record, lines) => { decodedLines = lines; };
+  const ip = "192.168.29.101";
+  const messages = [
+    "pc=0x4024afed sp=0x3ffffcf0 excvaddr=0x00000000",
+    "epc2=0x00000000 epc3=0x4024afed exccause=4 depc=0x00000000 reason=3",
+    "Stack dump:",
+    "3ffffcf0: 40001f46 00000007 3ffffd00 400005e1",
+    "3ffffd00: 4000df64 00000030 00000004 0000002c",
+    "3ffffd10: 400018bc 00000000 40244cf4 000000d4",
+    "3ffffd20: 00000000 0000000c 00000000 40244dc4",
+    "3ffffd30: 000000ff 00000000 00000000 00000000",
+    "3ffffd40: 3ffef320 00000016 3ffeec74 0000001d",
+    "3ffffd50: 40002514 3fffdd3c 3ffef320 00000000",
+    "3ffffd60: 3ffeec74 00000003 00000008 00000000",
+    "3ffffd70: 00000000 000000e8 00000000 3ffffd03",
+    "3ffffd80: 00000000 3ffea578 0000005c 4027a36f",
+    "3ffffd90: 3ffffdb0 3ffffdb0 00000004 401012d7",
+    "3ffffda0: 000000e8 00000008 3fffc200 00000022",
+    "3ffffdb0: 3ffe8a44 000000e8 00000000 00000000",
+  ];
+  for (const [id, message] of messages.entries()) {
+    decoder.feed({ id, sourceIp: ip, message: `Lightinator::Application::reportCrashDump: ${message}` });
+  }
+  decoder.feed({ id: messages.length, sourceIp: ip, message: "APPLedCtrl::start: APPLedCtrl::start" });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(decodedLines, messages);
+});
+
 test("source context resolves build-machine paths and ANSI-colored assembly locations", async (context) => {
   const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-context-"));
   context.after(() => fs.rm(cacheDir, { recursive: true, force: true }));
@@ -121,6 +155,7 @@ test("source repositories use the firmware version tag and tolerate unavailable 
       return "/cache/firmware";
     },
   };
+
   const repos = await decoder._getSourceRepos("V1.2.3-4-develop");
   assert.deepEqual(repos, { "esp-rgbww-firmware": "/cache/firmware" });
   assert.deepEqual(calls[1], ["esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", "v1.2.3-4-develop"]);
@@ -130,6 +165,29 @@ test("source repositories use the firmware version tag and tolerate unavailable 
   decoder.harvester.extractSnippets = async () => [];
   const result = await decoder._decodeWithContext({}, "app.elf", [], {});
   assert.equal(result.decoded, "decoded without source");
+});
+
+test("ESP32 decode receives register and backtrace lines without the logger prefix", async () => {
+  const decoder = Object.create(CrashDecoder.prototype);
+  decoder._runDecode = async (cfg, elfPath, lines) => {
+    assert.equal(cfg.smingArch, "Esp32");
+    assert.deepEqual(lines, [
+      "Guru Meditation Error: Core 0 panic'ed (LoadProhibited). Exception was unhandled.",
+      "Core 0 register dump:",
+      "PC : 0x400d1234 PS : 0x00060030 A0 : 0x800d5678",
+      "Backtrace: 0x400d1234:0x3ffb1f20 0x400d5678:0x3ffb1f40",
+    ]);
+    return "decoded ESP32 trace";
+  };
+  decoder.harvester = { extractSnippets: async () => [] };
+
+  const result = await decoder._decodeWithContext({ smingArch: "Esp32" }, "app.out", [
+    "Application::reportCrashDump: Guru Meditation Error: Core 0 panic'ed (LoadProhibited). Exception was unhandled.",
+    "Application::reportCrashDump: Core 0 register dump:",
+    "Application::reportCrashDump: PC : 0x400d1234 PS : 0x00060030 A0 : 0x800d5678",
+    "Application::reportCrashDump: Backtrace: 0x400d1234:0x3ffb1f20 0x400d5678:0x3ffb1f40",
+  ], {});
+  assert.equal(result.decoded, "decoded ESP32 trace");
 });
 
 test("automatic and manual requests serialize checkout, decode, AI passes, and storage", { timeout: 2000 }, async () => {
@@ -275,6 +333,37 @@ test("decoder rerun uses stored firmware and Sming tags without requiring AI", a
   assert.equal(await decoder.rerunRecord(id), "corrected decode");
   assert.equal(storage.getCrashRecord(id).crashDecode, "corrected decode");
   assert.equal(storage.getCrashRecord(id).smingVersion, "sming-release-tag");
+});
+
+test("manual rerun strips legacy class-function prefixes before invoking the ESP8266 decoder", async context => {
+  const db = openDatabase(":memory:");
+  context.after(() => db.close());
+  const storage = new LogStorage({ db, dataDir: "/nonexistent" });
+  const rawDump = [
+    "Application::reportCrashDump: pc=0x4024afed sp=0x3ffffcf0 excvaddr=0x00000000",
+    "Application::reportCrashDump: Stack dump:",
+    "Application::reportCrashDump: 3ffffcf0: 40001f46 00000007 3ffffd00 400005e1",
+  ].join("\n");
+  const id = await storage.append("192.0.2.1", { message: "crash", boot: 1, bootNonce: 111 });
+  await storage.updateCrashDecode(id, "old decode", {
+    rawDump, gitVersion: "V5.0.0-989-experimental", soc: "esp8266", buildType: "debug",
+  });
+  const decoder = Object.create(CrashDecoder.prototype);
+  Object.assign(decoder, { storage, db, _decodeQueue: Promise.resolve(), elfCacheDir: "/cache", elfBaseUrl: "http://example.test" });
+  decoder._ensureElf = async () => {};
+  decoder._ensureScript = async () => {};
+  decoder._getSourceRepos = async () => ({});
+  decoder._runDecode = async (cfg, elfPath, lines) => {
+    assert.deepEqual(lines, [
+      "pc=0x4024afed sp=0x3ffffcf0 excvaddr=0x00000000",
+      "Stack dump:",
+      "3ffffcf0: 40001f46 00000007 3ffffd00 400005e1",
+    ]);
+    return "decoded stack";
+  };
+  decoder.harvester = { extractSnippets: async () => [] };
+
+  assert.equal(await decoder.rerunRecord(id), "decoded stack");
 });
 
 test("automatic decoding selects metadata for the crash boot, not the controller's current boot", async context => {
