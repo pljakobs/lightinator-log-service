@@ -202,6 +202,11 @@ mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; p
 #crash-modal-overlay.open { display: flex; }
 #crash-modal { background: #1e1e1e; border: 1px solid #444; border-radius: 6px; width: 900px; max-width: 95vw; height: 80vh; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8); }
 #crash-modal-header { background: #252526; border-bottom: 1px solid #3c3c3c; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+.crash-modal-heading { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#crash-output-tabs { display: flex; gap: 4px; }
+#crash-output-tabs [role="tab"] { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: #aaa; font-size: 11px; padding: 4px 8px; }
+#crash-output-tabs [role="tab"][aria-selected="true"] { border-bottom-color: #4ec9b0; color: #fff; }
+#crash-output-tabs [role="tab"]:disabled { cursor: not-allowed; opacity: 0.45; }
 #crash-modal-body { flex: 1; overflow: auto; padding: 14px 16px; background: #141414; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; word-break: break-all; }
 
 /* ANSI & Markdown block styling inside crash modal */

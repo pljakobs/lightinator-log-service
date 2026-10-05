@@ -220,25 +220,32 @@ test("crash Markdown sanitizes injected handlers and unsafe links", async ({ pag
 test("crash window reruns the decoder without replacing the AI analysis action", async ({ page }) => {
   await page.route("**/api/v1/crashes/42/decode", async route => {
     expect(route.request().method()).toBe("POST");
-    await route.fulfill({ json: { id: 42, crashDecode: "corrected stack decode" } });
+    await route.fulfill({ json: { id: 42, crashDecode: "corrected stack decode", rawDump: "raw register line\nraw stack row" } });
   });
   await page.evaluate(async () => {
     const { openCrashModal } = await import("/js/crash.js");
-    openCrashModal({ id: 42, sourceIp: "192.0.2.42", gitVersion: "firmware-tag", smingVersion: "sming-tag", crashDecode: "old decode" });
+    openCrashModal({ id: 42, sourceIp: "192.0.2.42", gitVersion: "firmware-tag", smingVersion: "sming-tag", crashDecode: "old decode", rawDump: "original register line\noriginal stack row" });
   });
 
   await expect(page.locator("#crash-rerun-btn")).toBeVisible();
   await expect(page.locator("#crash-analyze-btn")).toBeVisible();
   await expect(page.locator("#crash-modal-meta")).toContainText("Firmware firmware-tag");
   await expect(page.locator("#crash-modal-meta")).toContainText("Sming sming-tag");
+  await page.locator("#crash-raw-tab").click();
+  await expect(page.locator("#crash-modal-body")).toHaveText("original register line\noriginal stack row");
+  await page.locator("#crash-decoded-tab").click();
+  await expect(page.locator("#crash-modal-body")).toContainText("old decode");
   await page.locator("#crash-rerun-btn").click();
   await expect(page.locator("#crash-modal-body")).toContainText("corrected stack decode");
+  await page.locator("#crash-raw-tab").click();
+  await expect(page.locator("#crash-modal-body")).toHaveText("raw register line\nraw stack row");
 });
 
 test("failed decoder rerun displays the error and raw stack in the crash window", async ({ page }) => {
   await page.route("**/api/v1/crashes/43/decode", route => route.fulfill({ json: {
     id: 43,
     crashDecode: "[Crash decode error: ELF download unavailable]\n\nRaw stack dump:\npc=0x40201000\nStack dump:\n3ffff000: 40201000",
+    rawDump: "pc=0x40201000\nStack dump:\n3ffff000: 40201000",
   } }));
   await page.evaluate(async () => {
     const { openCrashModal } = await import("/js/crash.js");
@@ -249,6 +256,8 @@ test("failed decoder rerun displays the error and raw stack in the crash window"
   await expect(page.locator("#crash-modal-body")).toContainText("ELF download unavailable");
   await expect(page.locator("#crash-modal-body")).toContainText("Raw stack dump:");
   await expect(page.locator("#crash-modal-body")).toContainText("3ffff000: 40201000");
+  await page.locator("#crash-raw-tab").click();
+  await expect(page.locator("#crash-modal-body")).toHaveText("pc=0x40201000\nStack dump:\n3ffff000: 40201000");
 });
 
 test("credential settings are write-only and support replacement, preservation, and clearing", async ({ page }) => {

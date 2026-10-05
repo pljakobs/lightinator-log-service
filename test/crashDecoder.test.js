@@ -366,6 +366,47 @@ test("manual rerun strips legacy class-function prefixes before invoking the ESP
   assert.equal(await decoder.rerunRecord(id), "decoded stack");
 });
 
+test("manual rerun recovers stack rows missing from a legacy saved raw dump", async context => {
+  const db = openDatabase(":memory:");
+  context.after(() => db.close());
+  const storage = new LogStorage({ db, dataDir: "/nonexistent" });
+  const ip = "192.0.2.1";
+  const prefix = "Application::reportCrashDump: ";
+  const id = await storage.append(ip, { message: `${prefix}pc=0x4024afed sp=0x3ffffcf0 excvaddr=0x00000000`, boot: 5, bootNonce: 555 });
+  const partialRaw = [
+    "pc=0x4024afed sp=0x3ffffcf0 excvaddr=0x00000000",
+    "epc2=0x00000000 epc3=0x4024afed exccause=4 depc=0x00000000 reason=3",
+    "Stack dump:",
+  ].join("\n");
+  await storage.updateCrashDecode(id, "old decode", {
+    rawDump: partialRaw, gitVersion: "V5.0.0-989-experimental", soc: "esp8266", buildType: "debug",
+  });
+  await storage.append(ip, { message: `${prefix}epc2=0x00000000 epc3=0x4024afed exccause=4 depc=0x00000000 reason=3`, boot: 5, bootNonce: 555 });
+  await storage.append(ip, { message: `${prefix}Stack dump:`, boot: 5, bootNonce: 555 });
+  await storage.append(ip, { message: `${prefix}3ffffcf0: 40001f46 00000007 3ffffd00 400005e1`, boot: 5, bootNonce: 555 });
+  await storage.append(ip, { message: `${prefix}3ffffd00: 4000df64 00000030 00000004 0000002c`, boot: 5, bootNonce: 555 });
+  await storage.append(ip, { message: "APPLedCtrl::start: APPLedCtrl::start", boot: 5, bootNonce: 555 });
+
+  const decoder = Object.create(CrashDecoder.prototype);
+  Object.assign(decoder, { storage, db, _decodeQueue: Promise.resolve(), elfCacheDir: "/cache", elfBaseUrl: "http://example.test" });
+  decoder._ensureElf = async () => {};
+  decoder._ensureScript = async () => {};
+  decoder._getSourceRepos = async () => ({});
+  decoder._decodeWithContext = async (cfg, elfPath, lines) => {
+    assert.deepEqual(lines, [
+      "pc=0x4024afed sp=0x3ffffcf0 excvaddr=0x00000000",
+      "epc2=0x00000000 epc3=0x4024afed exccause=4 depc=0x00000000 reason=3",
+      "Stack dump:",
+      "3ffffcf0: 40001f46 00000007 3ffffd00 400005e1",
+      "3ffffd00: 4000df64 00000030 00000004 0000002c",
+    ]);
+    return { decoded: "decoded recovered stack", codeSnippets: [] };
+  };
+
+  assert.equal(await decoder.rerunRecord(id), "decoded recovered stack");
+  assert.match(storage.getCrashRecord(id).raw, /3ffffd00: 4000df64 00000030 00000004 0000002c/);
+});
+
 test("automatic decoding selects metadata for the crash boot, not the controller's current boot", async context => {
   const db = openDatabase(":memory:");
   context.after(() => db.close());

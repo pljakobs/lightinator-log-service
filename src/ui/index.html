@@ -193,9 +193,15 @@
 <div id="crash-modal-overlay">
   <div id="crash-modal">
     <div id="crash-modal-header">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:14px;font-weight:600;color:#f48771">&#9888; Decoded Crash Dump</span>
-        <span id="crash-modal-meta" style="font-size:11px;color:#888"></span>
+      <div class="crash-modal-heading">
+        <div style="display:flex;align-items:center;gap:10px;min-width:0">
+          <span style="font-size:14px;font-weight:600;color:#f48771">&#9888; Decoded Crash Dump</span>
+          <span id="crash-modal-meta" style="font-size:11px;color:#888"></span>
+        </div>
+        <div id="crash-output-tabs" role="tablist" aria-label="Crash output">
+          <button id="crash-decoded-tab" type="button" role="tab" aria-selected="true" aria-controls="crash-modal-body">Decoded</button>
+          <button id="crash-raw-tab" type="button" role="tab" aria-selected="false" aria-controls="crash-modal-body">Raw dump</button>
+        </div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <button id="crash-rerun-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px;display:none" title="Decode this saved dump again using its recorded firmware builds">&#8635; Rerun decoder</button>

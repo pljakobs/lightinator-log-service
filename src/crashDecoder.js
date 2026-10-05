@@ -485,6 +485,38 @@ class CrashDecoder {
     });
   }
 
+  _recoverStoredStackRows(triggerRecordId, ip, boot, rawLog) {
+    if (!this.db || !rawLog || !STACK_HEADER_RE.test(rawLog)) return rawLog;
+    const existingStackRows = rawLog.split("\n").filter(line =>
+      STACK_LINE_RE.test(normalizeCrashDumpLine(line)) || BACKTRACE_LINE_RE.test(normalizeCrashDumpLine(line))
+    ).length;
+    const rows = this.db.prepare(`SELECT message FROM logs
+      WHERE ip = ? AND boot IS ? AND id >= ? ORDER BY id ASC LIMIT 64`).all(ip, boot ?? null, triggerRecordId);
+    const recovered = [];
+    let inStack = false;
+    let recoveredStackRows = 0;
+
+    for (const row of rows) {
+      const line = normalizeCrashDumpLine(row.message);
+      if (!inStack) {
+        recovered.push(line);
+        if (STACK_HEADER_RE.test(line)) inStack = true;
+        continue;
+      }
+      if (STACK_LINE_RE.test(line) || BACKTRACE_LINE_RE.test(line)) {
+        recovered.push(line);
+        recoveredStackRows++;
+      } else {
+        break;
+      }
+    }
+
+    if (recoveredStackRows <= existingStackRows) return rawLog;
+    this._log(ip, triggerRecordId,
+      `Recovered ${recoveredStackRows} stack rows from adjacent logs; stored dump had ${existingStackRows}`);
+    return recovered.join("\n");
+  }
+
   async _analyzeRecord(triggerRecordId, analyzeWithAI = true) {
     this._log("manual", triggerRecordId, `${analyzeWithAI ? "Starting AI re-analysis" : "Starting decoder rerun"}`);
     let rawLog = null;
@@ -545,6 +577,8 @@ class CrashDecoder {
       throw new Error("Crash log or raw dump not found for analysis.");
     }
 
+    rawLog = this._recoverStoredStackRows(triggerRecordId, ip, boot, rawLog);
+
     if (!git_version || !soc) {
       this._log(ip || "manual", triggerRecordId, "Cannot rerun: saved firmware version or SoC metadata is missing", "error");
       throw new Error("Original crash firmware metadata (git_version or soc) missing for analysis.");
@@ -593,7 +627,8 @@ class CrashDecoder {
         gitVersion: git_version,
         smingVersion: sming_version,
         soc: socKey,
-        buildType: type
+        buildType: type,
+        rawDump: rawLog,
       });
     }
 

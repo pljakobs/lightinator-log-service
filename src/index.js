@@ -295,6 +295,7 @@ async function main() {
       res.json({
         id,
         crashDecode,
+        rawDump: record?.raw || null,
         gitVersion: record?.gitVersion || null,
         smingVersion: record?.smingVersion || null,
         soc: record?.soc || null,
@@ -324,7 +325,8 @@ async function main() {
         return res.status(503).json({ error: "CrashDecoder instance not available" });
       }
       const crashDecode = await crashDecoder.analyzeRecord(id);
-      res.json({ id, crashDecode });
+      const record = storage.getCrashRecord(id);
+      res.json({ id, crashDecode, rawDump: record?.raw || null });
     } catch (err) {
       next(err);
     }
@@ -340,7 +342,8 @@ async function main() {
         return res.status(503).json({ error: "CrashDecoder instance not available" });
       }
       const crashDecode = await crashDecoder.rerunRecord(id);
-      res.json({ id, crashDecode });
+      const record = storage.getCrashRecord(id);
+      res.json({ id, crashDecode, rawDump: record?.raw || null });
     } catch (err) {
       next(err);
     }
