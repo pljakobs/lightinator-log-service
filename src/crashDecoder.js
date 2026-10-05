@@ -12,7 +12,6 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
-const http = require("http");
 const https = require("https");
 const { AIContextHarvester } = require("./aiContextHarvester");
 
@@ -22,6 +21,10 @@ function stripAnsi(str) {
 
 function logExcerpt(text, maxLength = 800) {
   return stripAnsi(text).replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function decodeFailureWithDump(message, rawDump) {
+  return `${message}\n\nRaw stack dump:\n${rawDump || "(empty dump)"}`;
 }
 
 function extractCrashFingerprint(decodedText) {
@@ -187,10 +190,15 @@ class CrashDecoder {
     logger.call(console, `CrashDecoder [${ip}]${recordId != null ? ` record=${recordId}` : ""}: ${message}`);
   }
 
-  async _resolveTargetInfo(ip) {
+  async _resolveTargetInfo(ip, boot, bootNonce) {
+    const storedBootInfo = this.storage?.getBootFirmwareInfo?.(ip, boot, bootNonce) ||
+      this.discovery?.getBootInfo?.(ip, boot, bootNonce);
+    if (storedBootInfo?.git_version && storedBootInfo?.soc) return storedBootInfo;
+
     if (this.discovery) {
       const known = this.discovery.controllers.get(ip);
-      if (known?.gitVersion && known?.soc) {
+      const currentBoot = this.discovery.bootNumbers?.get(ip);
+      if (known?.gitVersion && known?.soc && (boot == null || currentBoot == null || currentBoot === boot)) {
         return {
           git_version: known.gitVersion,
           sming_version: known.smingVersion,
@@ -203,9 +211,10 @@ class CrashDecoder {
     if (this.db) {
       try {
         const row = this.db.prepare(
-          "SELECT soc, build_type, git_version, sming_version FROM controllers WHERE ip = ?"
+          "SELECT soc, build_type, git_version, sming_version, boot_nonce FROM controllers WHERE ip = ?"
         ).get(ip);
-        if (row?.git_version && row?.soc) {
+        const currentBoot = this.discovery?.bootNumbers?.get(ip);
+        if (row?.git_version && row?.soc && (boot == null || currentBoot == null || currentBoot === boot)) {
           return {
             git_version: row.git_version,
             sming_version: row.sming_version,
@@ -218,12 +227,7 @@ class CrashDecoder {
       }
     }
 
-    let info = await this._fetchFirmwareInfo(ip);
-    if (!info?.git_version) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      info = await this._fetchFirmwareInfo(ip);
-    }
-    return info;
+    return null;
   }
 
   _enqueueDecode(task) {
@@ -241,17 +245,22 @@ class CrashDecoder {
     this._log(ip, triggerRecordId, `Starting decode for ${lines.length} captured lines`);
     const metadataSource = triggerRecord.gitVersion && triggerRecord.soc ? "log record" : "controller lookup";
     this._log(ip, triggerRecordId, `Resolving firmware metadata from ${metadataSource}`);
-    const info = triggerRecord.gitVersion && triggerRecord.soc
+    const storedBootInfo = this.storage?.getBootFirmwareInfo?.(ip, triggerRecord.boot, triggerRecord.bootNonce) ||
+      this.discovery?.getBootInfo?.(ip, triggerRecord.boot, triggerRecord.bootNonce);
+    const info = storedBootInfo?.git_version && storedBootInfo?.soc
+      ? storedBootInfo
+      : (triggerRecord.gitVersion && triggerRecord.soc
       ? { git_version: triggerRecord.gitVersion, sming_version: triggerRecord.smingVersion, soc: triggerRecord.soc, build_type: triggerRecord.buildType }
-      : await this._resolveTargetInfo(ip);
+      : await this._resolveTargetInfo(ip, triggerRecord.boot, triggerRecord.bootNonce));
     if (this.storage && triggerRecordId) {
       await this.storage.updateCrashDecode(triggerRecordId, "[Crash dump detected, decoding in progress...]", {
         gitVersion: info?.git_version, smingVersion: info?.sming_version, soc: info?.soc, buildType: info?.build_type || "debug", rawDump: lines.join("\n"),
       });
     }
     if (!info || !info.git_version || !info.soc) {
-      const msg = `[Crash decode skipped: target metadata missing for ${ip}]`;
-      this._log(ip, triggerRecordId, `${msg}; info=${JSON.stringify(info || null)}`, "warn");
+      const reason = `[Crash decode skipped: target metadata missing for ${ip}]`;
+      const msg = decodeFailureWithDump(reason, lines.join("\n"));
+      this._log(ip, triggerRecordId, `${reason}; info=${JSON.stringify(info || null)}`, "warn");
       if (this.storage && triggerRecordId) {
         await this.storage.updateCrashDecode(triggerRecordId, msg);
       }
@@ -263,8 +272,9 @@ class CrashDecoder {
     const cfg    = SOC_CONFIG[socKey];
 
     if (!cfg) {
-      const msg = `[Crash decode skipped: unsupported SOC "${soc}"]`;
-      this._log(ip, triggerRecordId, msg, "warn");
+      const reason = `[Crash decode skipped: unsupported SOC "${soc}"]`;
+      const msg = decodeFailureWithDump(reason, lines.join("\n"));
+      this._log(ip, triggerRecordId, reason, "warn");
       if (this.storage && triggerRecordId) {
         await this.storage.updateCrashDecode(triggerRecordId, msg);
       }
@@ -284,8 +294,9 @@ class CrashDecoder {
       this._log(ip, triggerRecordId, `Preparing ELF ${path.basename(elfPath)}`);
       await this._ensureElf(elfUrl, elfPath);
     } catch (err) {
-      const msg = `[Crash decode error: failed downloading ELF: ${err.message}]`;
-      this._log(ip, triggerRecordId, `${msg}; url=${elfUrl}`, "error");
+      const reason = `[Crash decode error: failed downloading ELF: ${err.message}]`;
+      const msg = decodeFailureWithDump(reason, lines.join("\n"));
+      this._log(ip, triggerRecordId, `${reason}; url=${elfUrl}`, "error");
       if (this.storage && triggerRecordId) {
         await this.storage.updateCrashDecode(triggerRecordId, msg);
       }
@@ -295,8 +306,9 @@ class CrashDecoder {
     this._log(ip, triggerRecordId, `Preparing decoder script ${cfg.script}`);
     const scriptReady = await this._ensureScript(cfg);
     if (scriptReady === false) {
-      const msg = `[Crash decode error: decoder script unavailable at ${cfg.script}]`;
-      this._log(ip, triggerRecordId, msg, "error");
+      const reason = `[Crash decode error: decoder script unavailable at ${cfg.script}]`;
+      const msg = decodeFailureWithDump(reason, lines.join("\n"));
+      this._log(ip, triggerRecordId, reason, "error");
       if (this.storage && triggerRecordId) await this.storage.updateCrashDecode(triggerRecordId, msg);
       return;
     }
@@ -312,7 +324,7 @@ class CrashDecoder {
         `Stacktrace decoder succeeded: ${Buffer.byteLength(decoded)} output bytes, ${codeSnippets.length} source snippets`);
     } catch (err) {
       this._log(ip, triggerRecordId, `Stacktrace decoder failed: ${err.stack || err.message}`, "error");
-      decoded = `[Crash decode error: ${err.message}]\n\nRaw dump:\n` + lines.join("\n");
+      decoded = decodeFailureWithDump(`[Crash decode error: ${err.message}]`, lines.join("\n"));
     }
 
     // Execute Multi-Pass AI Analysis if available
@@ -363,45 +375,6 @@ class CrashDecoder {
         _crashDecode: true,
       });
     }
-  }
-
-  _fetchFirmwareInfo(ip) {
-    return new Promise((resolve) => {
-      const req = http.get(
-        {
-          hostname: ip,
-          port: 80,
-          path: "/info?v=2",
-          headers: { Accept: "application/json" },
-          timeout: 4000,
-        },
-        (res) => {
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            res.resume();
-            return resolve(null);
-          }
-          let body = "";
-          res.setEncoding("utf8");
-          res.on("data", c => (body += c));
-          res.on("end", () => {
-            try {
-              const j = JSON.parse(body);
-              resolve({
-                git_version: j?.app?.git_version ?? j?.git_version ?? null,
-                sming_version: j?.app?.sming_git_version ?? j?.app?.sming_version ??
-                  j?.sming?.git_version ?? j?.sming?.version ?? j?.sming_git_version ?? j?.sming_version ?? null,
-                soc:         j?.device?.soc       ?? j?.soc         ?? null,
-                build_type:  j?.app?.build_type   ?? j?.build_type   ?? "debug",
-              });
-            } catch {
-              resolve(null);
-            }
-          });
-        },
-      );
-      req.on("timeout", () => { req.destroy(); resolve(null); });
-      req.on("error",   ()          => resolve(null));
-    });
   }
 
   async _ensureScript(cfg) {
@@ -493,7 +466,19 @@ class CrashDecoder {
   }
 
   rerunRecord(triggerRecordId) {
-    return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId, false));
+    return this._enqueueDecode(async () => {
+      try {
+        return await this._analyzeRecord(triggerRecordId, false);
+      } catch (error) {
+        const record = this.storage?.getCrashRecord?.(triggerRecordId);
+        const rawDump = record?.raw || record?.message;
+        if (!rawDump) throw error;
+        const decoded = decodeFailureWithDump(`[Crash decode error: ${error.message}]`, rawDump);
+        await this.storage.updateCrashDecode(triggerRecordId, decoded);
+        this._log(record.sourceIp || record.ip || "manual", triggerRecordId, `Decoder rerun failed: ${error.message}`, "error");
+        return decoded;
+      }
+    });
   }
 
   async _analyzeRecord(triggerRecordId, analyzeWithAI = true) {
@@ -504,12 +489,16 @@ class CrashDecoder {
     let sming_version = null;
     let soc = null;
     let build_type = null;
+    let boot = null;
+    let boot_nonce = null;
 
     if (this.storage && typeof this.storage.getCrashRecord === "function") {
       const rec = this.storage.getCrashRecord(triggerRecordId);
       if (rec) {
         rawLog = rec.raw || rec.message;
         ip = rec.sourceIp || rec.ip;
+        boot = rec.boot;
+        boot_nonce = rec.bootNonce;
         git_version = rec.gitVersion;
         sming_version = rec.smingVersion;
         soc = rec.soc;
@@ -519,10 +508,12 @@ class CrashDecoder {
 
     if (!rawLog && this.db) {
       try {
-        const row = this.db.prepare("SELECT message, source_ip, git_version, sming_version, soc, build_type, crash_raw FROM logs WHERE id = ? AND crash_decode IS NOT NULL").get(triggerRecordId);
+        const row = this.db.prepare("SELECT message, source_ip, git_version, sming_version, soc, build_type, crash_raw, boot, boot_nonce FROM logs WHERE id = ? AND crash_decode IS NOT NULL").get(triggerRecordId);
         if (row) {
           rawLog = row.crash_raw || row.message;
           ip = row.source_ip;
+          boot = row.boot;
+          boot_nonce = row.boot_nonce;
           git_version = row.git_version;
           sming_version = row.sming_version;
           soc = row.soc;
@@ -531,6 +522,18 @@ class CrashDecoder {
       } catch (e) {
         console.debug(`CrashDecoder: DB query for record ${triggerRecordId} failed: ${e.message}`);
       }
+    }
+
+    const bootInfo = this.storage?.getBootFirmwareInfo?.(ip, boot, boot_nonce) ||
+      (this.db && boot != null
+        ? this.db.prepare(`SELECT soc, build_type, git_version, sming_version FROM controller_boot_info
+          WHERE ip = ? AND boot = ?`).get(ip, boot)
+        : null);
+    if (bootInfo) {
+      git_version = bootInfo.git_version || git_version;
+      sming_version = bootInfo.sming_version || sming_version;
+      soc = bootInfo.soc || soc;
+      build_type = bootInfo.build_type || build_type;
     }
 
     if (!rawLog) {
@@ -569,7 +572,7 @@ class CrashDecoder {
     try {
       ({ decoded, codeSnippets } = await this._decodeWithContext(cfg, elfPath, lines, repoPaths));
     } catch (err) {
-      decoded = rawLog;
+      decoded = decodeFailureWithDump(`[Crash decode error: ${err.message}]`, rawLog);
     }
 
     let finalDecoded = decoded;
@@ -670,7 +673,7 @@ class CrashDecoder {
         if (code !== 0 && stdout) {
           console.error(`CrashDecoder: decoder returned partial stdout despite exit code ${code}: ${logExcerpt(stdout)}`);
         }
-        if (code !== 0 && !stdout) {
+        if (code !== 0) {
           reject(new Error(`decode-stacktrace exited ${code}: ${logExcerpt(stderr) || "no stderr output"}`));
         } else {
           resolve(stdout || stderr);

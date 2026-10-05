@@ -73,6 +73,18 @@ function openDatabase(dbPath) {
       sming_version     TEXT,
       boot_nonce        INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS controller_boot_info (
+      ip           TEXT    NOT NULL,
+      boot         INTEGER NOT NULL,
+      boot_nonce   INTEGER,
+      soc          TEXT,
+      build_type   TEXT,
+      git_version  TEXT,
+      sming_version TEXT,
+      updated_at   TEXT    NOT NULL,
+      PRIMARY KEY (ip, boot)
+    );
     
     CREATE TABLE IF NOT EXISTS crash_reports (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,

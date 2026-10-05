@@ -57,6 +57,26 @@ test("restored nonce after service restart does not increment boot", () => {
   assert.equal(n.boot, 8);
 });
 
+test("uptime regression starts a new generation when a nonce change was missed", () => {
+  const t = new BootTracker();
+  t.restore(ip, 4, 1234, 120_000);
+  const reboot = { bootNonce: 1234, deviceTime: 1000 };
+  assert.equal(t.assign(ip, reboot), true);
+  assert.equal(reboot.boot, 5);
+  assert.equal(reboot.uptimeReset, true);
+  assert.equal(t.currentBoot(ip), 5);
+});
+
+test("late old-nonce packet with low uptime does not advance the current boot", () => {
+  const t = new BootTracker();
+  t.assign(ip, { bootNonce: 111, deviceTime: 80_000 });
+  t.assign(ip, { bootNonce: 222, deviceTime: 500 });
+  const late = { bootNonce: 111, deviceTime: 1000 };
+  assert.equal(t.assign(ip, late), true);
+  assert.equal(late.boot, 1);
+  assert.equal(t.currentBoot(ip), 2);
+});
+
 test("restore without nonce keeps counter only", () => {
   const t = new BootTracker();
   t.restore(ip, 3, undefined);

@@ -107,6 +107,14 @@ test("lastBootFor / lastBootNonceFor return the newest values", async () => {
   assert.equal(storage.lastBootNonceFor("192.0.2.1"), undefined);
 });
 
+test("lastDeviceTimeFor restores the highest uptime in the active boot", async () => {
+  const uptimeIp = "192.0.2.9";
+  await storage.append(uptimeIp, { message: "new uptime", boot: 2, bootNonce: 222, deviceTime: 80_000 });
+  await storage.append(uptimeIp, { message: "late packet", boot: 2, bootNonce: 222, deviceTime: 20_000 });
+  await storage.append(uptimeIp, { message: "old boot", boot: 1, bootNonce: 111, deviceTime: 100_000 });
+  assert.equal(storage.lastDeviceTimeFor(uptimeIp, 2), 80_000);
+});
+
 test("maxRowsPerIp trims oldest rows", async () => {
   const small = new LogStorage({ db, dataDir: tmpDir, maxRowsPerIp: 3 });
   const other = "10.0.0.2";

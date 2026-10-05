@@ -75,6 +75,7 @@ function controllerToRow(c) {
 
 const DEFAULT_PORT = 80;
 const REQUEST_TIMEOUT_MS = 5000;
+const MISSING_VERSION_RETRY_MS = 60_000;
 
 function isIpv4Address(value) {
   return /^\d+\.\d+\.\d+\.\d+$/.test(String(value || ""));
@@ -250,21 +251,96 @@ class ControllerDiscovery {
     /** IPs seen via syslog that we haven't resolved yet */
     this.extraSeeds = new Set();
     this.bootNonces = new Map();
+    this.bootNumbers = new Map();
     this.infoRequests = new Map();
+    this.bootInfoCache = new Map();
+    this.versionPollTimers = new Map();
 
     this._timer = null;
   }
 
-  setBootNonce(ip, bootNonce) {
-    if (bootNonce == null) return Promise.resolve(false);
-    this.bootNonces.set(ip, bootNonce);
+  setBootNonce(ip, bootNonce, bootNumber) {
+    if (bootNonce == null) this.bootNonces.delete(ip);
+    else this.bootNonces.set(ip, bootNonce);
+    if (bootNumber != null) this.bootNumbers.set(ip, bootNumber);
     const controller = this.controllers.get(ip);
-    if (controller) this.controllers.set(ip, { ...controller, bootNonce });
+    if (controller) this.controllers.set(ip, { ...controller, bootNonce: bootNonce ?? null });
+    if (controller && bootNumber != null) this._storeBootInfo(ip, bootNumber, bootNonce, controller, true);
     return this._saveState().then(() => !!controller);
   }
 
-  _fetchControllerInfo(ip, bootNonce) {
-    const requestKey = `${ip}:${bootNonce ?? "unknown"}`;
+  _bootInfoKey(ip, bootNumber, bootNonce) {
+    return `${ip}:${bootNumber ?? `nonce-${bootNonce ?? "unknown"}`}`;
+  }
+
+  _storeBootInfo(ip, bootNumber, bootNonce, metadata, onlyIfMissing = false) {
+    if (bootNumber == null) return;
+    const key = this._bootInfoKey(ip, bootNumber, bootNonce);
+    const info = {
+      boot_nonce: bootNonce ?? null,
+      soc: metadata.soc || null,
+      build_type: metadata.buildType || metadata.build_type || null,
+      git_version: metadata.gitVersion || metadata.git_version || null,
+      sming_version: metadata.smingVersion || metadata.sming_version || null,
+    };
+    const existing = this.bootInfoCache.get(key);
+    if (onlyIfMissing && existing) return;
+    if (this.db) {
+      const insert = onlyIfMissing ? "INSERT OR IGNORE" : "INSERT";
+      const conflict = onlyIfMissing ? "" : `ON CONFLICT (ip, boot) DO UPDATE SET
+        boot_nonce = COALESCE(excluded.boot_nonce, controller_boot_info.boot_nonce),
+        soc = COALESCE(excluded.soc, controller_boot_info.soc),
+        build_type = COALESCE(excluded.build_type, controller_boot_info.build_type),
+        git_version = COALESCE(excluded.git_version, controller_boot_info.git_version),
+        sming_version = COALESCE(excluded.sming_version, controller_boot_info.sming_version),
+        updated_at = excluded.updated_at`;
+      this.db.prepare(`${insert} INTO controller_boot_info
+        (ip, boot, boot_nonce, soc, build_type, git_version, sming_version, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?) ${conflict}`)
+        .run(ip, bootNumber, info.boot_nonce, info.soc, info.build_type, info.git_version, info.sming_version, new Date().toISOString());
+      if (onlyIfMissing) {
+        const persisted = this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce
+          FROM controller_boot_info WHERE ip = ? AND boot = ?`).get(ip, bootNumber);
+        if (persisted) {
+          this.bootInfoCache.set(key, persisted);
+          return;
+        }
+      }
+    }
+    if (onlyIfMissing && existing) return;
+    this.bootInfoCache.set(key, {
+      soc: info.soc || existing?.soc || null,
+      build_type: info.build_type || existing?.build_type || null,
+      git_version: info.git_version || existing?.git_version || null,
+      sming_version: info.sming_version || existing?.sming_version || null,
+    });
+  }
+
+  getBootInfo(ip, bootNumber, bootNonce) {
+    if (bootNumber == null && bootNonce == null) return null;
+    const key = this._bootInfoKey(ip, bootNumber, bootNonce);
+    const cached = this.bootInfoCache.get(key);
+    if (cached) return cached;
+    if (!this.db) return null;
+    let row = bootNumber != null
+      ? this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce
+        FROM controller_boot_info WHERE ip = ? AND boot = ?`).get(ip, bootNumber)
+      : this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce
+        FROM controller_boot_info WHERE ip = ? AND boot_nonce = ? ORDER BY boot DESC LIMIT 1`).get(ip, bootNonce);
+    if (!row) {
+      row = bootNumber != null
+        ? this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce FROM logs
+          WHERE ip = ? AND boot = ? AND git_version IS NOT NULL ORDER BY id DESC LIMIT 1`).get(ip, bootNumber)
+        : this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce FROM logs
+          WHERE ip = ? AND boot_nonce = ? AND git_version IS NOT NULL ORDER BY id DESC LIMIT 1`).get(ip, bootNonce);
+      if (row && bootNumber != null) this._storeBootInfo(ip, bootNumber, row.boot_nonce, row, true);
+    }
+    if (row) this.bootInfoCache.set(key, row);
+    return row || null;
+  }
+
+  _fetchControllerInfo(ip, bootNonce, bootNumber) {
+    const requestKey = `${ip}:${bootNumber ?? "unknown"}:${bootNonce ?? "unknown"}`;
     const activeRequest = this.infoRequests.get(requestKey);
     if (activeRequest) return activeRequest;
 
@@ -276,23 +352,25 @@ class ControllerDiscovery {
     return request;
   }
 
-  async refreshControllerInfo(ip, expectedBootNonce) {
-    const info = await this._fetchControllerInfo(ip, expectedBootNonce);
-    if (this.bootNonces.get(ip) !== expectedBootNonce) return false;
+  async refreshControllerInfo(ip, expectedBootNonce, expectedBootNumber) {
+    try {
+      const info = await this._fetchControllerInfo(ip, expectedBootNonce, expectedBootNumber);
+      if ((this.bootNonces.get(ip) ?? null) !== (expectedBootNonce ?? null) ||
+          this.bootNumbers.get(ip) !== expectedBootNumber) return false;
 
-    const app = info?.app || {};
-    const updates = {
-      soc: info?.device?.soc ?? info?.soc,
-      buildType: app.build_type ?? info?.build_type,
-      gitVersion: app.git_version ?? info?.git_version,
-      smingVersion: app.sming_git_version ?? app.sming_version ?? info?.sming?.git_version ?? info?.sming?.version ??
-        info?.sming_git_version ?? info?.sming_version,
-    };
-    for (const [key, value] of Object.entries(updates)) {
-      if (typeof value !== "string" || !value.trim()) delete updates[key];
-    }
+      const app = info?.app || {};
+      const updates = {
+        soc: info?.device?.soc ?? info?.soc,
+        buildType: app.build_type ?? info?.build_type,
+        gitVersion: app.git_version ?? info?.git_version,
+        smingVersion: app.sming_git_version ?? app.sming_version ?? info?.sming?.git_version ?? info?.sming?.version ??
+          info?.sming_git_version ?? info?.sming_version,
+      };
+      for (const [key, value] of Object.entries(updates)) {
+        if (typeof value !== "string" || !value.trim()) delete updates[key];
+      }
 
-    const current = this.controllers.get(ip) || {
+      const current = this.controllers.get(ip) || {
       ip,
       hostname: ip,
       deviceId: null,
@@ -303,12 +381,84 @@ class ControllerDiscovery {
       splitBrain: false,
       lastSeen: new Date().toISOString(),
       lastLogReceived: null,
-    };
-    this.controllers.set(ip, { ...current, ...updates, bootNonce: expectedBootNonce, reachable: true });
-    await this._saveState();
-    console.info(`Discovery: refreshed /info?v=2 after boot nonce ${expectedBootNonce} for ${ip}: firmware=${updates.gitVersion || current.gitVersion || "unknown"} sming=${updates.smingVersion || current.smingVersion || "unknown"}`);
-    if (this.onUpdate) this.onUpdate(this.getAll());
-    return true;
+      };
+      this.controllers.set(ip, { ...current, ...updates, bootNonce: expectedBootNonce ?? null, reachable: true });
+      const updated = this.controllers.get(ip);
+      this._storeBootInfo(ip, expectedBootNumber, expectedBootNonce, updated);
+      await this._saveState();
+      console.info(`Discovery: refreshed /info?v=2 for ${ip}: boot=${expectedBootNumber ?? "unknown"} nonce=${expectedBootNonce ?? "unknown"} firmware=${updates.gitVersion || current.gitVersion || "unknown"} sming=${updates.smingVersion || current.smingVersion || "unknown"}`);
+      if (this.onUpdate) this.onUpdate(this.getAll());
+      if (updated.gitVersion && updated.soc) this._clearInfoRetry(ip, expectedBootNumber);
+      else this._scheduleMissingVersionPoll(ip, expectedBootNonce, expectedBootNumber);
+      return true;
+    } catch (error) {
+      this._scheduleBootInfoRetry(ip, expectedBootNonce, expectedBootNumber, error);
+      throw error;
+    }
+  }
+
+  _infoRetryKey(ip, bootNumber) {
+    return `${ip}:${bootNumber ?? "unknown"}`;
+  }
+
+  _clearInfoRetry(ip, bootNumber) {
+    const key = this._infoRetryKey(ip, bootNumber);
+    const timer = this.versionPollTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.versionPollTimers.delete(key);
+  }
+
+  _scheduleInfoRetry(ip, bootNonce, bootNumber, delayMs) {
+    const key = this._infoRetryKey(ip, bootNumber);
+    if (this.versionPollTimers.has(key)) return;
+    const timer = setTimeout(async () => {
+      this.versionPollTimers.delete(key);
+      if (this.bootNumbers.get(ip) !== bootNumber ||
+          (this.bootNonces.get(ip) ?? null) !== (bootNonce ?? null)) return;
+      try {
+        await this.refreshControllerInfo(ip, bootNonce, bootNumber);
+      } catch (error) {
+        console.warn(`Discovery: scheduled /info?v=2 retry failed for ${ip}: ${error.message}`);
+        if (!this.versionPollTimers.has(key)) {
+          this._scheduleInfoRetry(ip, bootNonce, bootNumber, MISSING_VERSION_RETRY_MS);
+        }
+      }
+    }, Math.max(0, delayMs));
+    if (timer.unref) timer.unref();
+    this.versionPollTimers.set(key, timer);
+  }
+
+  _scheduleMissingVersionPoll(ip, bootNonce = this.bootNonces.get(ip) ?? null, bootNumber = this.bootNumbers.get(ip)) {
+    const controller = this.controllers.get(ip);
+    if (controller?.gitVersion && controller?.soc) return;
+    this._scheduleInfoRetry(ip, bootNonce, bootNumber, MISSING_VERSION_RETRY_MS);
+  }
+
+  _scheduleBootInfoRetry(ip, bootNonce, bootNumber, error) {
+    const seconds = Number(error.retryAfter);
+    const retryAt = Date.parse(error.retryAfter);
+    const delayMs = error.retryAfter != null && Number.isFinite(seconds)
+      ? Math.max(0, seconds * 1000)
+      : (error.retryAfter && Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : MISSING_VERSION_RETRY_MS);
+    this._scheduleInfoRetry(ip, bootNonce, bootNumber, delayMs);
+  }
+
+  async _pollMissingControllerVersions(ip) {
+    const controller = this.controllers.get(ip);
+    if (controller?.gitVersion && controller?.soc) return;
+    const bootNonce = this.bootNonces.get(ip) ?? null;
+    const bootNumber = this.bootNumbers.get(ip);
+    const key = this._infoRetryKey(ip, bootNumber);
+    const requestKey = `${ip}:${bootNumber ?? "unknown"}:${bootNonce ?? "unknown"}`;
+    if (this.versionPollTimers.has(key) || this.infoRequests.has(requestKey)) return;
+    try {
+      await this.refreshControllerInfo(ip, bootNonce, bootNumber);
+    } catch (error) {
+      console.debug(`Discovery: initial version lookup failed for ${ip}: ${error.message}`);
+      if (!this.versionPollTimers.has(key)) {
+        this._scheduleInfoRetry(ip, bootNonce, bootNumber, MISSING_VERSION_RETRY_MS);
+      }
+    }
   }
 
   /** Called by UDP ingest when a syslog packet arrives from a new IP */
@@ -340,6 +490,8 @@ class ControllerDiscovery {
   stop() {
     clearInterval(this._timer);
     this._timer = null;
+    for (const timer of this.versionPollTimers.values()) clearTimeout(timer);
+    this.versionPollTimers.clear();
   }
 
   async refresh() {
@@ -468,38 +620,29 @@ class ControllerDiscovery {
       this.extraSeeds.delete(ip);
     }
 
-    // Fallback discovery for standalone wall panels:
-    // probe all seeds not discovered via /hosts + /data.
+    // Fallback discovery for standalone wall panels without polling firmware metadata.
     const fallbackCandidates = allSeeds.filter((host) => {
       if (!host) return false;
       if (updatedIps.has(host)) return false;
       const existing = this.controllers.get(host);
-      return !(existing && existing.deviceClass === "swarm_controller");
+      return !(existing && existing.deviceClass === "swarm_controller") &&
+        (!existing || existing.deviceClass === "wall_panel");
     });
 
     for (const host of fallbackCandidates) {
-      const infoResult = await fetchFirstJson(host, this.controllerPort, ["/info?v=2", "/info"]);
-      if (!infoResult) {
-        continue;
-      }
-
       const cfgResult = await fetchFirstJson(host, this.controllerPort, ["/config"]);
-      const info = infoResult.body || {};
+      if (!cfgResult) continue;
       const cfg = cfgResult?.body || {};
 
       const ip = host;
       const existing = this.controllers.get(ip) || {};
-      const detectedName = info?.device?.name || info?.name || info?.hostname || existing.name || ip;
-      const detectedSoc = info?.device?.soc || info?.soc || existing.soc;
-      const detectedBuildType = info?.app?.build_type || info?.build_type || existing.buildType;
-      const detectedGitVersion = info?.app?.git_version || info?.git_version || existing.gitVersion;
       const loggingEnabled = cfg?.network?.rsyslog?.enabled;
 
       this.controllers.set(ip, {
         hostname: existing.hostname || ip,
         ip,
         deviceId: existing.deviceId || null,
-        name: detectedName,
+        name: existing.name || ip,
         deviceClass: "wall_panel",
         groups: existing.groups || [],
         loggingEnabled: loggingEnabled !== undefined
@@ -509,9 +652,9 @@ class ControllerDiscovery {
         splitBrain: false,
         lastSeen: new Date().toISOString(),
         lastLogReceived: existing.lastLogReceived || null,
-        soc: detectedSoc,
-        buildType: detectedBuildType,
-        gitVersion: detectedGitVersion,
+        soc: existing.soc,
+        buildType: existing.buildType,
+        gitVersion: existing.gitVersion,
         smingVersion: existing.smingVersion,
         bootNonce: existing.bootNonce,
       });
@@ -564,34 +707,18 @@ class ControllerDiscovery {
       }
     }
 
-    // ── Fetch actual rsyslog.enabled from each reachable controller's /config ──
-    // This reflects the real firmware state rather than an in-memory shadow.
+    // Refresh rsyslog.enabled without polling firmware version metadata.
     await Promise.all(
       reachableIps.map(async (ip) => {
         try {
           const requestedBootNonce = this.bootNonces.get(ip);
-          const [cfg, info] = await Promise.all([
-            fetchJson(ip, this.controllerPort, "/config").catch((e) => { console.debug(`Discovery: /config failed for ${ip}: ${e.message}`); return null; }),
-            this._fetchControllerInfo(ip, requestedBootNonce).catch((e) => { console.debug(`Discovery: /info?v=2 failed for ${ip}: ${e.message}`); return null; }),
-          ]);
+          const cfg = await fetchJson(ip, this.controllerPort, "/config")
+            .catch((e) => { console.debug(`Discovery: /config failed for ${ip}: ${e.message}`); return null; });
           const entry = this.controllers.get(ip);
           if (!entry || this.bootNonces.get(ip) !== requestedBootNonce) return;
           const updates = {};
           const enabled = cfg?.network?.rsyslog?.enabled ?? null;
           if (enabled !== null) updates.loggingEnabled = enabled;
-          // /info?v=2 returns nested structure: { device: { soc }, app: { build_type, git_version } }
-          // Older firmware that doesn't recognise the v param returns a flat structure:
-          // { soc, build_type, git_version } — fall back to root-level fields in that case.
-          if (info?.device?.soc)       updates.soc        = info.device.soc;
-          else if (info?.soc)          updates.soc        = info.soc;
-          if (info?.app?.build_type)   updates.buildType  = info.app.build_type;
-          else if (info?.build_type)   updates.buildType  = info.build_type;
-          if (info?.app?.git_version)  updates.gitVersion = info.app.git_version;
-          else if (info?.git_version)  updates.gitVersion = info.git_version;
-          const smingVersion = info?.app?.sming_git_version ?? info?.app?.sming_version ??
-            info?.sming?.git_version ?? info?.sming?.version ?? info?.sming_git_version ?? info?.sming_version;
-          if (smingVersion) updates.smingVersion = smingVersion;
-          console.debug(`Discovery: /info?v=2 for ${ip}: ${info ? `soc=${info.device?.soc ?? info.soc} build=${info.app?.build_type ?? info.build_type} ver=${info.app?.git_version ?? info.git_version} sming=${info.sming?.version ?? info.sming?.git_version ?? info.app?.sming_version ?? info.app?.sming_git_version ?? "unknown"}` : "null"}`);
           if (Object.keys(updates).length) {
             this.controllers.set(ip, { ...entry, ...updates });
           }
@@ -602,6 +729,8 @@ class ControllerDiscovery {
     );
 
     await this._saveState();
+
+    await Promise.all([...updatedIps].map(ip => this._pollMissingControllerVersions(ip)));
 
     if (this.onUpdate) this.onUpdate(this.getAll());
   }

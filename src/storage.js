@@ -71,10 +71,13 @@ class LogStorage {
       DELETE FROM logs WHERE id IN (SELECT id FROM logs WHERE ip = ? ORDER BY id ASC LIMIT ?)
     `);
     this._stmtLastBoot = db.prepare(
-      "SELECT boot FROM logs WHERE ip = ? AND boot IS NOT NULL ORDER BY id DESC LIMIT 1",
+      "SELECT MAX(boot) AS boot FROM logs WHERE ip = ? AND boot IS NOT NULL",
     );
     this._stmtLastBootNonce = db.prepare(
-      "SELECT boot_nonce FROM logs WHERE ip = ? AND boot_nonce IS NOT NULL ORDER BY id DESC LIMIT 1",
+      "SELECT boot_nonce FROM logs WHERE ip = ? AND boot = ? AND boot_nonce IS NOT NULL ORDER BY id DESC LIMIT 1",
+    );
+    this._stmtLastDeviceTime = db.prepare(
+      "SELECT MAX(device_time) AS device_time FROM logs WHERE ip = ? AND boot = ?",
     );
     this._stmtSources = db.prepare(`
       SELECT ip, MAX(received_at) AS last_seen, COUNT(*) AS entries
@@ -257,6 +260,26 @@ class LogStorage {
     return row ? { ...rowToRecord(row), raw: row.crash_raw || null } : null;
   }
 
+  getBootFirmwareInfo(ip, boot, bootNonce) {
+    let row = boot != null
+      ? this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce
+        FROM controller_boot_info WHERE ip = ? AND boot = ?`).get(ip, boot)
+      : null;
+    if (!row && boot != null) {
+      row = this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce FROM logs
+        WHERE ip = ? AND boot = ? AND git_version IS NOT NULL ORDER BY id DESC LIMIT 1`).get(ip, boot);
+    }
+    if (!row && boot == null && bootNonce != null) {
+      row = this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce
+        FROM controller_boot_info WHERE ip = ? AND boot_nonce = ? ORDER BY boot DESC LIMIT 1`).get(ip, bootNonce);
+    }
+    if (!row && boot == null && bootNonce != null) {
+      row = this.db.prepare(`SELECT soc, build_type, git_version, sming_version, boot_nonce FROM logs
+        WHERE ip = ? AND boot_nonce = ? AND git_version IS NOT NULL ORDER BY id DESC LIMIT 1`).get(ip, bootNonce);
+    }
+    return row || null;
+  }
+
   prune({ ip = null, now = Date.now() } = {}) {
     return this.db.transaction(() => {
       let deleted = 0;
@@ -431,13 +454,18 @@ class LogStorage {
    */
   lastBootFor(ip) {
     const row = this._stmtLastBoot.get(ip);
-    return Promise.resolve(row ? row.boot : 0);
+    return Promise.resolve(row?.boot ?? 0);
   }
 
   /** Most recent boot nonce seen for an IP, or undefined. */
-  lastBootNonceFor(ip) {
-    const row = this._stmtLastBootNonce.get(ip);
+  lastBootNonceFor(ip, boot = this._stmtLastBoot.get(ip)?.boot) {
+    const row = boot == null ? null : this._stmtLastBootNonce.get(ip, boot);
     return row ? row.boot_nonce : undefined;
+  }
+
+  lastDeviceTimeFor(ip, boot = this._stmtLastBoot.get(ip)?.boot) {
+    const row = boot == null ? null : this._stmtLastDeviceTime.get(ip, boot);
+    return row ? row.device_time : undefined;
   }
 
   /** Boot sessions of an IP, newest first (like `journalctl --list-boots`). */

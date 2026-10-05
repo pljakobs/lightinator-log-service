@@ -235,6 +235,22 @@ test("crash window reruns the decoder without replacing the AI analysis action",
   await expect(page.locator("#crash-modal-body")).toContainText("corrected stack decode");
 });
 
+test("failed decoder rerun displays the error and raw stack in the crash window", async ({ page }) => {
+  await page.route("**/api/v1/crashes/43/decode", route => route.fulfill({ json: {
+    id: 43,
+    crashDecode: "[Crash decode error: ELF download unavailable]\n\nRaw stack dump:\npc=0x40201000\nStack dump:\n3ffff000: 40201000",
+  } }));
+  await page.evaluate(async () => {
+    const { openCrashModal } = await import("/js/crash.js");
+    openCrashModal({ id: 43, sourceIp: "192.0.2.43", crashDecode: "old decode" });
+  });
+
+  await page.locator("#crash-rerun-btn").click();
+  await expect(page.locator("#crash-modal-body")).toContainText("ELF download unavailable");
+  await expect(page.locator("#crash-modal-body")).toContainText("Raw stack dump:");
+  await expect(page.locator("#crash-modal-body")).toContainText("3ffff000: 40201000");
+});
+
 test("credential settings are write-only and support replacement, preservation, and clearing", async ({ page }) => {
   const save = await page.request.post(srv.baseUrl + '/api/v1/service-config', {
     data: { values: { LLS_GITHUB_TOKEN: 'browser-private-token', GEMINI_API_KEY: 'browser-private-key' } },

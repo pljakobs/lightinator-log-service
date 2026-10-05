@@ -94,34 +94,40 @@ test("HTTP discovery requests the configured port and paths and stores controlle
   assert.equal(controller.gitVersion, "V1.0.0-1-develop");
   assert.equal(controller.smingVersion, "6.2.0");
   assert.deepEqual(controller.groups, [{ id: 2, name: "Fixture group" }]);
+
+  requests.length = 0;
+  await networkDiscovery.refresh();
+  assert.equal(requests.includes("/info?v=2"), false, "known version metadata is not polled during routine discovery");
 });
 
 test("boot info refresh preserves prior tags and ignores a delayed response from an older nonce", async context => {
   let releaseOldInfo;
   let requestCount = 0;
   const server = http.createServer(async (_request, response) => {
-    requestCount++;
-    if (requestCount === 1) await new Promise(resolve => { releaseOldInfo = resolve; });
+    const requestNumber = requestCount++;
+    if (requestNumber === 0) await new Promise(resolve => { releaseOldInfo = resolve; });
     response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify({
       device: { soc: "esp8266" },
-      app: { git_version: requestCount === 1 ? "old-firmware" : "new-firmware", sming_git_version: requestCount === 1 ? "old-sming" : "new-sming", build_type: "debug" },
+      app: { git_version: requestNumber === 0 ? "old-firmware" : "new-firmware", sming_git_version: requestNumber === 0 ? "old-sming" : "new-sming", build_type: "debug" },
     }));
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   context.after(() => new Promise(resolve => server.close(resolve)));
 
-  const networkDiscovery = new ControllerDiscovery({ seedHosts: [], controllerPort: server.address().port, refreshIntervalMs: 0 });
+  const metadataDb = openDatabase(":memory:");
+  context.after(() => metadataDb.close());
+  const networkDiscovery = new ControllerDiscovery({ db: metadataDb, seedHosts: [], controllerPort: server.address().port, refreshIntervalMs: 0 });
   networkDiscovery.controllers.set("127.0.0.1", {
     ip: "127.0.0.1", gitVersion: "old-firmware", smingVersion: "old-sming", bootNonce: 111,
   });
-  networkDiscovery.setBootNonce("127.0.0.1", 111);
-  const oldRefresh = networkDiscovery.refreshControllerInfo("127.0.0.1", 111);
+  networkDiscovery.setBootNonce("127.0.0.1", 111, 1);
+  const oldRefresh = networkDiscovery.refreshControllerInfo("127.0.0.1", 111, 1);
   await new Promise(resolve => setImmediate(resolve));
 
-  await networkDiscovery.setBootNonce("127.0.0.1", 222);
+  await networkDiscovery.setBootNonce("127.0.0.1", 222, 2);
   assert.equal(networkDiscovery.controllers.get("127.0.0.1").gitVersion, "old-firmware");
-  assert.equal(await networkDiscovery.refreshControllerInfo("127.0.0.1", 222), true);
+  assert.equal(await networkDiscovery.refreshControllerInfo("127.0.0.1", 222, 2), true);
   releaseOldInfo();
   assert.equal(await oldRefresh, false);
 
@@ -129,6 +135,8 @@ test("boot info refresh preserves prior tags and ignores a delayed response from
   assert.equal(controller.bootNonce, 222);
   assert.equal(controller.gitVersion, "new-firmware");
   assert.equal(controller.smingVersion, "new-sming");
+  assert.equal(networkDiscovery.getBootInfo("127.0.0.1", 1, 111).git_version, "old-firmware");
+  assert.equal(networkDiscovery.getBootInfo("127.0.0.1", 2, 222).git_version, "new-firmware");
 });
 
 test("controller info retries HTTP 429 after Retry-After and reads the reported Sming version", async context => {

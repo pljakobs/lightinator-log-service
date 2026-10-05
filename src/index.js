@@ -129,7 +129,7 @@ async function main() {
 
   const bootTracker = new BootTracker();
   for (const boot of initialState.boots) {
-    bootTracker.restore(boot.ip, boot.boot, boot.nonce);
+    bootTracker.restore(boot.ip, boot.boot, boot.nonce, boot.deviceTime);
   }
 
   const advertiseHost = resolveAdvertiseHost(config.discoverySeedHosts);
@@ -162,7 +162,7 @@ async function main() {
 
   discovery.controllers = new Map(initialState.controllers.map(controller => [controller.ip, controller]));
   for (const boot of initialState.boots) {
-    if (boot.nonce != null) discovery.setBootNonce(boot.ip, boot.nonce);
+    discovery.setBootNonce(boot.ip, boot.nonce, boot.boot);
   }
   discovery.start({ loadState: false });
   let firmwareUpdater;
@@ -689,15 +689,23 @@ async function main() {
       const previousBoot = bootTracker.currentBoot(rinfo.address);
       if (!bootTracker.assign(rinfo.address, record)) return;
       const newBoot = record.boot > previousBoot;
-      if (newBoot && record.bootNonce != null) {
-        discovery.setBootNonce(rinfo.address, record.bootNonce).catch(() => {});
+      if (newBoot) {
+        const reason = record.uptimeReset ? "uptime regression" : "new nonce";
+        console.info(`Reboot detected for ${rinfo.address}: boot=${record.boot}, nonce=${record.bootNonce ?? "unknown"}, reason=${reason}`);
+        discovery.setBootNonce(rinfo.address, record.bootNonce, record.boot).catch(() => {});
       }
       const controller = discovery.controllers.get(rinfo.address);
+      const bootInfo = discovery.getBootInfo(rinfo.address, record.boot, record.bootNonce);
       if (controller) {
-        record.gitVersion = controller.gitVersion || null;
-        record.smingVersion = controller.smingVersion || null;
-        record.soc = controller.soc || null;
-        record.buildType = controller.buildType || null;
+        record.gitVersion = bootInfo?.git_version || controller.gitVersion || null;
+        record.smingVersion = bootInfo?.sming_version || controller.smingVersion || null;
+        record.soc = bootInfo?.soc || controller.soc || null;
+        record.buildType = bootInfo?.build_type || controller.buildType || null;
+      } else if (bootInfo) {
+        record.gitVersion = bootInfo.git_version;
+        record.smingVersion = bootInfo.sming_version;
+        record.soc = bootInfo.soc;
+        record.buildType = bootInfo.build_type;
       }
 
       await storage.append(rinfo.address, record);
@@ -707,8 +715,8 @@ async function main() {
         loki.forward(record);
       }
       crashDecoder.feed(record);
-      if (newBoot && record.bootNonce != null) {
-        discovery.refreshControllerInfo(rinfo.address, record.bootNonce).catch((err) => {
+      if (newBoot) {
+        discovery.refreshControllerInfo(rinfo.address, record.bootNonce, record.boot).catch((err) => {
           console.debug(`Discovery: reboot info refresh failed for ${rinfo.address}: ${err.message}`);
         });
       }

@@ -277,6 +277,80 @@ test("decoder rerun uses stored firmware and Sming tags without requiring AI", a
   assert.equal(storage.getCrashRecord(id).smingVersion, "sming-release-tag");
 });
 
+test("automatic decoding selects metadata for the crash boot, not the controller's current boot", async context => {
+  const db = openDatabase(":memory:");
+  context.after(() => db.close());
+  const storage = new LogStorage({ db, dataDir: "/nonexistent" });
+  const id = await storage.append("192.0.2.1", { message: "crash", boot: 1, bootNonce: 111, gitVersion: "new-firmware", soc: "esp8266" });
+  await storage.updateCrashDecode(id, "pending", { rawDump: "old boot stack", gitVersion: "new-firmware", soc: "esp8266" });
+  db.prepare(`INSERT INTO controller_boot_info
+    (ip, boot, boot_nonce, soc, build_type, git_version, sming_version, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run("192.0.2.1", 1, 111, "esp8266", "debug", "old-firmware", "old-sming", new Date().toISOString());
+  db.prepare(`INSERT INTO controller_boot_info
+    (ip, boot, boot_nonce, soc, build_type, git_version, sming_version, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run("192.0.2.1", 2, 222, "esp8266", "debug", "new-firmware", "new-sming", new Date().toISOString());
+
+  const decoder = Object.create(CrashDecoder.prototype);
+  Object.assign(decoder, {
+    storage, db, aiEnabled: false, elfCacheDir: "/cache", elfBaseUrl: "http://example.test",
+    discovery: { controllers: new Map([["192.0.2.1", { gitVersion: "new-firmware", smingVersion: "new-sming", soc: "esp8266" }]]), bootNumbers: new Map([["192.0.2.1", 2]]) },
+  });
+  decoder._ensureElf = async url => { assert.match(url, /old-firmware\/esp8266\/debug\/app_0.out$/); };
+  decoder._ensureScript = async () => {};
+  decoder._getSourceRepos = async (gitVersion, smingVersion) => {
+    assert.equal(gitVersion, "old-firmware");
+    assert.equal(smingVersion, "old-sming");
+    return {};
+  };
+  decoder._decodeWithContext = async () => ({ decoded: "decoded old boot", codeSnippets: [] });
+
+  await decoder._decodeRecord("192.0.2.1", id, {
+    id, sourceIp: "192.0.2.1", boot: 1, bootNonce: 111,
+    gitVersion: "new-firmware", soc: "esp8266", buildType: "debug",
+  }, ["old boot stack"]);
+  assert.equal(storage.getCrashRecord(id).gitVersion, "old-firmware");
+  assert.equal(storage.getCrashRecord(id).smingVersion, "old-sming");
+});
+
+test("failed decoder rerun returns the failure and saved raw stack together", async context => {
+  const db = openDatabase(":memory:");
+  context.after(() => db.close());
+  const storage = new LogStorage({ db, dataDir: "/nonexistent" });
+  const id = await storage.append("192.0.2.1", { message: "crash", boot: 1 });
+  await storage.updateCrashDecode(id, "old decode", {
+    rawDump: "pc=0x40201000\nStack dump:\n3ffff000: 40201000", gitVersion: "V1.0.0-1-develop",
+    soc: "esp8266", buildType: "debug",
+  });
+  const decoder = Object.create(CrashDecoder.prototype);
+  Object.assign(decoder, { storage, db, _decodeQueue: Promise.resolve(), elfCacheDir: "/cache", elfBaseUrl: "http://example.test" });
+  decoder._ensureElf = async () => { throw new Error("ELF download unavailable"); };
+
+  const result = await decoder.rerunRecord(id);
+  assert.match(result, /Crash decode error: ELF download unavailable/);
+  assert.match(result, /Raw stack dump:\npc=0x40201000\nStack dump:/);
+  assert.equal(storage.getCrashRecord(id).crashDecode, result);
+});
+
+test("automatic decoder asset failure stores its message with the captured stack", async context => {
+  const db = openDatabase(":memory:");
+  context.after(() => db.close());
+  const storage = new LogStorage({ db, dataDir: "/nonexistent" });
+  const id = await storage.append("192.0.2.1", { message: "panic", boot: 1, bootNonce: 111 });
+  const decoder = Object.create(CrashDecoder.prototype);
+  Object.assign(decoder, { storage, db, aiEnabled: false, elfCacheDir: "/cache", elfBaseUrl: "http://example.test" });
+  decoder._ensureElf = async () => { throw new Error("ELF download unavailable"); };
+
+  await decoder._decodeRecord("192.0.2.1", id, {
+    id, sourceIp: "192.0.2.1", boot: 1, bootNonce: 111, gitVersion: "V1.0.0-1-develop", soc: "esp8266", buildType: "debug",
+  }, ["pc=0x40201000", "Stack dump:", "3ffff000: 40201000"]);
+
+  const decode = storage.getCrashRecord(id).crashDecode;
+  assert.match(decode, /Crash decode error: failed downloading ELF: ELF download unavailable/);
+  assert.match(decode, /Raw stack dump:\npc=0x40201000\nStack dump:\n3ffff000: 40201000/);
+});
+
 test("map cache isolates firmware, SoC, and build type and selects architecture filenames", async context => {
   const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-maps-"));
   context.after(() => fs.rm(cacheDir, { recursive: true, force: true }));

@@ -33,7 +33,11 @@ async function initialize(options) {
     await discovery._loadState();
     const boots = [];
     for (const source of storage.listSources()) {
-      boots.push({ ip: source.ip, boot: await storage.lastBootFor(source.ip), nonce: storage.lastBootNonceFor(source.ip) });
+      const boot = await storage.lastBootFor(source.ip);
+      const state = { ip: source.ip, boot, nonce: storage.lastBootNonceFor(source.ip, boot) };
+      const deviceTime = storage.lastDeviceTimeFor(source.ip, boot);
+      if (deviceTime != null) state.deviceTime = deviceTime;
+      boots.push(state);
     }
     return { boots, controllers: discovery.getAll() };
   } finally {
