@@ -23,6 +23,7 @@ test("lines without nonce inherit the current boot", () => {
   const r = {};
   t.assign(ip, r);
   assert.equal(r.boot, 1);
+  assert.equal(r.bootNonce, 111);
 });
 
 test("late packet from previous boot does not create fake reboots", () => {

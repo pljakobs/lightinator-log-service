@@ -9,6 +9,27 @@ const { execFileSync } = require("node:child_process");
 const { openDatabase } = require("../src/db");
 const { LogStorage } = require("../src/storage");
 
+test("crash collection strips the firmware report prefix from ESP8266 stack rows", () => {
+  const decoder = Object.create(CrashDecoder.prototype);
+  decoder._collecting = new Map();
+  decoder.discovery = null;
+  const ip = "192.168.29.101";
+
+  decoder.feed({ id: 1, sourceIp: ip, message: "Application::reportCrashDump: pc=0x4024afed sp=0x3fffffc0 excvaddr=0x00000000" });
+  decoder.feed({ id: 2, sourceIp: ip, message: "Application::reportCrashDump: epc2=0x00000000 epc3=0x4024afed exccause=4 depc=0x00000000 reason=3" });
+  decoder.feed({ id: 3, sourceIp: ip, message: "Application::reportCrashDump: Stack dump:" });
+  decoder.feed({ id: 4, sourceIp: ip, message: "Application::reportCrashDump: 3fffffc0: 40001f46 00000007 3fffffd0 400005e1" });
+  decoder.feed({ id: 5, sourceIp: ip, message: "Application::reportCrashDump: 3fffffd0: 4000df64 00000030 00000030 4000002c" });
+
+  const state = decoder._collecting.get(ip);
+  clearTimeout(state.timer);
+  assert.deepEqual(state.lines.slice(-3), [
+    "Stack dump:",
+    "3fffffc0: 40001f46 00000007 3fffffd0 400005e1",
+    "3fffffd0: 4000df64 00000030 00000030 4000002c",
+  ]);
+});
+
 test("source context resolves build-machine paths and ANSI-colored assembly locations", async (context) => {
   const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-context-"));
   context.after(() => fs.rm(cacheDir, { recursive: true, force: true }));
@@ -103,6 +124,8 @@ test("source repositories use the firmware version tag and tolerate unavailable 
   const repos = await decoder._getSourceRepos("V1.2.3-4-develop");
   assert.deepEqual(repos, { "esp-rgbww-firmware": "/cache/firmware" });
   assert.deepEqual(calls[1], ["esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", "v1.2.3-4-develop"]);
+  await decoder._getSourceRepos("V1.2.3-4-develop", "sming-build-tag");
+  assert.deepEqual(calls[2], ["Sming", "https://github.com/pljakobs/Sming.git", "sming-build-tag"]);
   decoder._runDecode = async () => "decoded without source";
   decoder.harvester.extractSnippets = async () => [];
   const result = await decoder._decodeWithContext({}, "app.elf", [], {});
@@ -224,6 +247,34 @@ test("manual re-analysis uses stored raw crash and original release build after 
   decoder.aiService = { isAvailable: () => true, analyzeCrash: async () => "final report" };
   assert.match(await decoder._analyzeRecord(id), /decoded original dump/);
   assert.equal(storage.getCrashRecord(id).raw, "original dump\noriginal stack");
+});
+
+test("decoder rerun uses stored firmware and Sming tags without requiring AI", async context => {
+  const db = openDatabase(":memory:");
+  context.after(() => db.close());
+  const storage = new LogStorage({ db, dataDir: "/nonexistent" });
+  const id = await storage.append("192.0.2.1", { message: "crash", bootNonce: 42 });
+  await storage.updateCrashDecode(id, "old decode", {
+    rawDump: "saved register dump\nsaved stack", gitVersion: "V2.0.0-3-develop", smingVersion: "sming-release-tag",
+    soc: "esp8266", buildType: "release",
+  });
+  const decoder = Object.create(CrashDecoder.prototype);
+  Object.assign(decoder, { storage, db, _decodeQueue: Promise.resolve(), elfCacheDir: "/cache", elfBaseUrl: "http://example.test" });
+  decoder._ensureElf = async url => { assert.match(url, /V2\.0\.0-3-develop\/esp8266\/release\/app_0.out$/); };
+  decoder._ensureScript = async () => {};
+  decoder._getSourceRepos = async (firmwareVersion, smingVersion) => {
+    assert.equal(firmwareVersion, "V2.0.0-3-develop");
+    assert.equal(smingVersion, "sming-release-tag");
+    return {};
+  };
+  decoder._decodeWithContext = async (cfg, elfPath, lines) => {
+    assert.deepEqual(lines, ["saved register dump", "saved stack"]);
+    return { decoded: "corrected decode", codeSnippets: [] };
+  };
+
+  assert.equal(await decoder.rerunRecord(id), "corrected decode");
+  assert.equal(storage.getCrashRecord(id).crashDecode, "corrected decode");
+  assert.equal(storage.getCrashRecord(id).smingVersion, "sming-release-tag");
 });
 
 test("map cache isolates firmware, SoC, and build type and selects architecture filenames", async context => {

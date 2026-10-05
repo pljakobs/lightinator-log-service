@@ -66,7 +66,7 @@ function render() {
     const issue = issueUrl
       ? `<a href="${escHtml(issueUrl)}" target="_blank" rel="noopener" title="Open GitHub issue">#${escHtml(c.issueNumber ?? '')}</a>`
       : '';
-    const meta = [c.soc, c.gitVersion].filter(Boolean).map(escHtml).join(' · ');
+    const meta = [c.soc, c.gitVersion, c.smingVersion && `Sming ${c.smingVersion}`].filter(Boolean).map(escHtml).join(' · ');
     parts.push(
       `<div class="crash-row" data-id="${c.id}" data-ip="${escHtml(c.ip)}" title="${escHtml(c.pending ? 'Crash decode in progress…' : 'Click to view decoded stack trace')}${meta ? '\n' + meta : ''}">` +
         `<span class="col-time">${fmtDateTime(c.receivedAt)}</span>` +

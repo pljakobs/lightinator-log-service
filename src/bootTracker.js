@@ -25,6 +25,11 @@ class BootTracker {
     return this.counters.get(ip) || 0;
   }
 
+  currentNonce(ip) {
+    const known = this.nonces.get(ip);
+    return known ? [...known.keys()].at(-1) : undefined;
+  }
+
   /**
    * Assign `record.boot`. Returns false when the record is a duplicate restart
    * marker for an already-known nonce and should be dropped.
@@ -48,6 +53,7 @@ class BootTracker {
       }
     }
     if (record.boot === undefined) record.boot = this.currentBoot(ip);
+    if (record.bootNonce === undefined) record.bootNonce = this.currentNonce(ip);
     return true;
   }
 }

@@ -99,7 +99,7 @@ class CrashDecoder {
 
   feed(record) {
     const rawMsg = record.message || "";
-    const cleanMsg = stripAnsi(rawMsg);
+    const cleanMsg = stripAnsi(rawMsg).replace(/^Application::reportCrashDump:\s*/, "");
     const ip = record.sourceIp;
 
     if (!cleanMsg || !ip) return false;
@@ -118,6 +118,7 @@ class CrashDecoder {
           triggerRecord: {
             ...record,
             gitVersion: record.gitVersion || known?.gitVersion,
+            smingVersion: record.smingVersion || known?.smingVersion,
             soc: record.soc || known?.soc,
             buildType: record.buildType || known?.buildType,
           },
@@ -180,6 +181,7 @@ class CrashDecoder {
       if (known?.gitVersion && known?.soc) {
         return {
           git_version: known.gitVersion,
+          sming_version: known.smingVersion,
           soc:         known.soc,
           build_type:  known.buildType || "debug",
         };
@@ -189,11 +191,12 @@ class CrashDecoder {
     if (this.db) {
       try {
         const row = this.db.prepare(
-          "SELECT soc, build_type, git_version FROM controllers WHERE ip = ?"
+          "SELECT soc, build_type, git_version, sming_version FROM controllers WHERE ip = ?"
         ).get(ip);
         if (row?.git_version && row?.soc) {
           return {
             git_version: row.git_version,
+            sming_version: row.sming_version,
             soc:         row.soc,
             build_type:  row.build_type || "debug",
           };
@@ -224,11 +227,11 @@ class CrashDecoder {
 
   async _decodeRecord(ip, triggerRecordId, triggerRecord, lines) {
     const info = triggerRecord.gitVersion && triggerRecord.soc
-      ? { git_version: triggerRecord.gitVersion, soc: triggerRecord.soc, build_type: triggerRecord.buildType }
+      ? { git_version: triggerRecord.gitVersion, sming_version: triggerRecord.smingVersion, soc: triggerRecord.soc, build_type: triggerRecord.buildType }
       : await this._resolveTargetInfo(ip);
     if (this.storage && triggerRecordId) {
       await this.storage.updateCrashDecode(triggerRecordId, "[Crash dump detected, decoding in progress...]", {
-        gitVersion: info?.git_version, soc: info?.soc, buildType: info?.build_type || "debug", rawDump: lines.join("\n"),
+        gitVersion: info?.git_version, smingVersion: info?.sming_version, soc: info?.soc, buildType: info?.build_type || "debug", rawDump: lines.join("\n"),
       });
     }
     if (!info || !info.git_version || !info.soc) {
@@ -239,7 +242,7 @@ class CrashDecoder {
       return;
     }
 
-    const { git_version, soc, build_type } = info;
+    const { git_version, sming_version, soc, build_type } = info;
     const socKey = soc.toLowerCase();
     const cfg    = SOC_CONFIG[socKey];
 
@@ -270,7 +273,7 @@ class CrashDecoder {
 
     await this._ensureScript(cfg);
 
-    const repoPaths = await this._getSourceRepos(git_version);
+    const repoPaths = await this._getSourceRepos(git_version, sming_version);
     let decoded;
     let codeSnippets = [];
     try {
@@ -294,6 +297,7 @@ class CrashDecoder {
     if (this.storage && triggerRecordId) {
       await this.storage.updateCrashDecode(triggerRecordId, decoded, {
         gitVersion: git_version,
+        smingVersion: sming_version,
         soc: socKey,
         buildType: type
       }).catch(() => {});
@@ -309,6 +313,7 @@ class CrashDecoder {
         tag:         triggerRecord.tag,
         app:         triggerRecord.app,
         gitVersion:  git_version,
+        smingVersion: sming_version,
         soc:         socKey,
         buildType:   type,
         message:     decoded,
@@ -347,6 +352,8 @@ class CrashDecoder {
               const j = JSON.parse(body);
               resolve({
                 git_version: j?.app?.git_version ?? j?.git_version ?? null,
+                sming_version: j?.app?.sming_git_version ?? j?.app?.sming_version ??
+                  j?.sming?.git_version ?? j?.sming_git_version ?? j?.sming_version ?? null,
                 soc:         j?.device?.soc       ?? j?.soc         ?? null,
                 build_type:  j?.app?.build_type   ?? j?.build_type   ?? "debug",
               });
@@ -432,13 +439,18 @@ class CrashDecoder {
   }
 
   analyzeRecord(triggerRecordId) {
-    return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId));
+    return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId, true));
   }
 
-  async _analyzeRecord(triggerRecordId) {
+  rerunRecord(triggerRecordId) {
+    return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId, false));
+  }
+
+  async _analyzeRecord(triggerRecordId, analyzeWithAI = true) {
     let rawLog = null;
     let ip = null;
     let git_version = null;
+    let sming_version = null;
     let soc = null;
     let build_type = null;
 
@@ -448,6 +460,7 @@ class CrashDecoder {
         rawLog = rec.raw || rec.message;
         ip = rec.sourceIp || rec.ip;
         git_version = rec.gitVersion;
+        sming_version = rec.smingVersion;
         soc = rec.soc;
         build_type = rec.buildType;
       }
@@ -455,11 +468,12 @@ class CrashDecoder {
 
     if (!rawLog && this.db) {
       try {
-        const row = this.db.prepare("SELECT message, source_ip, git_version, soc, build_type, crash_raw FROM logs WHERE id = ? AND crash_decode IS NOT NULL").get(triggerRecordId);
+        const row = this.db.prepare("SELECT message, source_ip, git_version, sming_version, soc, build_type, crash_raw FROM logs WHERE id = ? AND crash_decode IS NOT NULL").get(triggerRecordId);
         if (row) {
           rawLog = row.crash_raw || row.message;
           ip = row.source_ip;
           git_version = row.git_version;
+          sming_version = row.sming_version;
           soc = row.soc;
           build_type = row.build_type || "debug";
         }
@@ -492,7 +506,7 @@ class CrashDecoder {
     await this._ensureElf(elfUrl, elfPath);
     await this._ensureScript(cfg);
 
-    const repoPaths = await this._getSourceRepos(git_version);
+    const repoPaths = await this._getSourceRepos(git_version, sming_version);
     const lines = rawLog.split("\n");
     let decoded;
     let codeSnippets = [];
@@ -502,16 +516,19 @@ class CrashDecoder {
       decoded = rawLog;
     }
 
-    if (!this.aiService || !this.aiService.isAvailable()) {
-      throw new Error("AI service is not configured.");
+    let finalDecoded = decoded;
+    if (analyzeWithAI) {
+      if (!this.aiService || !this.aiService.isAvailable()) {
+        throw new Error("AI service is not configured.");
+      }
+      const aiAnalysisResult = await this._analyzeDecoded(decoded, codeSnippets, repoPaths, git_version, socKey, type);
+      finalDecoded = `${decoded}\n\n--- AI Analysis ---\n\n${aiAnalysisResult}`;
     }
-
-    const aiAnalysisResult = await this._analyzeDecoded(decoded, codeSnippets, repoPaths, git_version, socKey, type);
-    const finalDecoded = `${decoded}\n\n--- AI Analysis ---\n\n${aiAnalysisResult}`;
 
     if (this.storage && typeof this.storage.updateCrashDecode === "function") {
       await this.storage.updateCrashDecode(triggerRecordId, finalDecoded, {
         gitVersion: git_version,
+        smingVersion: sming_version,
         soc: socKey,
         buildType: type
       });
@@ -529,10 +546,10 @@ class CrashDecoder {
     });
   }
 
-  async _getSourceRepos(gitVersion) {
+  async _getSourceRepos(gitVersion, smingVersion = "develop") {
     const repoPaths = {};
     const repos = [
-      ["Sming", "https://github.com/pljakobs/Sming.git", "develop"],
+      ["Sming", "https://github.com/pljakobs/Sming.git", smingVersion || "develop"],
       ["esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", gitVersion.toLowerCase()],
     ];
     await Promise.all(repos.map(async ([name, url, ref]) => {

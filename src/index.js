@@ -161,6 +161,9 @@ async function main() {
   });
 
   discovery.controllers = new Map(initialState.controllers.map(controller => [controller.ip, controller]));
+  for (const boot of initialState.boots) {
+    if (boot.nonce != null) discovery.setBootNonce(boot.ip, boot.nonce);
+  }
   discovery.start({ loadState: false });
   let firmwareUpdater;
   const updateOptions = { getController: ip => discovery.controllers.get(ip), controllerPort: config.discoveryControllerPort };
@@ -288,7 +291,15 @@ async function main() {
         res.status(404).json({ error: "No crash decode found for this log entry" });
         return;
       }
-      res.json({ id, crashDecode });
+      const record = storage.getCrashRecord(id);
+      res.json({
+        id,
+        crashDecode,
+        gitVersion: record?.gitVersion || null,
+        smingVersion: record?.smingVersion || null,
+        soc: record?.soc || null,
+        buildType: record?.buildType || null,
+      });
     } catch (err) {
       next(err);
     }
@@ -313,6 +324,22 @@ async function main() {
         return res.status(503).json({ error: "CrashDecoder instance not available" });
       }
       const crashDecode = await crashDecoder.analyzeRecord(id);
+      res.json({ id, crashDecode });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/crashes/:id/decode", async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!id || Number.isNaN(id)) {
+        return res.status(400).json({ error: "Invalid log id" });
+      }
+      if (!crashDecoder) {
+        return res.status(503).json({ error: "CrashDecoder instance not available" });
+      }
+      const crashDecode = await crashDecoder.rerunRecord(id);
       res.json({ id, crashDecode });
     } catch (err) {
       next(err);
@@ -659,7 +686,19 @@ async function main() {
     try {
       const raw = msg.toString("utf8");
       const record = parseSyslogLine(raw, rinfo.address);
+      const previousBoot = bootTracker.currentBoot(rinfo.address);
       if (!bootTracker.assign(rinfo.address, record)) return;
+      const newBoot = record.boot > previousBoot;
+      if (newBoot && record.bootNonce != null) {
+        discovery.setBootNonce(rinfo.address, record.bootNonce).catch(() => {});
+      }
+      const controller = discovery.controllers.get(rinfo.address);
+      if (controller) {
+        record.gitVersion = controller.gitVersion || null;
+        record.smingVersion = controller.smingVersion || null;
+        record.soc = controller.soc || null;
+        record.buildType = controller.buildType || null;
+      }
 
       await storage.append(rinfo.address, record);
       discovery.addSeenIp(rinfo.address);
@@ -668,6 +707,11 @@ async function main() {
         loki.forward(record);
       }
       crashDecoder.feed(record);
+      if (newBoot && record.bootNonce != null) {
+        discovery.refreshControllerInfo(rinfo.address, record.bootNonce).catch((err) => {
+          console.debug(`Discovery: reboot info refresh failed for ${rinfo.address}: ${err.message}`);
+        });
+      }
     } catch (err) {
       console.error("Failed processing UDP packet:", err);
     }

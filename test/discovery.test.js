@@ -94,3 +94,38 @@ test("HTTP discovery requests the configured port and paths and stores controlle
   assert.equal(controller.gitVersion, "V1.0.0-1-develop");
   assert.deepEqual(controller.groups, [{ id: 2, name: "Fixture group" }]);
 });
+
+test("boot info refresh preserves prior tags and ignores a delayed response from an older nonce", async context => {
+  let releaseOldInfo;
+  let requestCount = 0;
+  const server = http.createServer(async (_request, response) => {
+    requestCount++;
+    if (requestCount === 1) await new Promise(resolve => { releaseOldInfo = resolve; });
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({
+      device: { soc: "esp8266" },
+      app: { git_version: requestCount === 1 ? "old-firmware" : "new-firmware", sming_git_version: requestCount === 1 ? "old-sming" : "new-sming", build_type: "debug" },
+    }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise(resolve => server.close(resolve)));
+
+  const networkDiscovery = new ControllerDiscovery({ seedHosts: [], controllerPort: server.address().port, refreshIntervalMs: 0 });
+  networkDiscovery.controllers.set("127.0.0.1", {
+    ip: "127.0.0.1", gitVersion: "old-firmware", smingVersion: "old-sming", bootNonce: 111,
+  });
+  networkDiscovery.setBootNonce("127.0.0.1", 111);
+  const oldRefresh = networkDiscovery.refreshControllerInfo("127.0.0.1", 111);
+  await new Promise(resolve => setImmediate(resolve));
+
+  await networkDiscovery.setBootNonce("127.0.0.1", 222);
+  assert.equal(networkDiscovery.controllers.get("127.0.0.1").gitVersion, "old-firmware");
+  assert.equal(await networkDiscovery.refreshControllerInfo("127.0.0.1", 222), true);
+  releaseOldInfo();
+  assert.equal(await oldRefresh, false);
+
+  const controller = networkDiscovery.controllers.get("127.0.0.1");
+  assert.equal(controller.bootNonce, 222);
+  assert.equal(controller.gitVersion, "new-firmware");
+  assert.equal(controller.smingVersion, "new-sming");
+});

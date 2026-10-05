@@ -85,6 +85,13 @@ test("crashes endpoint is empty on a fresh server", async () => {
   const filtered = await api(`/api/v1/crashes?ip=${ip}`);
   assert.deepEqual(filtered, { items: [], total: 0 });
 });
+
+test("decoder rerun endpoint validates crash ids", async () => {
+  const response = await fetch(`${srv.baseUrl}/api/v1/crashes/not-an-id/decode`, { method: "POST" });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "Invalid log id" });
+});
+
 test("changelog endpoint returns build info and a builds array", async () => {
   const data = await api("/api/v1/changelog");
   assert.ok(data.buildNumber);

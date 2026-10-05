@@ -217,6 +217,24 @@ test("crash Markdown sanitizes injected handlers and unsafe links", async ({ pag
   await expect(body).toHaveText('<img src="invalid" onerror="window.__injected=true">');
 });
 
+test("crash window reruns the decoder without replacing the AI analysis action", async ({ page }) => {
+  await page.route("**/api/v1/crashes/42/decode", async route => {
+    expect(route.request().method()).toBe("POST");
+    await route.fulfill({ json: { id: 42, crashDecode: "corrected stack decode" } });
+  });
+  await page.evaluate(async () => {
+    const { openCrashModal } = await import("/js/crash.js");
+    openCrashModal({ id: 42, sourceIp: "192.0.2.42", gitVersion: "firmware-tag", smingVersion: "sming-tag", crashDecode: "old decode" });
+  });
+
+  await expect(page.locator("#crash-rerun-btn")).toBeVisible();
+  await expect(page.locator("#crash-analyze-btn")).toBeVisible();
+  await expect(page.locator("#crash-modal-meta")).toContainText("Firmware firmware-tag");
+  await expect(page.locator("#crash-modal-meta")).toContainText("Sming sming-tag");
+  await page.locator("#crash-rerun-btn").click();
+  await expect(page.locator("#crash-modal-body")).toContainText("corrected stack decode");
+});
+
 test("credential settings are write-only and support replacement, preservation, and clearing", async ({ page }) => {
   const save = await page.request.post(srv.baseUrl + '/api/v1/service-config', {
     data: { values: { LLS_GITHUB_TOKEN: 'browser-private-token', GEMINI_API_KEY: 'browser-private-key' } },

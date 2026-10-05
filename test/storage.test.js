@@ -167,14 +167,16 @@ test("crash persistence retains full raw dumps and original firmware metadata", 
   const id = await storage.append("192.0.2.50", { message: "Fatal exception", raw: "original syslog record" });
   const rawDump = "Fatal exception\npc=0x40201000\nStack dump:\n3ffff000: 40201000";
   await storage.updateCrashDecode(id, "decoded plus previous AI analysis", {
-    rawDump, gitVersion: "V1.0.0-1-develop", soc: "esp8266", buildType: "release",
+    rawDump, gitVersion: "V1.0.0-1-develop", smingVersion: "sming-tag", soc: "esp8266", buildType: "release",
   });
   await storage.updateCrashDecode(id, "replacement analysis");
   const record = storage.getCrashRecord(id);
   assert.equal(record.raw, rawDump);
   assert.equal(record.gitVersion, "V1.0.0-1-develop");
+  assert.equal(record.smingVersion, "sming-tag");
   assert.equal(record.buildType, "release");
   assert.equal(storage.listCrashes({ ip: "192.0.2.50" }).items[0].gitVersion, "V1.0.0-1-develop");
+  assert.equal(storage.listCrashes({ ip: "192.0.2.50" }).items[0].smingVersion, "sming-tag");
   assert.equal(db.prepare("SELECT raw FROM logs WHERE id = ?").get(id).raw, "original syslog record");
 });
 

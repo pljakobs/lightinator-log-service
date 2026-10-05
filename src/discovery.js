@@ -46,6 +46,8 @@ function rowToController(row) {
     soc:              row.soc,
     buildType:        row.build_type,
     gitVersion:       row.git_version,
+    smingVersion:     row.sming_version,
+    bootNonce:        row.boot_nonce != null ? row.boot_nonce : undefined,
     deviceClass:      "swarm_controller",
   };
 }
@@ -65,6 +67,8 @@ function controllerToRow(c) {
     soc:               c.soc               || null,
     build_type:        c.buildType         || null,
     git_version:       c.gitVersion        || null,
+    sming_version:     c.smingVersion      || null,
+    boot_nonce:        c.bootNonce         ?? null,
   };
 }
 
@@ -221,8 +225,51 @@ class ControllerDiscovery {
 
     /** IPs seen via syslog that we haven't resolved yet */
     this.extraSeeds = new Set();
+    this.bootNonces = new Map();
 
     this._timer = null;
+  }
+
+  setBootNonce(ip, bootNonce) {
+    if (bootNonce == null) return Promise.resolve(false);
+    this.bootNonces.set(ip, bootNonce);
+    const controller = this.controllers.get(ip);
+    if (controller) this.controllers.set(ip, { ...controller, bootNonce });
+    return this._saveState().then(() => !!controller);
+  }
+
+  async refreshControllerInfo(ip, expectedBootNonce) {
+    const info = await fetchJson(ip, this.controllerPort, "/info?v=2");
+    if (this.bootNonces.get(ip) !== expectedBootNonce) return false;
+
+    const app = info?.app || {};
+    const updates = {
+      soc: info?.device?.soc ?? info?.soc,
+      buildType: app.build_type ?? info?.build_type,
+      gitVersion: app.git_version ?? info?.git_version,
+      smingVersion: app.sming_git_version ?? app.sming_version ?? info?.sming?.git_version ??
+        info?.sming_git_version ?? info?.sming_version,
+    };
+    for (const [key, value] of Object.entries(updates)) {
+      if (typeof value !== "string" || !value.trim()) delete updates[key];
+    }
+
+    const current = this.controllers.get(ip) || {
+      ip,
+      hostname: ip,
+      deviceId: null,
+      name: ip,
+      groups: [],
+      loggingEnabled: true,
+      reachable: true,
+      splitBrain: false,
+      lastSeen: new Date().toISOString(),
+      lastLogReceived: null,
+    };
+    this.controllers.set(ip, { ...current, ...updates, bootNonce: expectedBootNonce, reachable: true });
+    await this._saveState();
+    if (this.onUpdate) this.onUpdate(this.getAll());
+    return true;
   }
 
   /** Called by UDP ingest when a syslog packet arrives from a new IP */
@@ -349,6 +396,8 @@ class ControllerDiscovery {
           soc:        existing.soc,
           buildType:  existing.buildType,
           gitVersion: existing.gitVersion,
+          smingVersion: existing.smingVersion,
+          bootNonce: existing.bootNonce,
         });
         updatedIps.add(ip);
         this.extraSeeds.delete(ip); // promoted to known
@@ -373,6 +422,8 @@ class ControllerDiscovery {
         soc: existing.soc,
         buildType: existing.buildType,
         gitVersion: existing.gitVersion,
+        smingVersion: existing.smingVersion,
+        bootNonce: existing.bootNonce,
       });
       updatedIps.add(ip);
       this.extraSeeds.delete(ip);
@@ -422,6 +473,8 @@ class ControllerDiscovery {
         soc: detectedSoc,
         buildType: detectedBuildType,
         gitVersion: detectedGitVersion,
+        smingVersion: existing.smingVersion,
+        bootNonce: existing.bootNonce,
       });
       updatedIps.add(ip);
       this.extraSeeds.delete(ip);
@@ -477,12 +530,13 @@ class ControllerDiscovery {
     await Promise.all(
       reachableIps.map(async (ip) => {
         try {
+          const requestedBootNonce = this.bootNonces.get(ip);
           const [cfg, info] = await Promise.all([
             fetchJson(ip, this.controllerPort, "/config").catch((e) => { console.debug(`Discovery: /config failed for ${ip}: ${e.message}`); return null; }),
             fetchJson(ip, this.controllerPort, "/info?v=2").catch((e) => { console.debug(`Discovery: /info?v=2 failed for ${ip}: ${e.message}`); return null; }),
           ]);
           const entry = this.controllers.get(ip);
-          if (!entry) return;
+          if (!entry || this.bootNonces.get(ip) !== requestedBootNonce) return;
           const updates = {};
           const enabled = cfg?.network?.rsyslog?.enabled ?? null;
           if (enabled !== null) updates.loggingEnabled = enabled;
@@ -495,6 +549,9 @@ class ControllerDiscovery {
           else if (info?.build_type)   updates.buildType  = info.build_type;
           if (info?.app?.git_version)  updates.gitVersion = info.app.git_version;
           else if (info?.git_version)  updates.gitVersion = info.git_version;
+          const smingVersion = info?.app?.sming_git_version ?? info?.app?.sming_version ??
+            info?.sming?.git_version ?? info?.sming_git_version ?? info?.sming_version;
+          if (smingVersion) updates.smingVersion = smingVersion;
           console.debug(`Discovery: /info?v=2 for ${ip}: ${info ? `soc=${info.device?.soc ?? info.soc} build=${info.app?.build_type ?? info.build_type} ver=${info.app?.git_version ?? info.git_version}` : "null"}`);
           if (Object.keys(updates).length) {
             this.controllers.set(ip, { ...entry, ...updates });
@@ -520,7 +577,9 @@ class ControllerDiscovery {
       const rows = this.db.prepare("SELECT * FROM controllers").all();
       if (rows.length > 0) {
         for (const row of rows) {
-          this.controllers.set(row.ip, { ...rowToController(row), reachable: false });
+          const controller = { ...rowToController(row), reachable: false };
+          this.controllers.set(row.ip, controller);
+          if (controller.bootNonce != null) this.bootNonces.set(row.ip, controller.bootNonce);
         }
         console.log(`Discovery: loaded ${rows.length} persisted controller(s)`);
         return;
@@ -534,10 +593,10 @@ class ControllerDiscovery {
           const upsert = this.db.prepare(`
             INSERT OR REPLACE INTO controllers
               (ip, hostname, device_id, name, groups, logging_enabled, reachable,
-               split_brain, last_seen, last_log_received, soc, build_type, git_version)
+               split_brain, last_seen, last_log_received, soc, build_type, git_version, sming_version, boot_nonce)
             VALUES
               (@ip, @hostname, @device_id, @name, @groups, @logging_enabled, @reachable,
-               @split_brain, @last_seen, @last_log_received, @soc, @build_type, @git_version)
+               @split_brain, @last_seen, @last_log_received, @soc, @build_type, @git_version, @sming_version, @boot_nonce)
           `);
           const importAll = this.db.transaction((entries) => {
             for (const e of entries) upsert.run(controllerToRow(e));
@@ -545,6 +604,7 @@ class ControllerDiscovery {
           importAll(arr);
           for (const entry of arr) {
             this.controllers.set(entry.ip, { ...entry, reachable: false });
+            if (entry.bootNonce != null) this.bootNonces.set(entry.ip, entry.bootNonce);
           }
           console.log(`Discovery: migrated ${arr.length} controller(s) from controllers.json`);
         } catch {
@@ -561,6 +621,7 @@ class ControllerDiscovery {
       const arr = JSON.parse(raw);
       for (const entry of arr) {
         this.controllers.set(entry.ip, { ...entry, reachable: false });
+        if (entry.bootNonce != null) this.bootNonces.set(entry.ip, entry.bootNonce);
       }
       console.log(`Discovery: loaded ${arr.length} persisted controller(s)`);
     } catch {
@@ -574,10 +635,10 @@ class ControllerDiscovery {
         const upsert = this.db.prepare(`
           INSERT OR REPLACE INTO controllers
             (ip, hostname, device_id, name, groups, logging_enabled, reachable,
-             split_brain, last_seen, last_log_received, soc, build_type, git_version)
+             split_brain, last_seen, last_log_received, soc, build_type, git_version, sming_version, boot_nonce)
           VALUES
             (@ip, @hostname, @device_id, @name, @groups, @logging_enabled, @reachable,
-             @split_brain, @last_seen, @last_log_received, @soc, @build_type, @git_version)
+             @split_brain, @last_seen, @last_log_received, @soc, @build_type, @git_version, @sming_version, @boot_nonce)
         `);
         const saveAll = this.db.transaction((entries) => {
           for (const e of entries) upsert.run(controllerToRow(e));

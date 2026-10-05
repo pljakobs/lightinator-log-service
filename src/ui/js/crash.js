@@ -44,16 +44,20 @@ function openCrashModal(record) {
   const meta = document.getElementById('crash-modal-meta');
   const rawToggle = document.getElementById('crash-raw-toggle');
   const analyzeBtn = document.getElementById('crash-analyze-btn');
+  const rerunBtn = document.getElementById('crash-rerun-btn');
 
   _currentCrashDecode = record.crashDecode || '';
   _currentCrashId = record.id || null;
   const timeStr = record.receivedAt ? new Date(record.receivedAt).toLocaleTimeString() : '';
-  meta.textContent = `${record.sourceIp || ''} · ${timeStr}`;
+  const buildTags = [record.soc, record.gitVersion && `Firmware ${record.gitVersion}`, record.smingVersion && `Sming ${record.smingVersion}`].filter(Boolean);
+  meta.textContent = [record.sourceIp, timeStr, ...buildTags].filter(Boolean).join(' · ');
 
   if (_currentCrashId) {
     analyzeBtn.style.display = 'inline-block';
+    rerunBtn.style.display = 'inline-block';
   } else {
     analyzeBtn.style.display = 'none';
+    rerunBtn.style.display = 'none';
   }
 
   rawToggle.onchange = renderModalContent;
@@ -111,6 +115,31 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
   }
 });
 
+document.getElementById('crash-rerun-btn').addEventListener('click', async () => {
+  if (!_currentCrashId) return;
+  const id = _currentCrashId;
+  const rerunBtn = document.getElementById('crash-rerun-btn');
+  const originalText = rerunBtn.textContent;
+  rerunBtn.disabled = true;
+  rerunBtn.textContent = 'Decoding…';
+
+  try {
+    const result = await fetchJson(`${BASE}/api/v1/crashes/${id}/decode`, { method: 'POST' });
+    if (_currentCrashId === id && result?.crashDecode) {
+      _currentCrashDecode = result.crashDecode;
+      renderModalContent();
+      rerunBtn.textContent = '✓ Decoded';
+    }
+  } catch (err) {
+    alert('Crash decoder rerun failed: ' + err.message);
+  } finally {
+    setTimeout(() => {
+      rerunBtn.textContent = originalText;
+      rerunBtn.disabled = false;
+    }, 1200);
+  }
+});
+
 /** Open the decode for `logId`, using an already-loaded row from `rows` when available. */
 async function handleCrashBtnClick(logId, rows = [], fallbackIp = '') {
   const row = rows.find(r => r.id === logId);
@@ -120,7 +149,7 @@ async function handleCrashBtnClick(logId, rows = [], fallbackIp = '') {
   }
   try {
     const data = await fetchJson(`${BASE}/api/v1/logs/${logId}/crash-decode`);
-    openCrashModal({ id: logId, crashDecode: data.crashDecode, sourceIp: fallbackIp });
+    openCrashModal({ ...data, id: logId, crashDecode: data.crashDecode, sourceIp: fallbackIp });
   } catch (err) {
     alert('Could not load crash decode: ' + err.message);
   }

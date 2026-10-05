@@ -25,6 +25,7 @@ function rowToRecord(row) {
     crashRaw:    row.crash_raw || null,
     crashDecode: row.crash_decode || null,
     gitVersion:  row.git_version || null,
+    smingVersion: row.sming_version || null,
     soc:         row.soc || null,
     buildType:   row.build_type || null,
   };
@@ -52,11 +53,11 @@ class LogStorage {
 
     // Pre-compile frequently used statements (better-sqlite3 is synchronous)
     this._stmtInsert = db.prepare(`
-      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot, boot_nonce, device_time, raw, crash_decode, crash_raw, git_version, soc, build_type)
-      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot, @boot_nonce, @device_time, @raw, @crash_decode, @crash_raw, @git_version, @soc, @build_type)
+      INSERT INTO logs (ip, received_at, source_ip, priority, tag, app, message, boot, boot_nonce, device_time, raw, crash_decode, crash_raw, git_version, sming_version, soc, build_type)
+      VALUES (@ip, @received_at, @source_ip, @priority, @tag, @app, @message, @boot, @boot_nonce, @device_time, @raw, @crash_decode, @crash_raw, @git_version, @sming_version, @soc, @build_type)
     `);
     this._stmtUpdateCrashDecode = db.prepare(`
-      UPDATE logs SET crash_decode = ?, git_version = COALESCE(?, git_version),
+      UPDATE logs SET crash_decode = ?, git_version = COALESCE(?, git_version), sming_version = COALESCE(?, sming_version),
         soc = COALESCE(?, soc), build_type = COALESCE(?, build_type), crash_raw = COALESCE(?, crash_raw)
       WHERE id = ?
     `);
@@ -131,7 +132,8 @@ class LogStorage {
     this._stmtCrashes = db.prepare(`
       SELECT l.id, l.ip, l.received_at, l.boot, l.message, l.crash_decode,
              c.fingerprint, c.issue_url, c.issue_number,
-             COALESCE(l.soc, c.soc) AS soc, COALESCE(l.git_version, c.git_version) AS git_version
+             COALESCE(l.soc, c.soc) AS soc, COALESCE(l.git_version, c.git_version) AS git_version,
+             l.sming_version AS sming_version
       FROM logs l
       LEFT JOIN crash_reports c ON c.log_id = l.id
       WHERE l.crash_decode IS NOT NULL AND (? IS NULL OR l.ip = ?)
@@ -191,6 +193,7 @@ class LogStorage {
             crash_decode: rec.crashDecode || null,
             crash_raw:   rec.crashRaw || null,
             git_version: rec.gitVersion || null,
+            sming_version: rec.smingVersion || null,
             soc:         rec.soc || null,
             build_type:  rec.buildType || null,
           }));
@@ -220,6 +223,7 @@ class LogStorage {
       crash_decode: record.crashDecode || null,
       crash_raw:    record.crashRaw || null,
       git_version:  record.gitVersion || null,
+      sming_version: record.smingVersion || null,
       soc:          record.soc || null,
       build_type:   record.buildType || null,
     });
@@ -241,8 +245,8 @@ class LogStorage {
   }
 
   updateCrashDecode(logId, decodedText, metadata = {}) {
-    this._stmtUpdateCrashDecode.run(decodedText, metadata.gitVersion ?? null, metadata.soc ?? null,
-      metadata.buildType ?? null, metadata.rawDump ?? null, logId);
+    this._stmtUpdateCrashDecode.run(decodedText, metadata.gitVersion ?? null, metadata.smingVersion ?? null,
+      metadata.soc ?? null, metadata.buildType ?? null, metadata.rawDump ?? null, logId);
     const row = this.db.prepare("SELECT ip FROM logs WHERE id = ?").get(logId);
     if (row) this.prune({ ip: row.ip });
     return Promise.resolve();
@@ -412,6 +416,7 @@ class LogStorage {
         issueNumber: r.issue_number != null ? r.issue_number : null,
         soc:         r.soc          || null,
         gitVersion:  r.git_version  || null,
+        smingVersion: r.sming_version || null,
       };
     });
 
