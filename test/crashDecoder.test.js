@@ -516,6 +516,32 @@ test("matching map is staged beside the ELF and reused by subsequent decodes", a
   assert.deepEqual(requests, [["V1.0.0-1-develop", "esp8266", "debug"]]);
 });
 
+test("ELF download works over plain http and follows redirects", async context => {
+  const http = require("node:http");
+  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-elf-http-"));
+  const server = http.createServer((req, res) => {
+    if (req.url === "/old/app_0.out") {
+      res.writeHead(302, { Location: "/new/app_0.out" });
+      res.end();
+    } else if (req.url === "/new/app_0.out") {
+      res.end("ELF-BYTES");
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => { server.close(); return fs.rm(cacheDir, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const decoder = Object.create(CrashDecoder.prototype);
+
+  const elfPath = path.join(cacheDir, "fw.elf");
+  await decoder._ensureElf(`${base}/old/app_0.out`, elfPath);
+  assert.equal(await fs.readFile(elfPath, "utf8"), "ELF-BYTES");
+
+  await assert.rejects(decoder._ensureElf(`${base}/missing/app_0.out`, path.join(cacheDir, "missing.elf")), /HTTP 404/);
+});
+
 test("automatic AI opt-out skips generation and decoded assembly reaches the final-only workflow", async () => {
   const decoder = Object.create(CrashDecoder.prototype);
   decoder.aiEnabled = false;

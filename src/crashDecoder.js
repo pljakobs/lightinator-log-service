@@ -12,6 +12,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
+const http = require("http");
 const https = require("https");
 const { AIContextHarvester } = require("./aiContextHarvester");
 
