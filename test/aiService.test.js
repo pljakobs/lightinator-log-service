@@ -62,6 +62,19 @@ test("streamed Ollama output uses configured context and forwards only response 
   assert.ok(!JSON.stringify(updates).includes("private reasoning"));
 });
 
+test("non-interactive Ollama generation streams internally and aggregates the final answer", async () => {
+  const service = new AIService({ apiKey: "", backends: [
+    { id: "ollama", type: "ollama", models: ["local"], numCtx: 65_536 },
+  ] });
+  service.backends[0].client.chat = async function* (options) {
+    assert.equal(options.stream, true);
+    assert.equal(options.options.num_ctx, 65_536);
+    yield { message: { content: "first ", thinking: "private reasoning" } };
+    yield { message: { content: "second" } };
+  };
+  assert.equal(await service._generateWithFallback("prompt"), "first second");
+});
+
 test("provider fallback reaches OpenAI-compatible and native Ollama HTTP APIs in order", async context => {
   const paths = [];
   const server = http.createServer((request, response) => {

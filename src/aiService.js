@@ -138,17 +138,13 @@ class AIService {
               text = (await backend.client.chat.completions.create({ model: modelName, messages: [{ role: "user", content: prompt }] })).choices?.[0]?.message?.content;
             }
           } else {
-            if (onUpdate) {
-              const stream = await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: true, options: { num_ctx: backend.numCtx } });
-              for await (const chunk of stream) {
-                if (!thinkingReported && typeof chunk.message?.thinking === "string" && chunk.message.thinking.length) {
-                  thinkingReported = true;
-                  onUpdate({ type: "activity", activity: "thinking" });
-                }
-                append(chunk.message?.content);
+            const stream = await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: true, options: { num_ctx: backend.numCtx } });
+            for await (const chunk of stream) {
+              if (onUpdate && !thinkingReported && typeof chunk.message?.thinking === "string" && chunk.message.thinking.length) {
+                thinkingReported = true;
+                onUpdate({ type: "activity", activity: "thinking" });
               }
-            } else {
-              text = (await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: false, options: { num_ctx: backend.numCtx } })).message?.content;
+              append(chunk.message?.content);
             }
           }
           if (typeof text !== "string" || !text.trim()) throw new Error("Empty model response");
