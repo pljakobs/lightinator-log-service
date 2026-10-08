@@ -1,4 +1,6 @@
+
 # Lightinator Log Service
+[![CI](https://github.com/pljakobs/lightinator-log-service/actions/workflows/container-image.yml/badge.svg)](https://github.com/pljakobs/lightinator-log-service/actions/workflows/container-image.yml)
 
 Local-first UDP syslog collector, crash decoder and diagnostic viewer for
 Lightinator controllers. It runs as a single Node.js container next to your
