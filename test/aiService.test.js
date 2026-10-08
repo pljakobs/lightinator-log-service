@@ -58,6 +58,7 @@ test("streamed Ollama output uses configured context and forwards only response 
   const result = await service._generateWithFallback("prompt", update => updates.push(update));
   assert.equal(result, "Visible analysis continues.");
   assert.deepEqual(updates.filter(update => update.type === "token").map(update => update.text), ["Visible analysis ", "continues."]);
+  assert.deepEqual(updates.filter(update => update.type === "activity"), [{ type: "activity", activity: "thinking" }]);
   assert.ok(!JSON.stringify(updates).includes("private reasoning"));
 });
 
@@ -100,6 +101,26 @@ test("Ollama request aborts at its configured timeout", async context => {
   const startedAt = Date.now();
   await assert.rejects(service._generateWithFallback("test prompt"), /All configured AI backends and models failed/);
   assert.ok(Date.now() - startedAt < 2200, "request should abort before the delayed response");
+});
+
+test("Ollama idle timeout resets when response chunks arrive", async context => {
+  const server = http.createServer((_request, response) => {
+    response.setHeader("Content-Type", "application/x-ndjson");
+    setTimeout(() => response.write(`${JSON.stringify({ message: { role: "assistant", content: "first " }, done: false })}\n`), 600);
+    setTimeout(() => response.write(`${JSON.stringify({ message: { role: "assistant", content: "second " }, done: false })}\n`), 1200);
+    setTimeout(() => response.end(`${JSON.stringify({ message: { role: "assistant", content: "last" }, done: true })}\n`), 1800);
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => {
+    server.closeAllConnections();
+    return new Promise(resolve => server.close(resolve));
+  });
+  const service = new AIService({ apiKey: "", backends: [
+    { id: "streaming-ollama", type: "ollama", baseUrl: `http://127.0.0.1:${server.address().port}`, models: ["local"], timeoutMs: 1000 },
+  ] });
+  const updates = [];
+  assert.equal(await service._generateWithFallback("test prompt", update => updates.push(update)), "first second last");
+  assert.deepEqual(updates.filter(update => update.type === "token").map(update => update.text), ["first ", "second ", "last"]);
 });
 
 test("context analysis gathers requested ranges iteratively and returns only the final report", async () => {

@@ -13,6 +13,54 @@ const { OpenAI } = require("openai");
 const { Ollama } = require("ollama");
 const { defaultAIBackends, parseAIBackends } = require("./aiConfig");
 
+async function fetchWithIdleTimeout(url, options, timeoutMs) {
+  const timeoutController = new AbortController();
+  let timer;
+  const resetTimeout = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => timeoutController.abort(new DOMException("Ollama response idle timeout", "TimeoutError")), timeoutMs);
+    timer.unref?.();
+  };
+  resetTimeout();
+
+  let response;
+  try {
+    const signals = [options.signal, timeoutController.signal].filter(Boolean);
+    response = await fetch(url, { ...options, signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) });
+  } catch (error) {
+    clearTimeout(timer);
+    throw error;
+  }
+  if (!response.body) {
+    clearTimeout(timer);
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          clearTimeout(timer);
+          controller.close();
+          return;
+        }
+        resetTimeout();
+        controller.enqueue(value);
+      } catch (error) {
+        clearTimeout(timer);
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      clearTimeout(timer);
+      await reader.cancel(reason);
+    },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
 class AIService {
   constructor({ apiKey, model = "gemini-3.8-flash", backends, contextRounds = 3, contextBytes = 120_000 } = {}) {
     this.apiKey = apiKey ?? process.env.LLS_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
@@ -36,7 +84,7 @@ class AIService {
       } else if (backend.type === "ollama") {
         client = new Ollama({ host: backend.baseUrl,
           headers: backend.token ? { Authorization: `Bearer ${backend.token}` } : {},
-          fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(backend.timeoutMs) }),
+          fetch: (url, options) => fetchWithIdleTimeout(url, options, backend.timeoutMs),
         });
       }
       return { ...backend, client };
@@ -68,6 +116,7 @@ class AIService {
       for (const modelName of backend.models) {
         try {
           let text;
+          let thinkingReported = false;
           const append = value => {
             if (typeof value !== "string" || !value) return;
             text = (text || "") + value;
@@ -91,16 +140,23 @@ class AIService {
           } else {
             if (onUpdate) {
               const stream = await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: true, options: { num_ctx: backend.numCtx } });
-              for await (const chunk of stream) append(chunk.message?.content);
+              for await (const chunk of stream) {
+                if (!thinkingReported && typeof chunk.message?.thinking === "string" && chunk.message.thinking.length) {
+                  thinkingReported = true;
+                  onUpdate({ type: "activity", activity: "thinking" });
+                }
+                append(chunk.message?.content);
+              }
             } else {
               text = (await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: false, options: { num_ctx: backend.numCtx } })).message?.content;
             }
           }
           if (typeof text !== "string" || !text.trim()) throw new Error("Empty model response");
           return text;
-        } catch {
+        } catch (error) {
           onUpdate?.({ type: "retry", backend: backend.id, model: modelName });
-          console.warn(`[AIService] Backend ${backend.id}, model ${modelName} failed; trying next model.`);
+          const reason = String(error?.message || error || "Unknown error").slice(0, 500);
+          console.warn(`[AIService] Backend ${backend.id}, model ${modelName} failed (${error?.name || "Error"}: ${reason}); trying next model.`);
         }
       }
     }
@@ -152,6 +208,7 @@ class AIService {
         onProgress: onProgress ? update => {
           if (update.type === "reset") onProgress({ type: "stage", stage: "evidence-model" });
           else if (update.type === "retry") onProgress({ type: "stage", stage: "evidence-retry" });
+          else if (update.type === "activity") onProgress(update);
         } : undefined,
       });
       const requests = this._contextRequests(pass1);

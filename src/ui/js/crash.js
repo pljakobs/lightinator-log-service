@@ -192,6 +192,8 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
         streamedText.hidden = false;
         streamedText.textContent += event.text;
         streamedText.scrollTop = streamedText.scrollHeight;
+      } else if (event.type === 'activity' && event.activity === 'thinking') {
+        stage.textContent = 'Model is thinking; response activity received…';
       } else if (event.type === 'retry') {
         stage.textContent = `Retrying after ${event.model} failed…`;
       } else if (event.type === 'complete') {
