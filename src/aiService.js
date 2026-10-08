@@ -142,7 +142,7 @@ class AIService {
             for await (const chunk of stream) {
               if (onUpdate && typeof chunk.message?.thinking === "string" && chunk.message.thinking.length) {
                 thinkingCharacters += chunk.message.thinking.length;
-                onUpdate({ type: "activity", activity: "thinking", characters: thinkingCharacters });
+                onUpdate({ type: "activity", activity: "thinking", text: chunk.message.thinking, characters: thinkingCharacters });
               }
               append(chunk.message?.content);
             }

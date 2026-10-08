@@ -220,6 +220,8 @@ mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; p
 #crash-analysis-model-activity { margin: 14px auto 0; padding: 10px 12px; border-left: 3px solid #4ec9b0; background: #202321; text-align: left; }
 #crash-analysis-model-activity > strong { color: #d4d4d4; font-size: 12px; }
 #crash-analysis-model-activity p { margin: 4px 0 0; color: #aaa; font-size: 11px; overflow-wrap: anywhere; }
+#crash-analysis-thinking { max-height: 20vh; overflow: auto; margin: 8px 0 0; padding: 8px; background: #141414; color: #c5d8cc; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, monospace; }
+#crash-analysis-thinking[hidden] { display: none; }
 .crash-analysis-context-scroll { max-height: 22vh; overflow: auto; margin-top: 6px; border: 1px solid #3c3c3c; }
 .crash-analysis-context-scroll table { width: 100%; border-collapse: collapse; background: #141414; color: #aaa; font-size: 11px; text-align: left; }
 .crash-analysis-context-scroll th, .crash-analysis-context-scroll td { padding: 5px 8px; border-bottom: 1px solid #333; overflow-wrap: anywhere; }

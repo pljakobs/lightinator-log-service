@@ -125,6 +125,8 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
   const progress = document.getElementById('crash-analysis-progress');
   const stage = document.getElementById('crash-analysis-stage');
   const modelStatus = document.getElementById('crash-analysis-model-status');
+  const thinkingText = document.getElementById('crash-analysis-thinking');
+  const throughput = document.getElementById('crash-analysis-throughput');
   const contextPanel = document.getElementById('crash-analysis-context');
   const contextRows = document.getElementById('crash-analysis-context-rows');
   const streamedText = document.getElementById('crash-analysis-stream');
@@ -154,12 +156,19 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
     const decoder = new TextDecoder();
       let thinkingCharacters = 0;
       let responseCharacters = 0;
+      let modelStartedAt = 0;
+      let streamedCharacters = 0;
       const updateModelStatus = () => {
         modelStatus.textContent = thinkingCharacters
-          ? `Thinking activity: ${thinkingCharacters.toLocaleString()} characters received (hidden); ${responseCharacters.toLocaleString()} answer characters streamed`
+          ? `Thinking text: ${thinkingCharacters.toLocaleString()} characters received; ${responseCharacters.toLocaleString()} answer characters streamed`
           : responseCharacters
             ? `Answer progress: ${responseCharacters.toLocaleString()} characters streamed`
             : 'Waiting for model activity…';
+        const elapsedSeconds = modelStartedAt ? Math.max(0.1, (Date.now() - modelStartedAt) / 1000) : 0;
+        const approximateTokensPerSecond = elapsedSeconds ? Math.round(streamedCharacters / 4 / elapsedSeconds) : 0;
+        throughput.textContent = elapsedSeconds
+          ? `Approx. throughput: ${approximateTokensPerSecond.toLocaleString()} tokens/s (estimated from streamed characters)`
+          : 'Approx. throughput: waiting for stream…';
       };
     const consumeLine = line => {
       if (!line.trim()) return;
@@ -197,18 +206,29 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
       } else if (event.type === 'reset') {
         streamedText.textContent = '';
         streamedText.hidden = true;
+        thinkingText.textContent = '';
+        thinkingText.hidden = true;
         thinkingCharacters = 0;
         responseCharacters = 0;
+        streamedCharacters = 0;
+        modelStartedAt = Date.now();
         updateModelStatus();
         stage.textContent = `Generating with ${event.model}…`;
       } else if (event.type === 'token') {
         streamedText.hidden = false;
         streamedText.textContent += event.text;
+        if (!modelStartedAt) modelStartedAt = Date.now();
         responseCharacters += event.text.length;
+        streamedCharacters += event.text.length;
         updateModelStatus();
         streamedText.scrollTop = streamedText.scrollHeight;
       } else if (event.type === 'activity' && event.activity === 'thinking') {
+        thinkingText.hidden = false;
+        thinkingText.textContent += event.text || '';
+        thinkingText.scrollTop = thinkingText.scrollHeight;
+        if (!modelStartedAt) modelStartedAt = Date.now();
         thinkingCharacters = event.characters || thinkingCharacters;
+        streamedCharacters += (event.text || '').length;
         updateModelStatus();
         stage.textContent = 'Model is generating its analysis…';
       } else if (event.type === 'retry') {

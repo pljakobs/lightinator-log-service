@@ -59,10 +59,10 @@ test("streamed Ollama output uses configured context and forwards only response 
   assert.equal(result, "Visible analysis continues.");
   assert.deepEqual(updates.filter(update => update.type === "token").map(update => update.text), ["Visible analysis ", "continues."]);
   assert.deepEqual(updates.filter(update => update.type === "activity"), [
-    { type: "activity", activity: "thinking", characters: 17 },
-    { type: "activity", activity: "thinking", characters: 29 },
+    { type: "activity", activity: "thinking", text: "private reasoning", characters: 17 },
+    { type: "activity", activity: "thinking", text: "more private", characters: 29 },
   ]);
-  assert.ok(!JSON.stringify(updates).includes("private reasoning"));
+  assert.ok(JSON.stringify(updates).includes("private reasoning"));
 });
 
 test("non-interactive Ollama generation streams internally and aggregates the final answer", async () => {
