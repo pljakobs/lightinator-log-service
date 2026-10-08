@@ -120,27 +120,85 @@ document.getElementById('crash-raw-tab').addEventListener('click', () => {
 
 document.getElementById('crash-analyze-btn').addEventListener('click', async () => {
   if (!_currentCrashId) return;
+  const crashId = _currentCrashId;
   const analyzeBtn = document.getElementById('crash-analyze-btn');
+  const progress = document.getElementById('crash-analysis-progress');
+  const stage = document.getElementById('crash-analysis-stage');
+  const streamedText = document.getElementById('crash-analysis-stream');
   const origText = analyzeBtn.textContent;
   analyzeBtn.disabled = true;
   analyzeBtn.textContent = 'Analyzing…';
+  stage.textContent = 'Waiting for the analysis queue…';
+  streamedText.textContent = '';
+  streamedText.hidden = true;
+  progress.hidden = false;
 
   try {
-    const res = await fetchJson(`${BASE}/api/v1/crashes/${_currentCrashId}/analyze`, {
+    const response = await fetch(`${BASE}/api/v1/crashes/${crashId}/analyze/stream`, {
       method: 'POST',
     });
-    if (res && res.crashDecode) {
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+    if (!response.body) throw new Error('Streaming response is unavailable in this browser.');
+
+    let buffer = '';
+    let result = null;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const consumeLine = line => {
+      if (!line.trim()) return;
+      const event = JSON.parse(line);
+      if (event.type === 'stage') {
+        stage.textContent = event.stage === 'evidence' ? 'Reviewing crash evidence and source…'
+          : event.stage === 'final' ? 'Generating final analysis…' : 'Waiting for the analysis queue…';
+      } else if (event.type === 'reset') {
+        streamedText.textContent = '';
+        streamedText.hidden = true;
+        stage.textContent = `Generating with ${event.model}…`;
+      } else if (event.type === 'token') {
+        streamedText.hidden = false;
+        streamedText.textContent += event.text;
+        streamedText.scrollTop = streamedText.scrollHeight;
+      } else if (event.type === 'retry') {
+        stage.textContent = `Retrying after ${event.model} failed…`;
+      } else if (event.type === 'complete') {
+        result = event;
+      } else if (event.type === 'error') {
+        throw new Error(event.error || 'AI analysis failed.');
+      }
+    };
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) consumeLine(line);
+      if (done) break;
+    }
+    if (buffer.trim()) consumeLine(buffer);
+    if (!result) throw new Error('Analysis stream ended before completion.');
+
+    const res = result;
+    if (_currentCrashId === crashId && res && res.crashDecode) {
       _currentCrashDecode = res.crashDecode;
       if (res.rawDump) _currentCrashRaw = res.rawDump;
       document.getElementById('crash-raw-tab').disabled = !_currentCrashRaw;
       renderModalContent();
     }
-    analyzeBtn.textContent = '✓ Analyzed!';
-    setTimeout(() => { analyzeBtn.textContent = origText; analyzeBtn.disabled = false; }, 2000);
+    if (_currentCrashId === crashId) {
+      analyzeBtn.textContent = '✓ Analyzed!';
+      setTimeout(() => { analyzeBtn.textContent = origText; analyzeBtn.disabled = false; }, 2000);
+    }
   } catch (err) {
-    alert('AI analysis failed: ' + err.message);
-    analyzeBtn.textContent = origText;
-    analyzeBtn.disabled = false;
+    if (_currentCrashId === crashId) {
+      alert('AI analysis failed: ' + err.message);
+      analyzeBtn.textContent = origText;
+      analyzeBtn.disabled = false;
+    }
+  } finally {
+    progress.hidden = true;
   }
 });
 

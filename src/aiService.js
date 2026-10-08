@@ -30,13 +30,13 @@ class AIService {
     this.backends = parseAIBackends(backends ?? defaultAIBackends(this.apiKey || "", model)).map(backend => {
       let client = null;
       if (backend.type === "gemini" && backend.token) {
-        client = new GoogleGenAI({ apiKey: backend.token, httpOptions: { baseUrl: backend.baseUrl, timeout: 60_000 } });
+        client = new GoogleGenAI({ apiKey: backend.token, httpOptions: { baseUrl: backend.baseUrl, timeout: backend.timeoutMs } });
       } else if (backend.type === "openai") {
-        client = new OpenAI({ apiKey: backend.token || "local", baseURL: backend.baseUrl, timeout: 60_000, maxRetries: 0 });
+        client = new OpenAI({ apiKey: backend.token || "local", baseURL: backend.baseUrl, timeout: backend.timeoutMs, maxRetries: 0 });
       } else if (backend.type === "ollama") {
         client = new Ollama({ host: backend.baseUrl,
           headers: backend.token ? { Authorization: `Bearer ${backend.token}` } : {},
-          fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(60_000) }),
+          fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(backend.timeoutMs) }),
         });
       }
       return { ...backend, client };
@@ -61,23 +61,45 @@ class AIService {
   /**
    * Executes content generation with automatic sequential model fallback downgrade.
    */
-  async _generateWithFallback(prompt) {
+  async _generateWithFallback(prompt, onUpdate) {
     if (!this.isAvailable()) throw new Error("AI service is not configured.");
     for (const backend of this.backends) {
       if (!backend.client) continue;
       for (const modelName of backend.models) {
         try {
           let text;
+          const append = value => {
+            if (typeof value !== "string" || !value) return;
+            text = (text || "") + value;
+            onUpdate?.({ type: "token", text: value });
+          };
+          if (onUpdate) onUpdate({ type: "reset", backend: backend.id, model: modelName });
           if (backend.type === "gemini") {
-            text = (await backend.client.models.generateContent({ model: modelName, contents: prompt })).text;
+            if (onUpdate) {
+              const stream = await backend.client.models.generateContentStream({ model: modelName, contents: prompt });
+              for await (const chunk of stream) append(chunk.text);
+            } else {
+              text = (await backend.client.models.generateContent({ model: modelName, contents: prompt })).text;
+            }
           } else if (backend.type === "openai") {
-            text = (await backend.client.chat.completions.create({ model: modelName, messages: [{ role: "user", content: prompt }] })).choices?.[0]?.message?.content;
+            if (onUpdate) {
+              const stream = await backend.client.chat.completions.create({ model: modelName, messages: [{ role: "user", content: prompt }], stream: true });
+              for await (const chunk of stream) append(chunk.choices?.[0]?.delta?.content);
+            } else {
+              text = (await backend.client.chat.completions.create({ model: modelName, messages: [{ role: "user", content: prompt }] })).choices?.[0]?.message?.content;
+            }
           } else {
-            text = (await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: false })).message?.content;
+            if (onUpdate) {
+              const stream = await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: true, options: { num_ctx: backend.numCtx } });
+              for await (const chunk of stream) append(chunk.message?.content);
+            } else {
+              text = (await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: false, options: { num_ctx: backend.numCtx } })).message?.content;
+            }
           }
           if (typeof text !== "string" || !text.trim()) throw new Error("Empty model response");
           return text;
         } catch {
+          onUpdate?.({ type: "retry", backend: backend.id, model: modelName });
           console.warn(`[AIService] Backend ${backend.id}, model ${modelName} failed; trying next model.`);
         }
       }
@@ -98,7 +120,7 @@ class AIService {
     return [];
   }
 
-  async analyzeCrash({ harvester, repoPaths, codeSnippets = [], ...evidence }) {
+  async analyzeCrash({ harvester, repoPaths, codeSnippets = [], onProgress, ...evidence }) {
     const snippets = [];
     const seen = new Set();
     let bytes = 0;
@@ -116,6 +138,7 @@ class AIService {
     codeSnippets.forEach(add);
     let pass1 = "";
     for (let round = 0; round <= this.contextRounds; round++) {
+      onProgress?.({ type: "stage", stage: "evidence", round: round + 1 });
       pass1 = await this.runPass1({ ...evidence, codeSnippets: snippets });
       const requests = this._contextRequests(pass1);
       if (!requests.length) break;
@@ -125,7 +148,8 @@ class AIService {
       for (const snippet of supplemental) added = add(snippet) || added;
       if (!added) { gaps.push("Requested source was unavailable, already retrieved, or exceeded the context budget."); break; }
     }
-    return this.runPass2({ ...evidence, pass1Result: `${pass1}\n\nContext limitations:\n${gaps.join("\n") || "None recorded."}`, supplementalSnippets: snippets });
+    onProgress?.({ type: "stage", stage: "final" });
+    return this.runPass2({ ...evidence, pass1Result: `${pass1}\n\nContext limitations:\n${gaps.join("\n") || "None recorded."}`, supplementalSnippets: snippets, onUpdate: onProgress });
   }
 
   /**
@@ -451,7 +475,7 @@ async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disasse
  * Pass 2: Independent root-cause validation, causal-chain isolation,
  * remediation strategy, patch generation, and verification.
  */
-async runPass2({ pass1Result, supplementalSnippets, mapSymbols, disassembly, decodedText }) {
+async runPass2({ pass1Result, supplementalSnippets, mapSymbols, disassembly, decodedText, onUpdate }) {
   const prompt = [
     `You are an expert embedded firmware engineer specializing in Sming and Xtensa/RISC-V based ESP8266/ESP32 systems.`,
     `You are performing the final forensic analysis of a firmware crash.`,
@@ -674,7 +698,7 @@ async runPass2({ pass1Result, supplementalSnippets, mapSymbols, disassembly, dec
     `If the supplied evidence is insufficient to establish root cause, say so clearly and identify the smallest additional evidence needed to establish it.`
   ].join("\n");
 
-  return await this._generateWithFallback(prompt);
+  return await this._generateWithFallback(prompt, onUpdate);
   }
 }
 

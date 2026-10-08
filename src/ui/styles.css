@@ -207,7 +207,18 @@ mark { background: rgba(255, 200, 0, 0.3); color: inherit; border-radius: 2px; p
 #crash-output-tabs [role="tab"] { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: #aaa; font-size: 11px; padding: 4px 8px; }
 #crash-output-tabs [role="tab"][aria-selected="true"] { border-bottom-color: #4ec9b0; color: #fff; }
 #crash-output-tabs [role="tab"]:disabled { cursor: not-allowed; opacity: 0.45; }
-#crash-modal-body { flex: 1; overflow: auto; padding: 14px 16px; background: #141414; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; word-break: break-all; }
+#crash-modal-content { position: relative; display: flex; flex: 1; min-height: 0; }
+#crash-modal-body { flex: 1; min-width: 0; overflow: auto; padding: 14px 16px; background: #141414; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; word-break: break-all; }
+#crash-analysis-progress { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; padding: 20px; background: rgba(20, 20, 20, 0.94); text-align: center; }
+#crash-analysis-progress[hidden] { display: none; }
+.crash-analysis-progress-panel { max-width: 360px; }
+.crash-analysis-spinner { display: block; width: 30px; height: 30px; margin: 0 auto 16px; border: 3px solid #444; border-top-color: #4ec9b0; border-radius: 50%; animation: crash-analysis-spin 1s linear infinite; }
+.crash-analysis-progress-panel strong { color: #fff; font-size: 16px; }
+.crash-analysis-progress-panel p { margin: 8px 0 0; color: #aaa; font-size: 12px; }
+#crash-analysis-stream { max-height: 38vh; max-width: min(760px, 82vw); overflow: auto; margin: 16px auto 0; padding: 12px; border: 1px solid #3c3c3c; background: #141414; color: #d4d4d4; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, monospace; }
+#crash-analysis-stream[hidden] { display: none; }
+@keyframes crash-analysis-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .crash-analysis-spinner { animation-duration: 3s; } }
 
 /* ANSI & Markdown block styling inside crash modal */
 #crash-modal-body pre, #crash-modal-body .ansi-block {

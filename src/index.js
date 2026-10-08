@@ -315,6 +315,36 @@ async function main() {
     }
   });
 
+  app.post("/api/v1/crashes/:id/analyze/stream", async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!id || Number.isNaN(id)) return res.status(400).json({ error: "Invalid log id" });
+      if (!crashDecoder) return res.status(503).json({ error: "CrashDecoder instance not available" });
+
+      res.status(200).set({
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+      });
+      res.flushHeaders();
+      const send = event => {
+        if (!res.destroyed && !res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+      };
+      send({ type: "stage", stage: "queued" });
+      try {
+        const crashDecode = await crashDecoder.analyzeRecord(id, send);
+        const record = storage.getCrashRecord(id);
+        send({ type: "complete", id, crashDecode, rawDump: record?.raw || null });
+      } catch (err) {
+        send({ type: "error", error: err.message || "Analysis failed" });
+      }
+      res.end();
+    } catch (err) {
+      if (res.headersSent) return res.end();
+      next(err);
+    }
+  });
+
   app.post("/api/v1/crashes/:id/analyze", async (req, res, next) => {
     try {
       const id = Number.parseInt(req.params.id, 10);

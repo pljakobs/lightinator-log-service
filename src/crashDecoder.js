@@ -496,8 +496,8 @@ class CrashDecoder {
     }
   }
 
-  analyzeRecord(triggerRecordId) {
-    return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId, true));
+  analyzeRecord(triggerRecordId, onProgress = null) {
+    return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId, true, onProgress));
   }
 
   rerunRecord(triggerRecordId) {
@@ -548,7 +548,7 @@ class CrashDecoder {
     return recovered.join("\n");
   }
 
-  async _analyzeRecord(triggerRecordId, analyzeWithAI = true) {
+  async _analyzeRecord(triggerRecordId, analyzeWithAI = true, onProgress = null) {
     this._log("manual", triggerRecordId, `${analyzeWithAI ? "Starting AI re-analysis" : "Starting decoder rerun"}`);
     let rawLog = null;
     let ip = null;
@@ -650,7 +650,7 @@ class CrashDecoder {
       if (!this.aiService || !this.aiService.isAvailable()) {
         throw new Error("AI service is not configured.");
       }
-      const aiAnalysisResult = await this._analyzeDecoded(decoded, codeSnippets, repoPaths, git_version, socKey, type);
+      const aiAnalysisResult = await this._analyzeDecoded(decoded, codeSnippets, repoPaths, git_version, socKey, type, onProgress);
       finalDecoded = `${decoded}\n\n--- AI Analysis ---\n\n${aiAnalysisResult}`;
     }
 
@@ -667,12 +667,13 @@ class CrashDecoder {
     return finalDecoded;
   }
 
-  async _analyzeDecoded(decoded, codeSnippets, repoPaths, gitVersion, soc, buildType) {
+  async _analyzeDecoded(decoded, codeSnippets, repoPaths, gitVersion, soc, buildType, onProgress = null) {
     const mapSymbols = await this.harvester.fetchMapFile(gitVersion, soc, buildType);
     const disassembly = stripAnsi(decoded).match(/Disassembly around[^\n]*\n(?:[ \t]*[0-9a-f]+:[^\n]*(?:\n|$))+/gi)?.join("\n") || "";
     return this.aiService.analyzeCrash({
       soc, gitVersion, decodedText: decoded.split("\n\nSource context:\n")[0], codeSnippets, mapSymbols, disassembly,
       harvester: this.harvester, repoPaths,
+      ...(onProgress ? { onProgress } : {}),
     });
   }
 

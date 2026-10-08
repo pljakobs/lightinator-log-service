@@ -211,7 +211,17 @@
         <button id="crash-close-btn" style="background:none;border:none;color:#aaa;font-size:18px;cursor:pointer;line-height:1;padding:0 4px">&times;</button>
       </div>
     </div>
-    <div id="crash-modal-body"></div>
+    <div id="crash-modal-content">
+      <div id="crash-modal-body"></div>
+      <div id="crash-analysis-progress" role="status" aria-live="polite" hidden>
+        <div class="crash-analysis-progress-panel">
+          <span class="crash-analysis-spinner" aria-hidden="true"></span>
+          <strong>Analyzing crash</strong>
+          <p id="crash-analysis-stage">Reviewing the dump and available source. This may take several minutes.</p>
+          <pre id="crash-analysis-stream" hidden></pre>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 

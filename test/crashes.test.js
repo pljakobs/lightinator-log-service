@@ -21,6 +21,12 @@ test("POST /api/v1/crashes/:id/analyze returns 400 for invalid id", async () => 
   assert.equal(body.error, "Invalid log id");
 });
 
+test("POST /api/v1/crashes/:id/analyze/stream validates the crash id before streaming", async () => {
+  const r = await fetch(`${srv.baseUrl}/api/v1/crashes/abc/analyze/stream`, { method: "POST" });
+  assert.equal(r.status, 400);
+  assert.deepEqual(await r.json(), { error: "Invalid log id" });
+});
+
 test("POST /api/v1/crashes/:id/analyze returns 404/500 for non-existent crash record", async () => {
   const r = await fetch(`${srv.baseUrl}/api/v1/crashes/999999/analyze`, {
     method: "POST",

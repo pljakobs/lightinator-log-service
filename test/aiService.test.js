@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { parseAIBackends, publicAIBackends, mergeAIBackends } = require("../src/aiConfig");
+const { parseAIBackends, publicAIBackends, mergeAIBackends, DEFAULT_OLLAMA_NUM_CTX } = require("../src/aiConfig");
 const { AIService } = require("../src/aiService");
 const http = require("node:http");
 
@@ -8,6 +8,8 @@ test("AI backend configuration supports all providers without exposing tokens", 
   const entries = ["gemini", "openai", "ollama"].map(type => ({ id: type, type, models: ["model-one", "model-two"], token: "private-token" }));
   const parsed = parseAIBackends(JSON.stringify(entries));
   assert.equal(parsed.length, 3);
+  assert.ok(parsed.every(entry => entry.timeoutMs === 60_000));
+  assert.equal(parsed.find(entry => entry.type === "ollama").numCtx, DEFAULT_OLLAMA_NUM_CTX);
   const publicEntries = publicAIBackends(parsed);
   assert.ok(publicEntries.every(entry => entry.tokenConfigured && !Object.hasOwn(entry, "token")));
   assert.ok(!JSON.stringify(publicEntries).includes("private-token"));
@@ -23,6 +25,39 @@ test("AI backend configuration rejects unsafe protocols, credentials, identifier
     { ...valid, baseUrl: "file:///tmp/model" }, { ...valid, baseUrl: "https://user:password@example.test" },
     { ...valid, id: "../invalid" }, { ...valid, token: "key\nINJECTED=value" }, { ...valid, models: [] },
   ]) assert.throws(() => parseAIBackends([entry]), /Invalid AI backend configuration/);
+});
+
+test("AI backend timeout is configurable and bounded", () => {
+  const backend = { id: "ollama", type: "ollama", models: ["local-model"], timeoutMs: 900_000 };
+  assert.equal(parseAIBackends([backend])[0].timeoutMs, 900_000);
+  for (const timeoutMs of [0, 999, 3_600_001, 1.5, "900000"]) {
+    assert.throws(() => parseAIBackends([{ ...backend, timeoutMs }]), /Invalid AI backend configuration/);
+  }
+});
+
+test("Ollama context size is configurable and bounded", () => {
+  const backend = { id: "ollama", type: "ollama", models: ["local-model"], numCtx: 65_536 };
+  assert.equal(parseAIBackends([backend])[0].numCtx, 65_536);
+  for (const numCtx of [1_024, 131_073, 1.5, "65536"]) {
+    assert.throws(() => parseAIBackends([{ ...backend, numCtx }]), /Invalid AI backend configuration/);
+  }
+});
+
+test("streamed Ollama output uses configured context and forwards only response content", async () => {
+  const service = new AIService({ apiKey: "", backends: [
+    { id: "ollama", type: "ollama", models: ["local"], numCtx: 65_536 },
+  ] });
+  service.backends[0].client.chat = async function* (options) {
+    assert.equal(options.stream, true);
+    assert.equal(options.options.num_ctx, 65_536);
+    yield { message: { content: "Visible analysis ", thinking: "private reasoning" } };
+    yield { message: { content: "continues." } };
+  };
+  const updates = [];
+  const result = await service._generateWithFallback("prompt", update => updates.push(update));
+  assert.equal(result, "Visible analysis continues.");
+  assert.deepEqual(updates.filter(update => update.type === "token").map(update => update.text), ["Visible analysis ", "continues."]);
+  assert.ok(!JSON.stringify(updates).includes("private reasoning"));
 });
 
 test("provider fallback reaches OpenAI-compatible and native Ollama HTTP APIs in order", async context => {
@@ -45,6 +80,25 @@ test("provider fallback reaches OpenAI-compatible and native Ollama HTTP APIs in
   ] });
   assert.equal(await service._generateWithFallback("evidence"), "local final response");
   assert.deepEqual(paths, ["/v1/chat/completions", "/v1/chat/completions", "/api/chat"]);
+});
+
+test("Ollama request aborts at its configured timeout", async context => {
+  const server = http.createServer((_request, response) => {
+    setTimeout(() => {
+      if (!response.destroyed) response.end(JSON.stringify({ message: { content: "too late" } }));
+    }, 2500);
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => {
+    server.closeAllConnections();
+    return new Promise(resolve => server.close(resolve));
+  });
+  const service = new AIService({ apiKey: "", backends: [
+    { id: "slow-ollama", type: "ollama", baseUrl: `http://127.0.0.1:${server.address().port}`, models: ["local"], timeoutMs: 1000 },
+  ] });
+  const startedAt = Date.now();
+  await assert.rejects(service._generateWithFallback("test prompt"), /All configured AI backends and models failed/);
+  assert.ok(Date.now() - startedAt < 2200, "request should abort before the delayed response");
 });
 
 test("context analysis gathers requested ranges iteratively and returns only the final report", async () => {

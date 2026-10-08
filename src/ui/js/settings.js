@@ -243,10 +243,13 @@ document.getElementById('loki-test').addEventListener('click', async () => {
 let _svcSchema = [];
 
 function backendRowHtml(backend) {
+  const ollama = backend.type === 'ollama';
   return `<div class="ai-backend-row" data-backend-id="${escHtml(backend.id)}">
     <label>API type<select data-ai-field="type">${['gemini', 'openai', 'ollama'].map(type => `<option value="${type}"${backend.type === type ? ' selected' : ''}>${type === 'openai' ? 'OpenAI-compatible' : type === 'ollama' ? 'Ollama' : 'Gemini'}</option>`).join('')}</select></label>
     <label>Base URL<input data-ai-field="baseUrl" type="url" value="${escHtml(backend.baseUrl || '')}" /></label>
     <label>Models<input data-ai-field="models" type="text" value="${escHtml((backend.models || []).join(', '))}" /></label>
+    <label>Timeout (seconds)<input data-ai-field="timeoutSeconds" type="number" min="1" max="3600" step="1" value="${Math.round((backend.timeoutMs ?? 60000) / 1000)}" /></label>
+    <label data-ai-field="numCtxLabel" style="display:${ollama ? 'flex' : 'none'}">Ollama context (tokens)<input data-ai-field="numCtx" type="number" min="2048" max="131072" step="1024" value="${backend.numCtx ?? 32768}" /></label>
     <label>Token<div class="ai-token-control"><input data-ai-field="token" type="password" autocomplete="new-password" value="" placeholder="${backend.tokenConfigured ? 'Configured' : 'Not configured'}" /><button type="button" data-ai-action="clear" title="Clear backend token" aria-label="Clear backend token">&times;</button></div></label>
     <div class="ai-backend-actions"><button type="button" data-ai-action="up" title="Move backend up" aria-label="Move backend up">&#8593;</button><button type="button" data-ai-action="down" title="Move backend down" aria-label="Move backend down">&#8595;</button><button type="button" data-ai-action="remove" title="Remove backend" aria-label="Remove backend">&times;</button></div>
   </div>`;
@@ -259,6 +262,8 @@ function collectAIBackends(container) {
     return {
       id: row.dataset.backendId, type: field('type').value, baseUrl: field('baseUrl').value.trim(),
       models: field('models').value.split(',').map(model => model.trim()).filter(Boolean),
+      timeoutMs: Number(field('timeoutSeconds').value) * 1000,
+      ...(field('type').value === 'ollama' ? { numCtx: Number(field('numCtx').value) } : {}),
       ...(token.dataset.clearToken === 'true' ? { token: null } : token.value ? { token: token.value } : {}),
     };
   });
@@ -334,6 +339,12 @@ function renderSvcFields(schema, savedValues, liveValues, credentialsConfigured 
     });
     editor.addEventListener('input', event => {
       if (event.target.dataset.aiField === 'token') delete event.target.dataset.clearToken;
+    });
+    editor.addEventListener('change', event => {
+      if (event.target.matches('[data-ai-field="type"]')) {
+        const row = event.target.closest('.ai-backend-row');
+        row.querySelector('[data-ai-field="numCtxLabel"]').style.display = event.target.value === 'ollama' ? 'flex' : 'none';
+      }
     });
   });
   container.querySelectorAll('.svc-clear-secret').forEach(button => {

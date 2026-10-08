@@ -1,6 +1,10 @@
 "use strict";
 
 const DEFAULT_MODEL = "gemini-3.8-flash";
+const DEFAULT_TIMEOUT_MS = 60_000;
+const MAX_TIMEOUT_MS = 3_600_000;
+const DEFAULT_OLLAMA_NUM_CTX = 32_768;
+const MAX_OLLAMA_NUM_CTX = 131_072;
 const DEFAULT_URLS = {
   gemini: "https://generativelanguage.googleapis.com",
   openai: "https://api.openai.com/v1",
@@ -30,9 +34,14 @@ function parseAIBackends(value) {
     if (!Array.isArray(entry.models) || !entry.models.length || entry.models.length > 20 ||
         entry.models.some(model => typeof model !== "string" || !model.trim() || model.length > 200 || /[\r\n\0]/.test(model))) throw invalidConfiguration();
     if (entry.token != null && (typeof entry.token !== "string" || /[\r\n\0]/.test(entry.token))) throw invalidConfiguration();
+    const timeoutMs = entry.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > MAX_TIMEOUT_MS) throw invalidConfiguration();
+    const numCtx = entry.type === "ollama" ? (entry.numCtx ?? DEFAULT_OLLAMA_NUM_CTX) : undefined;
+    if (entry.type === "ollama" && (!Number.isInteger(numCtx) || numCtx < 2_048 || numCtx > MAX_OLLAMA_NUM_CTX)) throw invalidConfiguration();
     if (entry.useLegacyToken && (entry.id !== "gemini" || entry.type !== "gemini" || url.href.replace(/\/$/, "") !== DEFAULT_URLS.gemini)) throw invalidConfiguration();
     return { id: entry.id, type: entry.type, baseUrl: url.href.replace(/\/$/, ""),
-      models: [...new Set(entry.models.map(model => model.trim()))], token: entry.token || "", useLegacyToken: Boolean(entry.useLegacyToken) };
+      models: [...new Set(entry.models.map(model => model.trim()))], timeoutMs, ...(numCtx ? { numCtx } : {}),
+      token: entry.token || "", useLegacyToken: Boolean(entry.useLegacyToken) };
   });
 }
 
@@ -55,4 +64,4 @@ function mergeAIBackends(value, previous) {
   });
 }
 
-module.exports = { DEFAULT_MODEL, DEFAULT_URLS, defaultAIBackends, parseAIBackends, publicAIBackends, mergeAIBackends };
+module.exports = { DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, DEFAULT_OLLAMA_NUM_CTX, DEFAULT_URLS, defaultAIBackends, parseAIBackends, publicAIBackends, mergeAIBackends };

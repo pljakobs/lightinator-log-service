@@ -241,6 +241,38 @@ test("crash window reruns the decoder without replacing the AI analysis action",
   await expect(page.locator("#crash-modal-body")).toHaveText("raw register line\nraw stack row");
 });
 
+test("manual crash analysis shows a progress overlay until the request completes", async ({ page }) => {
+  let finishRequest;
+  const requestGate = new Promise(resolve => { finishRequest = resolve; });
+  await page.route("**/api/v1/crashes/44/analyze/stream", async route => {
+    await requestGate;
+    await route.fulfill({
+      contentType: "application/x-ndjson",
+      body: [
+        { type: "stage", stage: "final" },
+        { type: "reset", model: "local-model" },
+        { type: "token", text: "Completed " },
+        { type: "token", text: "analysis" },
+        { type: "complete", id: 44, crashDecode: "decoded dump\n--- AI Analysis ---\nCompleted analysis" },
+      ].map(event => JSON.stringify(event)).join("\n") + "\n",
+    });
+  });
+  await page.evaluate(async () => {
+    const { openCrashModal } = await import("/js/crash.js");
+    openCrashModal({ id: 44, crashDecode: "decoded dump" });
+  });
+
+  await page.locator("#crash-analyze-btn").click();
+  const progress = page.locator("#crash-analysis-progress");
+  await expect(progress).toBeVisible();
+  await expect(progress).toContainText("Analyzing crash");
+  await expect(page.locator("#crash-analyze-btn")).toBeDisabled();
+  finishRequest();
+  await expect(progress).toBeHidden();
+  await expect(page.locator("#crash-analysis-stream")).toContainText("Completed analysis");
+  await expect(page.locator("#crash-modal-body")).toContainText("Completed analysis");
+});
+
 test("failed decoder rerun displays the error and raw stack in the crash window", async ({ page }) => {
   await page.route("**/api/v1/crashes/43/decode", route => route.fulfill({ json: {
     id: 43,
@@ -342,6 +374,8 @@ test("AI provider settings edit fallback order and preserve write-only backend t
   await expect(editor.locator('[data-ai-field="token"]')).toHaveValue('');
   await expect(editor.locator('[data-ai-field="token"]')).toHaveAttribute('placeholder', 'Configured');
   expect(await editor.innerHTML()).not.toContain('provider-private-token');
+  await editor.locator('[data-backend-id="local"] [data-ai-field="timeoutSeconds"]').fill('900');
+  await editor.locator('[data-backend-id="local"] [data-ai-field="numCtx"]').fill('65536');
   await editor.locator('[data-ai-action="add"]').click();
   const added = editor.locator('.ai-backend-row').last();
   await added.locator('[data-ai-field="models"]').fill('first-model, second-model');
@@ -354,6 +388,8 @@ test("AI provider settings edit fallback order and preserve write-only backend t
   expect(backends.map(backend => backend.type)).toEqual(['openai', 'ollama']);
   expect(backends[0].models).toEqual(['first-model', 'second-model']);
   expect(backends[1].tokenConfigured).toBe(true);
+  expect(backends[1].timeoutMs).toBe(900_000);
+  expect(backends[1].numCtx).toBe(65_536);
   expect(settings.values.LLS_AI_CONTEXT_ROUNDS).toBe('5');
   await editor.locator('.ai-backend-row').last().locator('[data-ai-action="clear"]').click();
   await page.locator('#svc-save').click();
