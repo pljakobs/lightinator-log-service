@@ -64,6 +64,7 @@ jobs:
       - name: Publish Node test check
         if: ${{ !cancelled() && hashFiles('test-results/node.xml') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: dorny/test-reporter@v3
+        continue-on-error: true
         with:
           name: Node.js ${{ matrix.node }} test results
           path: test-results/node.xml
@@ -113,6 +114,7 @@ jobs:
       - name: Publish browser test check
         if: ${{ !cancelled() && hashFiles('test-results/playwright.xml') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: dorny/test-reporter@v3
+        continue-on-error: true
         with:
           name: Playwright browser test results
           path: test-results/playwright.xml

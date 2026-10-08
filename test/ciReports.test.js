@@ -45,7 +45,9 @@ test("CI keeps its test matrix and publishes reports safely on pinned runners", 
     if (name === "build") continue;
     assert.equal(job.permissions.contents, "read");
     assert.ok(job.steps.some(step => step.run?.includes("scripts/report-tests.js") && step.if.includes("!cancelled()")));
-    assert.ok(job.steps.some(step => step.uses === "dorny/test-reporter@v3" && step.if.includes("head.repo.full_name")));
+      const reporters = job.steps.filter(step => step.uses === "dorny/test-reporter@v3");
+      assert.ok(reporters.some(step => step.if.includes("head.repo.full_name")));
+      assert.ok(reporters.every(step => step["continue-on-error"] === true));
     assert.ok(job.steps.some(step => step.uses === "actions/upload-artifact@v7" && step.if.includes("!cancelled()")));
   }
 });
