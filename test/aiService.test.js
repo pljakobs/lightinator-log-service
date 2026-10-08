@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { parseAIBackends, publicAIBackends, mergeAIBackends, DEFAULT_OLLAMA_NUM_CTX } = require("../src/aiConfig");
+const { parseAIBackends, publicAIBackends, mergeAIBackends, DEFAULT_OLLAMA_NUM_CTX, DEFAULT_OLLAMA_TIMEOUT_MS } = require("../src/aiConfig");
 const { AIService } = require("../src/aiService");
 const http = require("node:http");
 
@@ -8,7 +8,8 @@ test("AI backend configuration supports all providers without exposing tokens", 
   const entries = ["gemini", "openai", "ollama"].map(type => ({ id: type, type, models: ["model-one", "model-two"], token: "private-token" }));
   const parsed = parseAIBackends(JSON.stringify(entries));
   assert.equal(parsed.length, 3);
-  assert.ok(parsed.every(entry => entry.timeoutMs === 60_000));
+  assert.equal(parsed.find(entry => entry.type === "gemini").timeoutMs, 60_000);
+  assert.equal(parsed.find(entry => entry.type === "ollama").timeoutMs, DEFAULT_OLLAMA_TIMEOUT_MS);
   assert.equal(parsed.find(entry => entry.type === "ollama").numCtx, DEFAULT_OLLAMA_NUM_CTX);
   const publicEntries = publicAIBackends(parsed);
   assert.ok(publicEntries.every(entry => entry.tokenConfigured && !Object.hasOwn(entry, "token")));
@@ -104,8 +105,11 @@ test("Ollama request aborts at its configured timeout", async context => {
 test("context analysis gathers requested ranges iteratively and returns only the final report", async () => {
   const service = new AIService({ apiKey: "", backends: [], contextRounds: 3 });
   let passes = 0;
-  service.runPass1 = async ({ codeSnippets }) => {
+  const updates = [];
+  service.runPass1 = async ({ codeSnippets, onProgress }) => {
     passes++;
+    onProgress?.({ type: "reset", model: "local" });
+    onProgress?.({ type: "token", text: "private Pass 1 analysis" });
     return codeSnippets.length === 1 ? 'Evidence gaps\n```json\n[{"file":"src/caller.cpp","start_line":10,"end_line":20,"priority":"required"}]\n```' : "Complete internal evidence\n```json\n[]\n```";
   };
   service.runPass2 = async evidence => {
@@ -118,6 +122,7 @@ test("context analysis gathers requested ranges iteratively and returns only the
   const result = await service.analyzeCrash({
     decodedText: "original crash", mapSymbols: "map evidence", disassembly: "instruction evidence",
     codeSnippets: [{ repo: "app", file: "main.cpp", targetLine: 1, snippet: "initial source" }], repoPaths: { app: "/repo" },
+    onProgress: update => updates.push(update),
     harvester: { getContextFiles: async requests => {
       assert.equal(requests[0].start_line, 10);
       return [{ repo: "app", file: "src/caller.cpp", startLine: 10, stopLine: 20, snippet: "caller source" }];
@@ -125,6 +130,8 @@ test("context analysis gathers requested ranges iteratively and returns only the
   });
   assert.equal(result, "Final verified report");
   assert.equal(passes, 2);
+  assert.ok(updates.some(update => update.stage === "evidence-model"));
+  assert.ok(!JSON.stringify(updates).includes("private Pass 1 analysis"));
 });
 
 test("context rounds and source budget are bounded and unresolved context is reported", async () => {

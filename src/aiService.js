@@ -139,7 +139,14 @@ class AIService {
     let pass1 = "";
     for (let round = 0; round <= this.contextRounds; round++) {
       onProgress?.({ type: "stage", stage: "evidence", round: round + 1 });
-      pass1 = await this.runPass1({ ...evidence, codeSnippets: snippets });
+      pass1 = await this.runPass1({
+        ...evidence,
+        codeSnippets: snippets,
+        onProgress: onProgress ? update => {
+          if (update.type === "reset") onProgress({ type: "stage", stage: "evidence-model" });
+          else if (update.type === "retry") onProgress({ type: "stage", stage: "evidence-retry" });
+        } : undefined,
+      });
       const requests = this._contextRequests(pass1);
       if (!requests.length) break;
       if (round === this.contextRounds) { gaps.push("Maximum context rounds reached; outstanding requests remain unresolved."); break; }
@@ -156,7 +163,7 @@ class AIService {
  * Pass 1: Anatomical analysis, call stack evaluation, address resolution,
  * memory/heap analysis, hypothesis generation, and context gap identification.
  */
-async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disassembly }) {
+async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disassembly, onProgress }) {
   const prompt = [
     `You are an expert embedded firmware engineer specializing in Sming and Xtensa/RISC-V based ESP8266/ESP32 systems, analyzing a firmware crash dump.`,
     ``,
@@ -467,7 +474,7 @@ async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disasse
     `A useful "insufficient data" conclusion is preferable to an invented root cause.`
   ].join("\n");
 
-  return await this._generateWithFallback(prompt);
+  return await this._generateWithFallback(prompt, onProgress);
 }
 
 

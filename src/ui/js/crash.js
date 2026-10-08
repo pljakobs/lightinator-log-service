@@ -152,6 +152,8 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
       const event = JSON.parse(line);
       if (event.type === 'stage') {
         stage.textContent = event.stage === 'evidence' ? 'Reviewing crash evidence and source…'
+          : event.stage === 'evidence-model' ? 'Analyzing crash evidence…'
+          : event.stage === 'evidence-retry' ? 'Retrying crash evidence analysis…'
           : event.stage === 'final' ? 'Generating final analysis…' : 'Waiting for the analysis queue…';
       } else if (event.type === 'reset') {
         streamedText.textContent = '';

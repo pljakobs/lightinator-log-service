@@ -2,6 +2,7 @@
 
 const DEFAULT_MODEL = "gemini-3.8-flash";
 const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_OLLAMA_TIMEOUT_MS = 900_000;
 const MAX_TIMEOUT_MS = 3_600_000;
 const DEFAULT_OLLAMA_NUM_CTX = 32_768;
 const MAX_OLLAMA_NUM_CTX = 131_072;
@@ -34,7 +35,7 @@ function parseAIBackends(value) {
     if (!Array.isArray(entry.models) || !entry.models.length || entry.models.length > 20 ||
         entry.models.some(model => typeof model !== "string" || !model.trim() || model.length > 200 || /[\r\n\0]/.test(model))) throw invalidConfiguration();
     if (entry.token != null && (typeof entry.token !== "string" || /[\r\n\0]/.test(entry.token))) throw invalidConfiguration();
-    const timeoutMs = entry.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs = entry.timeoutMs ?? (entry.type === "ollama" ? DEFAULT_OLLAMA_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > MAX_TIMEOUT_MS) throw invalidConfiguration();
     const numCtx = entry.type === "ollama" ? (entry.numCtx ?? DEFAULT_OLLAMA_NUM_CTX) : undefined;
     if (entry.type === "ollama" && (!Number.isInteger(numCtx) || numCtx < 2_048 || numCtx > MAX_OLLAMA_NUM_CTX)) throw invalidConfiguration();
@@ -64,4 +65,4 @@ function mergeAIBackends(value, previous) {
   });
 }
 
-module.exports = { DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, DEFAULT_OLLAMA_NUM_CTX, DEFAULT_URLS, defaultAIBackends, parseAIBackends, publicAIBackends, mergeAIBackends };
+module.exports = { DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, DEFAULT_OLLAMA_TIMEOUT_MS, DEFAULT_OLLAMA_NUM_CTX, DEFAULT_URLS, defaultAIBackends, parseAIBackends, publicAIBackends, mergeAIBackends };

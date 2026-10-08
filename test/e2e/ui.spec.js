@@ -374,6 +374,8 @@ test("AI provider settings edit fallback order and preserve write-only backend t
   await expect(editor.locator('[data-ai-field="token"]')).toHaveValue('');
   await expect(editor.locator('[data-ai-field="token"]')).toHaveAttribute('placeholder', 'Configured');
   expect(await editor.innerHTML()).not.toContain('provider-private-token');
+  await expect(editor.locator('[data-backend-id="local"] [data-ai-field="timeoutSeconds"]')).toHaveValue('900');
+  await expect(editor.locator('[data-backend-id="local"] [data-ai-field="numCtx"]')).toHaveValue('32768');
   await editor.locator('[data-backend-id="local"] [data-ai-field="timeoutSeconds"]').fill('900');
   await editor.locator('[data-backend-id="local"] [data-ai-field="numCtx"]').fill('65536');
   await editor.locator('[data-ai-action="add"]').click();

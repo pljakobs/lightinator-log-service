@@ -680,7 +680,7 @@ class CrashDecoder {
   async _getSourceRepos(gitVersion, smingVersion = "develop") {
     const repoPaths = {};
     const repos = [
-      ["Sming", "https://github.com/pljakobs/Sming.git", smingVersion || "develop"],
+      ["Sming", "https://github.com/pljakobs/Sming.git", "develop"],
       ["esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", gitVersion.toLowerCase()],
     ];
     await Promise.all(repos.map(async ([name, url, ref]) => {

@@ -330,13 +330,17 @@ async function main() {
       const send = event => {
         if (!res.destroyed && !res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
       };
-      send({ type: "stage", stage: "queued" });
+      const heartbeat = setInterval(() => send({ type: "heartbeat" }), 10_000);
+      heartbeat.unref?.();
       try {
+        send({ type: "stage", stage: "queued" });
         const crashDecode = await crashDecoder.analyzeRecord(id, send);
         const record = storage.getCrashRecord(id);
         send({ type: "complete", id, crashDecode, rawDump: record?.raw || null });
       } catch (err) {
         send({ type: "error", error: err.message || "Analysis failed" });
+      } finally {
+        clearInterval(heartbeat);
       }
       res.end();
     } catch (err) {

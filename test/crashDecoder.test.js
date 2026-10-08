@@ -145,7 +145,7 @@ test("context requests cannot escape repositories through traversal or symlinks"
   assert.deepEqual(await harvester.extractSnippets("linked.cpp:1 ../outside.cpp:1", { firmware: repoPath }), []);
 });
 
-test("source repositories use the firmware version tag and tolerate unavailable sources", async () => {
+test("source repositories use the firmware version tag and Sming develop branch", async () => {
   const decoder = Object.create(CrashDecoder.prototype);
   const calls = [];
   decoder.harvester = {
@@ -159,8 +159,8 @@ test("source repositories use the firmware version tag and tolerate unavailable 
   const repos = await decoder._getSourceRepos("V1.2.3-4-develop");
   assert.deepEqual(repos, { "esp-rgbww-firmware": "/cache/firmware" });
   assert.deepEqual(calls[1], ["esp-rgbww-firmware", "https://github.com/pljakobs/esp_rgbww_firmware.git", "v1.2.3-4-develop"]);
-  await decoder._getSourceRepos("V1.2.3-4-develop", "sming-build-tag");
-  assert.deepEqual(calls[2], ["Sming", "https://github.com/pljakobs/Sming.git", "sming-build-tag"]);
+  await decoder._getSourceRepos("V1.2.3-4-develop", "6.2.0");
+  assert.deepEqual(calls[2], ["Sming", "https://github.com/pljakobs/Sming.git", "develop"]);
   decoder._runDecode = async () => "decoded without source";
   decoder.harvester.extractSnippets = async () => [];
   const result = await decoder._decodeWithContext({}, "app.elf", [], {});
