@@ -249,6 +249,11 @@ test("manual crash analysis shows a progress overlay until the request completes
     await route.fulfill({
       contentType: "application/x-ndjson",
       body: [
+        { type: "stage", stage: "repositories" },
+        { type: "stage", stage: "decoding" },
+        { type: "context", phase: "initial", files: [{ repo: "Sming", file: "Arch/Esp8266/Crash.cpp", startLine: 10, stopLine: 14 }] },
+        { type: "stage", stage: "context" },
+        { type: "context", phase: "supplemental", files: [{ repo: "firmware", file: "src/main.cpp", startLine: 22, stopLine: 30 }] },
         { type: "stage", stage: "final" },
         { type: "reset", model: "local-model" },
         { type: "token", text: "Completed " },
@@ -270,6 +275,12 @@ test("manual crash analysis shows a progress overlay until the request completes
   finishRequest();
   await expect(progress).toBeHidden();
   await expect(page.locator("#crash-analysis-stream")).toContainText("Completed analysis");
+  const contextRows = page.locator("#crash-analysis-context-rows tr");
+  await expect(contextRows).toHaveCount(2);
+  await expect(contextRows.nth(0)).toContainText("Arch/Esp8266/Crash.cpp");
+  await expect(contextRows.nth(0)).toContainText("10–14");
+  await expect(contextRows.nth(1)).toContainText("src/main.cpp");
+  await expect(contextRows.nth(1)).toContainText("22–30");
   await expect(page.locator("#crash-modal-body")).toContainText("Completed analysis");
 });
 

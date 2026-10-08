@@ -132,6 +132,12 @@ test("context analysis gathers requested ranges iteratively and returns only the
   assert.equal(passes, 2);
   assert.ok(updates.some(update => update.stage === "evidence-model"));
   assert.ok(!JSON.stringify(updates).includes("private Pass 1 analysis"));
+  assert.deepEqual(updates.find(update => update.phase === "initial").files, [
+    { repo: "app", file: "main.cpp", startLine: 1, stopLine: 1 },
+  ]);
+  assert.deepEqual(updates.find(update => update.phase === "supplemental").files, [
+    { repo: "app", file: "src/caller.cpp", startLine: 10, stopLine: 20 },
+  ]);
 });
 
 test("context rounds and source budget are bounded and unresolved context is reported", async () => {

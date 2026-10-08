@@ -635,10 +635,12 @@ class CrashDecoder {
     await this._ensureScript(cfg);
     await this._ensureMapFile(git_version, socKey, type, elfPath);
 
+    onProgress?.({ type: "stage", stage: "repositories" });
     const repoPaths = await this._getSourceRepos(git_version, sming_version);
     const lines = rawLog.split("\n");
     let decoded;
     let codeSnippets = [];
+    onProgress?.({ type: "stage", stage: "decoding" });
     try {
       ({ decoded, codeSnippets } = await this._decodeWithContext(cfg, elfPath, lines, repoPaths));
     } catch (err) {
@@ -668,6 +670,7 @@ class CrashDecoder {
   }
 
   async _analyzeDecoded(decoded, codeSnippets, repoPaths, gitVersion, soc, buildType, onProgress = null) {
+    onProgress?.({ type: "stage", stage: "map" });
     const mapSymbols = await this.harvester.fetchMapFile(gitVersion, soc, buildType);
     const disassembly = stripAnsi(decoded).match(/Disassembly around[^\n]*\n(?:[ \t]*[0-9a-f]+:[^\n]*(?:\n|$))+/gi)?.join("\n") || "";
     return this.aiService.analyzeCrash({

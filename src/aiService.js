@@ -136,6 +136,13 @@ class AIService {
       return true;
     };
     codeSnippets.forEach(add);
+    const describeContext = snippet => ({
+      repo: snippet.repo || "Unknown repository",
+      file: snippet.file || snippet.path || "Unknown file",
+      startLine: snippet.startLine || snippet.targetLine || null,
+      stopLine: snippet.stopLine || snippet.targetLine || null,
+    });
+    onProgress?.({ type: "context", phase: "initial", files: snippets.map(describeContext) });
     let pass1 = "";
     for (let round = 0; round <= this.contextRounds; round++) {
       onProgress?.({ type: "stage", stage: "evidence", round: round + 1 });
@@ -150,9 +157,17 @@ class AIService {
       const requests = this._contextRequests(pass1);
       if (!requests.length) break;
       if (round === this.contextRounds) { gaps.push("Maximum context rounds reached; outstanding requests remain unresolved."); break; }
+      onProgress?.({ type: "stage", stage: "context", round: round + 1 });
       const supplemental = await harvester.getContextFiles(requests, repoPaths, { maxBytes: Math.max(0, this.contextBytes - bytes) });
       let added = false;
-      for (const snippet of supplemental) added = add(snippet) || added;
+      const addedSnippets = [];
+      for (const snippet of supplemental) {
+        if (add(snippet)) {
+          added = true;
+          addedSnippets.push(describeContext(snippet));
+        }
+      }
+      if (addedSnippets.length) onProgress?.({ type: "context", phase: "supplemental", files: addedSnippets });
       if (!added) { gaps.push("Requested source was unavailable, already retrieved, or exceeded the context budget."); break; }
     }
     onProgress?.({ type: "stage", stage: "final" });

@@ -124,11 +124,15 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
   const analyzeBtn = document.getElementById('crash-analyze-btn');
   const progress = document.getElementById('crash-analysis-progress');
   const stage = document.getElementById('crash-analysis-stage');
+  const contextPanel = document.getElementById('crash-analysis-context');
+  const contextRows = document.getElementById('crash-analysis-context-rows');
   const streamedText = document.getElementById('crash-analysis-stream');
   const origText = analyzeBtn.textContent;
   analyzeBtn.disabled = true;
   analyzeBtn.textContent = 'Analyzing…';
   stage.textContent = 'Waiting for the analysis queue…';
+  contextRows.replaceChildren();
+  contextPanel.hidden = true;
   streamedText.textContent = '';
   streamedText.hidden = true;
   progress.hidden = false;
@@ -151,10 +155,35 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
       if (!line.trim()) return;
       const event = JSON.parse(line);
       if (event.type === 'stage') {
-        stage.textContent = event.stage === 'evidence' ? 'Reviewing crash evidence and source…'
+        stage.textContent = event.stage === 'repositories' ? 'Preparing firmware sources…'
+          : event.stage === 'decoding' ? 'Decoding crash dump…'
+          : event.stage === 'map' ? 'Loading symbols and map data…'
+          : event.stage === 'context' ? 'Gathering supplemental source context…'
+          : event.stage === 'evidence' ? 'Reviewing crash evidence and source…'
           : event.stage === 'evidence-model' ? 'Analyzing crash evidence…'
           : event.stage === 'evidence-retry' ? 'Retrying crash evidence analysis…'
           : event.stage === 'final' ? 'Generating final analysis…' : 'Waiting for the analysis queue…';
+      } else if (event.type === 'context') {
+        if (event.phase === 'initial') contextRows.replaceChildren();
+        contextPanel.hidden = false;
+        if (event.phase === 'initial' && !event.files?.length) {
+          const row = document.createElement('tr');
+          const cell = document.createElement('td');
+          cell.colSpan = 3;
+          cell.textContent = 'No source snippets selected';
+          row.appendChild(cell);
+          contextRows.appendChild(row);
+        }
+        for (const file of event.files || []) {
+          const row = document.createElement('tr');
+          const values = [file.repo, file.file, file.startLine ? `${file.startLine}${file.stopLine && file.stopLine !== file.startLine ? `–${file.stopLine}` : ''}` : 'Full file'];
+          for (const value of values) {
+            const cell = document.createElement('td');
+            cell.textContent = value || '';
+            row.appendChild(cell);
+          }
+          contextRows.appendChild(row);
+        }
       } else if (event.type === 'reset') {
         streamedText.textContent = '';
         streamedText.hidden = true;

@@ -218,6 +218,15 @@
           <span class="crash-analysis-spinner" aria-hidden="true"></span>
           <strong>Analyzing crash</strong>
           <p id="crash-analysis-stage">Reviewing the dump and available source. This may take several minutes.</p>
+          <div id="crash-analysis-context" hidden>
+            <strong>Selected source context</strong>
+            <div class="crash-analysis-context-scroll">
+              <table>
+                <thead><tr><th>Repository</th><th>File</th><th>Lines</th></tr></thead>
+                <tbody id="crash-analysis-context-rows"></tbody>
+              </table>
+            </div>
+          </div>
           <pre id="crash-analysis-stream" hidden></pre>
         </div>
       </div>
