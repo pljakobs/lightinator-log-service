@@ -124,6 +124,7 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
   const analyzeBtn = document.getElementById('crash-analyze-btn');
   const progress = document.getElementById('crash-analysis-progress');
   const stage = document.getElementById('crash-analysis-stage');
+  const modelStatus = document.getElementById('crash-analysis-model-status');
   const contextPanel = document.getElementById('crash-analysis-context');
   const contextRows = document.getElementById('crash-analysis-context-rows');
   const streamedText = document.getElementById('crash-analysis-stream');
@@ -151,6 +152,15 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
     let result = null;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+      let thinkingCharacters = 0;
+      let responseCharacters = 0;
+      const updateModelStatus = () => {
+        modelStatus.textContent = thinkingCharacters
+          ? `Thinking activity: ${thinkingCharacters.toLocaleString()} characters received (hidden); ${responseCharacters.toLocaleString()} answer characters streamed`
+          : responseCharacters
+            ? `Answer progress: ${responseCharacters.toLocaleString()} characters streamed`
+            : 'Waiting for model activity…';
+      };
     const consumeLine = line => {
       if (!line.trim()) return;
       const event = JSON.parse(line);
@@ -187,13 +197,20 @@ document.getElementById('crash-analyze-btn').addEventListener('click', async () 
       } else if (event.type === 'reset') {
         streamedText.textContent = '';
         streamedText.hidden = true;
+        thinkingCharacters = 0;
+        responseCharacters = 0;
+        updateModelStatus();
         stage.textContent = `Generating with ${event.model}…`;
       } else if (event.type === 'token') {
         streamedText.hidden = false;
         streamedText.textContent += event.text;
+        responseCharacters += event.text.length;
+        updateModelStatus();
         streamedText.scrollTop = streamedText.scrollHeight;
       } else if (event.type === 'activity' && event.activity === 'thinking') {
-        stage.textContent = 'Model is thinking; response activity received…';
+        thinkingCharacters = event.characters || thinkingCharacters;
+        updateModelStatus();
+        stage.textContent = 'Model is generating its analysis…';
       } else if (event.type === 'retry') {
         stage.textContent = `Retrying after ${event.model} failed…`;
       } else if (event.type === 'complete') {

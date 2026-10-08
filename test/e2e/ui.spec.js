@@ -256,7 +256,7 @@ test("manual crash analysis shows a progress overlay until the request completes
         { type: "context", phase: "supplemental", files: [{ repo: "firmware", file: "src/main.cpp", startLine: 22, stopLine: 30 }] },
         { type: "stage", stage: "final" },
         { type: "reset", model: "local-model" },
-        { type: "activity", activity: "thinking" },
+        { type: "activity", activity: "thinking", characters: 42 },
         { type: "token", text: "Completed " },
         { type: "token", text: "analysis" },
         { type: "complete", id: 44, crashDecode: "decoded dump\n--- AI Analysis ---\nCompleted analysis" },
@@ -275,7 +275,8 @@ test("manual crash analysis shows a progress overlay until the request completes
   await expect(page.locator("#crash-analyze-btn")).toBeDisabled();
   finishRequest();
   await expect(progress).toBeHidden();
-  await expect(page.locator("#crash-analysis-stage")).toHaveText("Model is thinking; response activity received…");
+  await expect(page.locator("#crash-analysis-stage")).toHaveText("Model is generating its analysis…");
+  await expect(page.locator("#crash-analysis-model-status")).toHaveText("Thinking activity: 42 characters received (hidden); 18 answer characters streamed");
   await expect(page.locator("#crash-analysis-stream")).toContainText("Completed analysis");
   const contextRows = page.locator("#crash-analysis-context-rows tr");
   await expect(contextRows).toHaveCount(2);

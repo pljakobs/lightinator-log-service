@@ -116,7 +116,7 @@ class AIService {
       for (const modelName of backend.models) {
         try {
           let text;
-          let thinkingReported = false;
+          let thinkingCharacters = 0;
           const append = value => {
             if (typeof value !== "string" || !value) return;
             text = (text || "") + value;
@@ -140,9 +140,9 @@ class AIService {
           } else {
             const stream = await backend.client.chat({ model: modelName, messages: [{ role: "user", content: prompt }], stream: true, options: { num_ctx: backend.numCtx } });
             for await (const chunk of stream) {
-              if (onUpdate && !thinkingReported && typeof chunk.message?.thinking === "string" && chunk.message.thinking.length) {
-                thinkingReported = true;
-                onUpdate({ type: "activity", activity: "thinking" });
+              if (onUpdate && typeof chunk.message?.thinking === "string" && chunk.message.thinking.length) {
+                thinkingCharacters += chunk.message.thinking.length;
+                onUpdate({ type: "activity", activity: "thinking", characters: thinkingCharacters });
               }
               append(chunk.message?.content);
             }
@@ -736,7 +736,7 @@ async runPass2({ pass1Result, supplementalSnippets, mapSymbols, disassembly, dec
     `  "start_line": 120,`,
     `  "end_line": 175,`,
     `  "reason": "Need to verify ownership and lifetime of the object passed to the asynchronous callback.",`,
-    `  "priority": "required"`
+    `  "priority": "required"`,
     `}]`,
     `\`\`\``,
     ``,

@@ -52,13 +52,16 @@ test("streamed Ollama output uses configured context and forwards only response 
     assert.equal(options.stream, true);
     assert.equal(options.options.num_ctx, 65_536);
     yield { message: { content: "Visible analysis ", thinking: "private reasoning" } };
-    yield { message: { content: "continues." } };
+    yield { message: { content: "continues.", thinking: "more private" } };
   };
   const updates = [];
   const result = await service._generateWithFallback("prompt", update => updates.push(update));
   assert.equal(result, "Visible analysis continues.");
   assert.deepEqual(updates.filter(update => update.type === "token").map(update => update.text), ["Visible analysis ", "continues."]);
-  assert.deepEqual(updates.filter(update => update.type === "activity"), [{ type: "activity", activity: "thinking" }]);
+  assert.deepEqual(updates.filter(update => update.type === "activity"), [
+    { type: "activity", activity: "thinking", characters: 17 },
+    { type: "activity", activity: "thinking", characters: 29 },
+  ]);
   assert.ok(!JSON.stringify(updates).includes("private reasoning"));
 });
 
@@ -73,6 +76,17 @@ test("non-interactive Ollama generation streams internally and aggregates the fi
     yield { message: { content: "second" } };
   };
   assert.equal(await service._generateWithFallback("prompt"), "first second");
+});
+
+test("Pass 2 prompt includes a valid additional-context JSON example", async () => {
+  const service = new AIService({ apiKey: "", backends: [] });
+  let generatedPrompt = "";
+  service._generateWithFallback = async prompt => {
+    generatedPrompt = prompt;
+    return "analysis";
+  };
+  assert.equal(await service.runPass2({ pass1Result: "evidence", supplementalSnippets: [] }), "analysis");
+  assert.match(generatedPrompt, /"priority": "required"\n\}\]/);
 });
 
 test("provider fallback reaches OpenAI-compatible and native Ollama HTTP APIs in order", async context => {
