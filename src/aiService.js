@@ -246,6 +246,9 @@ async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disasse
     ``,
 
     `### Important Runtime Characteristics`,
+    `if the crash pc is in /opt/Sming/Sming/Arch/Esp8266/Components/gdbstub/appcode/gdb_hooks.cpp, don't assume that gdb_hooks.cpp is the root cause of the crash.`,
+    `this is a result of how the crash handling / collecting is being implemented in the firmware (collect the crash context and stack trace to send it to the `,
+    `decoder on the next reboot.`,
     `The application operates under tight heap conditions, especially on the ESP8266.`,
     `Most application code uses restrictive heap guards and attempts to avoid optimistic allocations.`,
     `However, significant framework code may use more optimistic heap management and may allocate temporary objects, buffers, strings, or other resources.`,
@@ -292,6 +295,9 @@ async runPass1({ soc, gitVersion, decodedText, codeSnippets, mapSymbols, disasse
     `1. Crash site is not automatically root cause.`,
     `The faulting PC identifies where the CPU detected a problem. It does not necessarily identify where memory corruption, lifetime corruption, or invalid state originated.`,
     `When appropriate, trace the possible causal chain backwards from the detected failure.`,
+    `if the crash pc is in /opt/Sming/Sming/Arch/Esp8266/Components/gdbstub/appcode/gdb_hooks.cpp, don't assume that gdb_hooks.cpp is the root cause of the crash.`,
+    `this is a result of how the crash handling / collecting is being implemented in the firmware (collect the crash context and stack trace to send it to the `,
+    `decoder on the next reboot.`,
     ``,
 
     `2. Separate facts from inference.`,
