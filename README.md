@@ -53,7 +53,9 @@ changes in each CI build.
 ### Boot tracking
 
 - Every reboot is detected from the per-boot nonce in the firmware's syslog
-  prefix and shown as one reboot marker per boot.
+  prefix and shown as one reboot marker per boot. Rollover of the 32-bit device
+  timestamp is not a reboot; for firmware without per-line nonces, restart
+  markers and rollover-aware timestamp regressions are used.
 - A boot picker lists all boots of a controller and jumps to the start of a
   boot. *Previous/next boot* buttons step between markers, including boots
   outside the loaded window.

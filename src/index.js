@@ -130,7 +130,7 @@ async function main() {
 
   const bootTracker = new BootTracker();
   for (const boot of initialState.boots) {
-    bootTracker.restore(boot.ip, boot.boot, boot.nonce, boot.deviceTime);
+    bootTracker.restore(boot.ip, boot.boot, boot.nonce, boot.deviceTime, boot.receivedAt);
   }
 
   const advertiseHost = resolveAdvertiseHost(config.discoverySeedHosts);
@@ -744,7 +744,7 @@ async function main() {
       if (!bootTracker.assign(rinfo.address, record)) return;
       const newBoot = record.boot > previousBoot;
       if (newBoot) {
-        const reason = record.uptimeReset ? "uptime regression" : "new nonce";
+        const reason = record.uptimeReset ? "uptime regression" : record.bootNonce == null ? "restart marker" : "new nonce";
         console.info(`Reboot detected for ${rinfo.address}: boot=${record.boot}, nonce=${record.bootNonce ?? "unknown"}, reason=${reason}`);
         discovery.setBootNonce(rinfo.address, record.bootNonce, record.boot).catch(() => {});
       }

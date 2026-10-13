@@ -128,6 +128,11 @@ tagged `build/<run-number>` (currently up to `build/183`), and the UI's
 
 ### Fixed
 
+- Rollover of the controller's 32-bit µs timestamp (every ~71.6 min) no longer
+  starts a new boot. A known boot nonce is authoritative; records without a
+  nonce start a boot only on a restart marker or on a timestamp regression that
+  doesn't match the elapsed receive time. Restoration after a service restart
+  uses the most recent timestamp instead of the maximum.
 - Plain-`http://` ELF downloads failed with "http is not defined" (`build/183`).
 - Logger prefixes are stripped from crash dumps on every rerun, and truncated
   stack data is recovered from stored logs.

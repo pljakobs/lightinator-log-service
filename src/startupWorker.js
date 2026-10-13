@@ -35,8 +35,8 @@ async function initialize(options) {
     for (const source of storage.listSources()) {
       const boot = await storage.lastBootFor(source.ip);
       const state = { ip: source.ip, boot, nonce: storage.lastBootNonceFor(source.ip, boot) };
-      const deviceTime = storage.lastDeviceTimeFor(source.ip, boot);
-      if (deviceTime != null) state.deviceTime = deviceTime;
+      const sample = storage.lastDeviceTimeFor(source.ip, boot);
+      if (sample) Object.assign(state, sample);
       boots.push(state);
     }
     return { boots, controllers: discovery.getAll() };

@@ -6,6 +6,7 @@ const fs = require("fs");
 const { openDatabase } = require("../src/db");
 const { LogStorage } = require("../src/storage");
 const { resolveLogExport, renderLogExport } = require("../src/logExport");
+const { BootTracker } = require("../src/bootTracker");
 const { startServer, bootLines } = require("./e2e/server");
 
 const ip = "10.0.0.1";
@@ -81,6 +82,20 @@ test("invalid requests are rejected with a status", () => {
   assert.equal(status({ ip, scope: "range", start: at(5), end: at(1) }), 400);
   assert.equal(status({ scope: "crash", id: "1" }), 404);
   assert.equal(status({ scope: "crash", id: String(crashId), minutes: "-1" }), 400);
+});
+
+test("boot export includes records on both sides of a timestamp rollover", async () => {
+  const tracker = new BootTracker();
+  const rolloverIp = "10.0.0.3";
+  const lines = [
+    { deviceTime: 2 ** 32 - 3_000_000, receivedAt: at(100), bootNonce: 5, tag: "h", message: "before rollover" },
+    { deviceTime: 1_000_000, receivedAt: new Date(Date.parse(at(100)) + 4000).toISOString(), bootNonce: 5, tag: "h", message: "after rollover" },
+  ];
+  for (const record of lines) {
+    tracker.assign(rolloverIp, record);
+    await storage.append(rolloverIp, record);
+  }
+  assert.deepEqual(messages(render({ ip: rolloverIp, scope: "current" })), ["before rollover", "after rollover"]);
 });
 
 test("GET /api/v1/logs/download serves a text attachment", async () => {

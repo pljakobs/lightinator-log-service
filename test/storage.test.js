@@ -107,12 +107,12 @@ test("lastBootFor / lastBootNonceFor return the newest values", async () => {
   assert.equal(storage.lastBootNonceFor("192.0.2.1"), undefined);
 });
 
-test("lastDeviceTimeFor restores the highest uptime in the active boot", async () => {
+test("lastDeviceTimeFor restores the most recent uptime in the active boot", async () => {
   const uptimeIp = "192.0.2.9";
-  await storage.append(uptimeIp, { message: "new uptime", boot: 2, bootNonce: 222, deviceTime: 80_000 });
-  await storage.append(uptimeIp, { message: "late packet", boot: 2, bootNonce: 222, deviceTime: 20_000 });
+  await storage.append(uptimeIp, { message: "new uptime", boot: 2, bootNonce: 222, deviceTime: 4_294_000_000 });
+  await storage.append(uptimeIp, { message: "after rollover", boot: 2, bootNonce: 222, deviceTime: 20_000, receivedAt: "2026-01-01T00:00:00.000Z" });
   await storage.append(uptimeIp, { message: "old boot", boot: 1, bootNonce: 111, deviceTime: 100_000 });
-  assert.equal(storage.lastDeviceTimeFor(uptimeIp, 2), 80_000);
+  assert.deepEqual(storage.lastDeviceTimeFor(uptimeIp, 2), { deviceTime: 20_000, receivedAt: "2026-01-01T00:00:00.000Z" });
 });
 
 test("maxRowsPerIp trims oldest rows", async () => {

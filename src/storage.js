@@ -77,7 +77,7 @@ class LogStorage {
       "SELECT boot_nonce FROM logs WHERE ip = ? AND boot = ? AND boot_nonce IS NOT NULL ORDER BY id DESC LIMIT 1",
     );
     this._stmtLastDeviceTime = db.prepare(
-      "SELECT MAX(device_time) AS device_time FROM logs WHERE ip = ? AND boot = ?",
+      "SELECT device_time, received_at FROM logs WHERE ip = ? AND boot = ? AND device_time IS NOT NULL ORDER BY id DESC LIMIT 1",
     );
     this._stmtSources = db.prepare(`
       SELECT ip, MAX(received_at) AS last_seen, COUNT(*) AS entries
@@ -475,9 +475,10 @@ class LogStorage {
     return row ? row.boot_nonce : undefined;
   }
 
+  /** Latest device timestamp of a boot (MAX would be wrong after counter rollover). */
   lastDeviceTimeFor(ip, boot = this._stmtLastBoot.get(ip)?.boot) {
     const row = boot == null ? null : this._stmtLastDeviceTime.get(ip, boot);
-    return row ? row.device_time : undefined;
+    return row ? { deviceTime: row.device_time, receivedAt: row.received_at } : undefined;
   }
 
   /** Boot sessions of an IP, newest first (like `journalctl --list-boots`). */
