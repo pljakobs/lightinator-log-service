@@ -120,6 +120,18 @@ class LogStorage {
       GROUP BY boot
       ORDER BY boot DESC
     `);
+    this._stmtBootRange = db.prepare(`
+      SELECT MIN(id) AS first_id, MAX(id) AS last_id,
+             MIN(received_at) AS started_at, MAX(received_at) AS ended_at
+      FROM logs WHERE ip = ? AND boot = ?
+    `);
+    this._stmtExport = db.prepare(`
+      SELECT * FROM logs
+      WHERE ip = @ip AND id BETWEEN @minId AND @maxId
+        AND received_at BETWEEN @since AND @until
+        AND (@boot IS NULL OR boot = @boot)
+      ORDER BY id ASC
+    `);
     this._stmtCount = db.prepare("SELECT COUNT(*) AS cnt FROM logs WHERE ip = ?");
     this._stmtPurgeIp  = db.prepare("DELETE FROM logs WHERE ip = ?");
     this._stmtPurgeAll = db.prepare("DELETE FROM logs");
@@ -257,7 +269,7 @@ class LogStorage {
 
   getCrashRecord(logId) {
     const row = this.db.prepare("SELECT * FROM logs WHERE id = ? AND crash_decode IS NOT NULL").get(logId);
-    return row ? { ...rowToRecord(row), raw: row.crash_raw || null } : null;
+    return row ? { ...rowToRecord(row), ip: row.ip, raw: row.crash_raw || null } : null;
   }
 
   getBootFirmwareInfo(ip, boot, bootNonce) {
@@ -479,6 +491,24 @@ class LogStorage {
       entries:   r.entries,
       crashes:   r.crashes,
     }));
+  }
+
+  /** Id and receive-time bounds of one boot of an IP, or null if it has no rows. */
+  getBootRange(ip, boot) {
+    const r = this._stmtBootRange.get(ip, boot);
+    if (!r || r.first_id == null) return null;
+    return { boot, firstId: r.first_id, lastId: r.last_id, startedAt: r.started_at, endedAt: r.ended_at };
+  }
+
+  /**
+   * Iterate the rows of an IP in id order, optionally bounded by id range,
+   * inclusive ISO receive-time range and boot. No other statement may run on
+   * this connection until the iterator is exhausted.
+   */
+  *iterateLogs(ip, { minId = 0, maxId = Number.MAX_SAFE_INTEGER, since = "", until = "9999-12-31T23:59:59.999Z", boot = null } = {}) {
+    for (const row of this._stmtExport.iterate({ ip, minId, maxId, since, until, boot })) {
+      yield rowToRecord(row);
+    }
   }
 
   /**

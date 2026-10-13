@@ -48,6 +48,11 @@ tagged `build/<run-number>` (currently up to `build/183`), and the UI's
     (`GET /api/v1/logs/boot-jump`), including boots outside the loaded window.
   - Firmware version, Sming version, SoC and build type are recorded per boot
     generation, so crashes are decoded against the build that was running.
+- **Log download** (`GET /api/v1/logs/download`): plain-text export of the full
+  log, one boot, the current or previous boot, or a time span from the log
+  toolbar's **Download** menu. The crash window downloads a configurable span
+  (`LLS_CRASH_LOG_MINUTES`) up to the end of the crashed boot with the decoded
+  crash attached.
 - **Log viewer**
   - Resizable and hideable columns, raw display mode, sort by device time, and
     search context lines with dimmed non-matches and gap dividers.

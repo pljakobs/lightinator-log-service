@@ -22,6 +22,28 @@ export async function fetchJson(url, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
+/** Fetch `url` and save the response as a file; API errors are shown in an alert. */
+export async function downloadFile(url) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${r.status}`);
+    }
+    const name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '')?.[1] || 'log.txt';
+    const href = URL.createObjectURL(await r.blob());
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 0);
+  } catch (err) {
+    alert('Download failed: ' + err.message);
+  }
+}
+
 export function severityClass(priority) {
   if (priority == null) return '';
   const sev = priority & 7;

@@ -69,6 +69,13 @@ const SETTINGS_SCHEMA = [
     type: "number",
   },
   {
+    key: "LLS_CRASH_LOG_MINUTES",
+    label: "Crash log download span (minutes)",
+    description: "Default minutes of log before the end of the crashed boot included in a crash log download.",
+    placeholder: "10",
+    type: "number",
+  },
+  {
     key: "LLS_MDNS_HOST",
     label: "mDNS hostname",
     description: "Hostname announced via mDNS.",

@@ -1,4 +1,4 @@
-import { BASE, fetchJson, escHtml, timeAgo, severityClass, fmtLogTime, ansi_up, activateTab, setSourceDrawer } from './common.js';
+import { BASE, fetchJson, downloadFile, escHtml, timeAgo, severityClass, fmtLogTime, ansi_up, activateTab, setSourceDrawer } from './common.js';
 import { handleCrashBtnClick } from './crash.js';
 
 let currentIp = null;
@@ -399,6 +399,7 @@ function updateBootNavButtons() {
   bootPrevBtn.style.display = show ? '' : 'none';
   bootNextBtn.style.display = show ? '' : 'none';
   bootPickerBtn.style.display = show ? '' : 'none';
+  downloadBtn.style.display = show ? '' : 'none';
 }
 
 const bootPickerBtn = document.getElementById('boot-picker-btn');
@@ -453,6 +454,55 @@ bootPickerBtn.addEventListener('click', (e) => {
 });
 document.addEventListener('click', (e) => {
   if (!bootPickerEl.contains(e.target) && e.target !== bootPickerBtn) bootPickerEl.classList.remove('open');
+});
+
+const downloadBtn = document.getElementById('download-btn');
+const downloadPickerEl = document.getElementById('download-picker');
+const downloadBootSel = document.getElementById('download-boot');
+
+function downloadLogs(params) {
+  if (!currentIp) return;
+  downloadPickerEl.classList.remove('open');
+  downloadFile(`${BASE}/api/v1/logs/download?${new URLSearchParams({ ip: currentIp, ...params })}`);
+}
+
+async function openDownloadPicker() {
+  if (!currentIp) return;
+  downloadPickerEl.classList.add('open');
+  downloadBootSel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    const { items } = await fetchJson(`${BASE}/api/v1/boots?ip=${encodeURIComponent(currentIp)}`);
+    downloadBootSel.innerHTML = items.length
+      ? items.map(b => `<option value="${b.boot}">${b.boot} — ${escHtml(fmtBootTime(b.startedAt))} (${b.entries})${b.crashes ? ' \u26A0' : ''}</option>`).join('')
+      : '<option value="">No boots</option>';
+  } catch (e) {
+    downloadBootSel.innerHTML = `<option value="">Error: ${escHtml(e.message)}</option>`;
+  }
+}
+
+downloadBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (downloadPickerEl.classList.contains('open')) { downloadPickerEl.classList.remove('open'); return; }
+  openDownloadPicker();
+});
+downloadPickerEl.querySelectorAll('.download-item').forEach(el => {
+  el.addEventListener('click', () => downloadLogs({ scope: el.dataset.scope }));
+});
+document.getElementById('download-boot-btn').addEventListener('click', () => {
+  if (downloadBootSel.value !== '') downloadLogs({ scope: 'boot', boot: downloadBootSel.value });
+});
+document.getElementById('download-range-btn').addEventListener('click', () => {
+  const params = { scope: 'range' };
+  const start = document.getElementById('download-start').value;
+  const end = document.getElementById('download-end').value;
+  // datetime-local values are local time without zone; convert to UTC ISO
+  if (start) params.start = new Date(start).toISOString();
+  if (end) params.end = new Date(end).toISOString();
+  if (!start && !end) { alert('Enter a start and/or end time'); return; }
+  downloadLogs(params);
+});
+document.addEventListener('click', (e) => {
+  if (!downloadPickerEl.contains(e.target) && e.target !== downloadBtn) downloadPickerEl.classList.remove('open');
 });
 
 async function jumpToTail() {

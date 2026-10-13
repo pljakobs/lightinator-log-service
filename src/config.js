@@ -24,6 +24,7 @@ function loadConfig() {
   discoveryControllerPort: envInt("LLS_DISCOVERY_PORT", 80),
   discoveryRefreshMs: envInt("LLS_DISCOVERY_REFRESH_MS", 300_000),
   controllerStaleDays: envInt("LLS_CONTROLLER_STALE_DAYS", 30),
+  crashLogMinutes: envInt("LLS_CRASH_LOG_MINUTES", 10),
   controllerStatePath: process.env.LLS_CONTROLLER_STATE || path.join(process.cwd(), "data", "controllers.json"),
   dbPath: process.env.LLS_DB_PATH || path.join(process.cwd(), "data", "db.sqlite"),
   maxRowsPerIp: envInt("LLS_MAX_ROWS_PER_IP", 10_000),

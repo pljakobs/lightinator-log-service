@@ -228,6 +228,7 @@ tabs. Changes apply after a restart.
 | `LLS_DISCOVERY_PORT` | `80` | Controller HTTP port |
 | `LLS_DISCOVERY_REFRESH_MS` | `300000` | Discovery refresh interval |
 | `LLS_CONTROLLER_STALE_DAYS` | `30` | Auto-remove controllers not seen for N days (`0` disables) |
+| `LLS_CRASH_LOG_MINUTES` | `10` | Default log span (minutes) in crash log downloads |
 | `LLS_RETENTION_DAYS` | `7` | Delete log rows older than N days (`0` disables) |
 | `LLS_MAX_BYTES_PER_IP` | `20971520` | Stored log/crash text per controller (`0` disables) |
 | `LLS_MAX_ROWS_PER_IP` | `10000` | Row cap per controller |
@@ -502,7 +503,19 @@ All endpoints return JSON. There is no authentication; see
 | DELETE | `/api/v1/logs?ip=` / `?all=true` | Purge one controller / all logs |
 | GET | `/api/v1/boots?ip=` | Boots of a controller: first/last log id, time range, entry and crash counts |
 | GET | `/api/v1/logs/boot-jump?ip=&currentId=&direction=prev\|next` | Neighbouring boot marker |
+| GET | `/api/v1/logs/download?ip=&scope=` | Plain-text log download; see below |
 | GET | `/api/v1/search?q=&limit=&context=` | Search across all controllers |
+
+`/api/v1/logs/download` returns a `text/plain` attachment (ANSI colours
+stripped, boot separators inserted). `scope` selects the rows:
+
+| `scope` | Parameters | Content |
+|---|---|---|
+| `all` (default) | `ip` | Every stored row of the controller |
+| `boot` | `ip`, `boot` | One uptime (boot number from `/api/v1/boots`) |
+| `current` / `previous` | `ip` | Newest / second-newest boot |
+| `range` | `ip`, `start` and/or `end` (ISO 8601) | Rows received in the inclusive time span |
+| `crash` | `id` (crash log id), optional `minutes` | `minutes` (default `LLS_CRASH_LOG_MINUTES`) before the last row of the crashed boot up to that row, followed by the decoded crash |
 
 ### Crashes
 

@@ -9,6 +9,7 @@ const { config, loadConfig } = require("./config");
 const { parseSyslogLine } = require("./syslogParser");
 const { BootTracker } = require("./bootTracker");
 const { LogStorage } = require("./storage");
+const { resolveLogExport, renderLogExport } = require("./logExport");
 const { openDatabase } = require("./db");
 const { initializeServiceData } = require("./startupWorker");
 const { advertiseMdns } = require("./mdns");
@@ -275,6 +276,22 @@ async function main() {
       const result = await storage.getLogs({ ip, limit, before, from });
       res.json(result);
     } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/logs/download", (req, res, next) => {
+    try {
+      const exp = resolveLogExport(storage, req.query, { crashMinutes: config.crashLogMinutes });
+      res.set({
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${exp.filename}"`,
+        "Cache-Control": "no-store",
+      });
+      for (const chunk of renderLogExport(storage, exp)) res.write(chunk);
+      res.end();
+    } catch (err) {
+      if (err.status && !res.headersSent) return res.status(err.status).json({ error: err.message });
       next(err);
     }
   });

@@ -1,4 +1,4 @@
-import { BASE, fetchJson, ansi_up, escHtml } from './common.js';
+import { BASE, fetchJson, downloadFile, ansi_up, escHtml } from './common.js';
 
 let _currentCrashDecode = '';
 let _currentCrashRaw = '';
@@ -70,6 +70,7 @@ function openCrashModal(record) {
     analyzeBtn.style.display = 'none';
     rerunBtn.style.display = 'none';
   }
+  document.getElementById('crash-download-group').style.display = _currentCrashId ? 'inline-flex' : 'none';
 
   rawToggle.onchange = renderModalContent;
   renderModalContent();
@@ -101,6 +102,14 @@ document.getElementById('crash-copy-btn').addEventListener('click', () => {
     btn.textContent = '✓ Copied!';
     setTimeout(() => { btn.textContent = orig; }, 1500);
   });
+});
+
+document.getElementById('crash-download-btn').addEventListener('click', () => {
+  if (!_currentCrashId) return;
+  const query = new URLSearchParams({ scope: 'crash', id: _currentCrashId });
+  const minutes = document.getElementById('crash-download-minutes').value;
+  if (minutes) query.set('minutes', minutes);
+  downloadFile(`${BASE}/api/v1/logs/download?${query}`);
 });
 
 document.getElementById('crash-decoded-tab').addEventListener('click', () => {

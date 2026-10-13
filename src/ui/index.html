@@ -43,12 +43,27 @@
         <button id="boot-prev-btn" title="Jump to previous boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Previous boot">&#x21bb;&#x25B4;</button>
         <button id="boot-next-btn" title="Jump to next boot" style="display:none;font-size:13px;padding:3px 8px" aria-label="Next boot">&#x21bb;&#x25BE;</button>
         <button id="boot-picker-btn" title="List boots of this controller" style="display:none;background:#3c3c3c;font-size:11px;padding:3px 10px">Boots &#9660;</button>
+        <button id="download-btn" title="Download logs of this controller as text" style="display:none;background:#3c3c3c;font-size:11px;padding:3px 10px">&#x2913; Download &#9660;</button>
         <button id="purge-btn" class="danger" style="display:none;margin-left:auto">Purge logs</button>
         <button id="col-picker-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">Columns &#9660;</button>
         <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px"><input type="checkbox" id="raw-mode-toggle" /> Raw</label>
         <label style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:6px" title="Sort displayed rows by the device uptime timestamp embedded in each message"><input type="checkbox" id="sort-device-time" /> Sort by device time</label>
         <div id="col-picker"></div>
         <div id="boot-picker"></div>
+        <div id="download-picker">
+          <button type="button" class="download-item" data-scope="all">Full log</button>
+          <button type="button" class="download-item" data-scope="current">Current boot</button>
+          <button type="button" class="download-item" data-scope="previous">Previous boot</button>
+          <div class="download-row">
+            <label>Boot <select id="download-boot"></select></label>
+            <button type="button" id="download-boot-btn">Download</button>
+          </div>
+          <div class="download-row">
+            <label>From <input id="download-start" type="datetime-local" step="1" /></label>
+            <label>To <input id="download-end" type="datetime-local" step="1" /></label>
+            <button type="button" id="download-range-btn">Download</button>
+          </div>
+        </div>
       </div>
       <div id="log-header-row"></div>
       <div id="log-list"><div class="empty">Select a source on the left</div></div>
@@ -206,6 +221,10 @@
       <div style="display:flex;align-items:center;gap:10px">
         <button id="crash-rerun-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px;display:none" title="Decode this saved dump again using its recorded firmware builds">&#8635; Rerun decoder</button>
         <button id="crash-analyze-btn" style="background:#1e4d2b;font-size:11px;padding:3px 10px;display:none" title="Run AI analysis on-demand">&#10024; Analyze with AI</button>
+        <span id="crash-download-group" style="display:none;align-items:center;gap:4px">
+          <input id="crash-download-minutes" type="number" min="1" placeholder="default" title="Minutes of log before the end of the crashed boot (empty = service default)" aria-label="Minutes of log before the crash" style="width:64px;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;border-radius:4px;padding:2px 4px;font-family:inherit;font-size:11px" />
+          <button id="crash-download-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px" title="Download the log leading up to this crash with the decoded crash attached">&#x2913; Download log</button>
+        </span>
         <label style="font-size:11px;color:#aaa;display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="crash-raw-toggle" /> Raw text</label>
         <button id="crash-copy-btn" style="background:#3c3c3c;font-size:11px;padding:3px 10px">&#x1F4CB; Copy</button>
         <button id="crash-close-btn" style="background:none;border:none;color:#aaa;font-size:18px;cursor:pointer;line-height:1;padding:0 4px">&times;</button>
