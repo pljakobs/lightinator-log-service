@@ -1,7 +1,7 @@
 
-# <img align="right" width="96" height="96" src="images/lightinator-log-service-icon-dark.svg" alt="Lightinator Log Service icon">
+<img align="left" width="96" height="96" src="images/lightinator-log-service-icon-dark.svg" alt="Lightinator Log Service icon">
 
-[![CI](https://github.com/pljakobs/lightinator-log-service/actions/workflows/container-image.yml/badge.svg)](https://github.com/pljakobs/lightinator-log-service/actions/workflows/container-image.yml) Lightinator Log Service
+[![CI](https://github.com/pljakobs/lightinator-log-service/actions/workflows/container-image.yml/badge.svg)](https://github.com/pljakobs/lightinator-log-service/actions/workflows/container-image.yml) # Lightinator Log Service
 Local-first UDP syslog collector, crash decoder and diagnostic viewer for
 Lightinator controllers. It runs as a single Node.js container next to your
 controllers. It stores logs in SQLite, symbolicates crash dumps against the
