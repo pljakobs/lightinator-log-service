@@ -1,5 +1,8 @@
 
 # Lightinator Log Service
+
+<img align="right" width="96" height="96" src="images/lightinator-log-service-icon-dark.svg" alt="Lightinator Log Service icon">
+
 [![CI](https://github.com/pljakobs/lightinator-log-service/actions/workflows/container-image.yml/badge.svg)](https://github.com/pljakobs/lightinator-log-service/actions/workflows/container-image.yml)
 
 Local-first UDP syslog collector, crash decoder and diagnostic viewer for
