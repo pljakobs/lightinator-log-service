@@ -180,6 +180,9 @@ async function main() {
   app.get("/vendor/dompurify.min.js", (_req, res) => {
     res.sendFile(path.join(path.dirname(require.resolve("dompurify")), "purify.min.js"));
   });
+  app.get("/brand/lightinator-log-service-icon-dark.svg", (_req, res) => {
+    res.sendFile(path.join(__dirname, "../images/lightinator-log-service-icon-dark.svg"));
+  });
   app.use(express.static(path.join(__dirname, "ui")));
 
   function removeControllers(ips, purgeLogs) {
