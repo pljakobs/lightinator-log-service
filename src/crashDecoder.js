@@ -14,7 +14,7 @@ const fsp = require("fs/promises");
 const path = require("path");
 const http = require("http");
 const https = require("https");
-const { AIContextHarvester } = require("./aiContextHarvester");
+const { AIContextHarvester, firmwareArtifactUrls } = require("./aiContextHarvester");
 
 function stripAnsi(str) {
   return String(str || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").trim();
@@ -292,16 +292,16 @@ class CrashDecoder {
     this._log(ip, triggerRecordId,
       `Target firmware=${git_version}, Sming=${sming_version || "unknown"}, soc=${socKey}, build=${type}`);
 
-    const elfUrl  = `${this.elfBaseUrl}/${branch}/${git_version}/${socKey}/${type}/${cfg.elfFile}`;
+    const elfUrls = firmwareArtifactUrls(this.elfBaseUrl, branch, git_version, socKey, type, cfg.elfFile);
     const elfPath = path.join(this.elfCacheDir, `${git_version}-${socKey}-${type}.elf`);
 
     try {
       this._log(ip, triggerRecordId, `Preparing ELF ${path.basename(elfPath)}`);
-      await this._ensureElf(elfUrl, elfPath);
+      await this._ensureElf(elfUrls, elfPath);
     } catch (err) {
       const reason = `[Crash decode error: failed downloading ELF: ${err.message}]`;
       const msg = decodeFailureWithDump(reason, lines.join("\n"));
-      this._log(ip, triggerRecordId, `${reason}; url=${elfUrl}`, "error");
+      this._log(ip, triggerRecordId, `${reason}; urls=${elfUrls.join(" or ")}`, "error");
       if (this.storage && triggerRecordId) {
         await this.storage.updateCrashDecode(triggerRecordId, msg);
       }
@@ -427,7 +427,7 @@ class CrashDecoder {
     }
   }
 
-  async _ensureElf(url, localPath, maxRedirects = 3) {
+  async _ensureElf(urls, localPath, maxRedirects = 3) {
     await fsp.mkdir(path.dirname(localPath), { recursive: true });
     try {
       await fsp.access(localPath);
@@ -435,7 +435,7 @@ class CrashDecoder {
       return;
     } catch {}
 
-    console.info(`CrashDecoder: downloading ELF from ${url}`);
+    if (!Array.isArray(urls)) urls = [urls];
     const tmpPath = localPath + ".tmp";
     const download = (targetUrl, redirectsLeft) => {
       return new Promise((resolve, reject) => {
@@ -462,10 +462,21 @@ class CrashDecoder {
       });
     };
 
-    await download(url, maxRedirects);
-    await fsp.rename(tmpPath, localPath);
-    const { size } = await fsp.stat(localPath);
-    console.info(`CrashDecoder: ELF ready at ${localPath} (${size} bytes)`);
+    let lastError;
+    for (const url of urls) {
+      console.info(`CrashDecoder: downloading ELF from ${url}`);
+      try {
+        await download(url, maxRedirects);
+        await fsp.rename(tmpPath, localPath);
+        const { size } = await fsp.stat(localPath);
+        console.info(`CrashDecoder: ELF ready at ${localPath} (${size} bytes)`);
+        return;
+      } catch (error) {
+        lastError = error;
+        await fsp.unlink(tmpPath).catch(() => {});
+      }
+    }
+    throw lastError || new Error("No firmware artifact URLs available");
   }
 
   async _ensureMapFile(gitVersion, soc, buildType, elfPath) {
@@ -628,10 +639,10 @@ class CrashDecoder {
     const branch = vMatch ? vMatch[1] : "develop";
     const type = build_type || "debug";
 
-    const elfUrl = `${this.elfBaseUrl}/${branch}/${git_version}/${socKey}/${type}/${cfg.elfFile}`;
+    const elfUrls = firmwareArtifactUrls(this.elfBaseUrl, branch, git_version, socKey, type, cfg.elfFile);
     const elfPath = path.join(this.elfCacheDir, `${git_version}-${socKey}-${type}.elf`);
 
-    await this._ensureElf(elfUrl, elfPath);
+    await this._ensureElf(elfUrls, elfPath);
     await this._ensureScript(cfg);
     await this._ensureMapFile(git_version, socKey, type, elfPath);
 

@@ -15,6 +15,26 @@ const execFileAsync = util.promisify(execFile);
 const http = require("http");
 const https = require("https");
 
+function firmwareArtifactUrls(baseUrl, branch, gitVersion, soc, buildType, fileName) {
+  const base = new URL(baseUrl);
+  const basePath = base.pathname.replace(/\/+$/, "");
+  let roots = [basePath];
+  if (basePath.endsWith("/download/firmware")) {
+    roots = [basePath, basePath.slice(0, -"/firmware".length)];
+  } else if (basePath.endsWith("/download")) {
+    roots = [`${basePath}/firmware`, basePath];
+  }
+  const suffix = [branch, gitVersion, soc, buildType, fileName].map(encodeURIComponent).join("/");
+  return [...new Set(roots)].map(root => {
+    const url = new URL(base);
+    const pathname = `${root}/${suffix}`;
+    url.pathname = pathname.startsWith("/") ? pathname : `/${pathname}`;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  });
+}
+
 class AIContextHarvester {
   constructor({ cacheDir, elfBaseUrl }) {
     this.cacheDir = cacheDir || path.join(process.cwd(), "data", "context_cache");
@@ -81,17 +101,20 @@ class AIContextHarvester {
     } catch {
       const vMatch = gitVersion.match(/^V[\d.]+-\d+-(.+)$/i);
       const branch = vMatch ? vMatch[1] : "develop";
-      const url = `${this.elfBaseUrl}/${[branch, gitVersion, socKey, buildType, mapFileName].map(value => encodeURIComponent(value)).join("/")}`;
-      
-      try {
-        const data = await this.downloadUrl(url);
-        await fs.mkdir(this.cacheDir, { recursive: true });
-        await fs.writeFile(localPath, data, "utf8");
-        return data;
-      } catch (err) {
-        console.warn(`[AIContextHarvester] Could not fetch map file from ${url}:${err.message}`);
-        return null;
+      const urls = firmwareArtifactUrls(this.elfBaseUrl, branch, gitVersion, socKey, buildType, mapFileName);
+      let lastError;
+      for (const url of urls) {
+        try {
+          const data = await this.downloadUrl(url);
+          await fs.mkdir(this.cacheDir, { recursive: true });
+          await fs.writeFile(localPath, data, "utf8");
+          return data;
+        } catch (err) {
+          lastError = err;
+        }
       }
+      console.warn(`[AIContextHarvester] Could not fetch map file from ${urls.join(" or ")}:${lastError?.message}`);
+      return null;
     }
   }
 
@@ -224,4 +247,4 @@ class AIContextHarvester {
   }
 }
 
-module.exports = { AIContextHarvester };
+module.exports = { AIContextHarvester, firmwareArtifactUrls };

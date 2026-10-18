@@ -237,7 +237,7 @@ tabs. Changes apply after a restart.
 | `LLS_RETENTION_DAYS` | `7` | Delete log rows older than N days (`0` disables) |
 | `LLS_MAX_BYTES_PER_IP` | `20971520` | Stored log/crash text per controller (`0` disables) |
 | `LLS_MAX_ROWS_PER_IP` | `10000` | Row cap per controller |
-| `LLS_ELF_BASE_URL` | `http://lightinator.de/download` | Base URL of firmware ELF/map artifacts |
+| `LLS_ELF_BASE_URL` | `http://lightinator.de/download` | Base URL of firmware ELF/map artifacts; supports current and legacy layouts |
 | `LLS_AI_ENABLED` | `true` | Run AI analysis automatically after decoding |
 | `LLS_AI_BACKENDS` | Gemini default | Ordered JSON list of AI providers |
 | `LLS_AI_CONTEXT_ROUNDS` | `3` | Maximum source-context request rounds |
@@ -277,13 +277,15 @@ Firmware source checkouts used for crash context are cached in
 3. **Artifacts.** The ELF and map file are downloaded once into the cache from:
 
    ```
-   <LLS_ELF_BASE_URL>/<branch>/<firmware-version>/<soc>/<debug|release>/app_0.out   (ESP8266)
-   <LLS_ELF_BASE_URL>/<branch>/<firmware-version>/<soc>/<debug|release>/app.out     (ESP32, ESP32-C3)
+  <LLS_ELF_BASE_URL>/firmware/<branch>/<firmware-version>/<soc>/<debug|release>/app_0.out   (current ESP8266)
+  <LLS_ELF_BASE_URL>/firmware/<branch>/<firmware-version>/<soc>/<debug|release>/app.out     (current ESP32, ESP32-C3)
+  <LLS_ELF_BASE_URL>/<branch>/<firmware-version>/<soc>/<debug|release>/app_0.out            (legacy ESP8266 fallback)
    ```
 
-   `<branch>` is derived from the version string (`V5.0.0-990-experimental` →
-   `experimental`). The `.map` file is fetched from the same directory. HTTP and
-   HTTPS URLs and redirects are supported.
+  `<branch>` is derived from the version string (`V5.0.0-990-experimental` →
+  `experimental`). The `.map` file is fetched from the same directory. The
+  current `/firmware/` layout is tried first, then the legacy layout for older
+  builds. HTTP and HTTPS URLs and redirects are supported.
 4. **Decoding.** The vendored, map-aware decoders in [tools/](tools/)
    (`decode-esp8266.py`, `decode-esp32.py`) symbolicate PCs and stack words,
    classify code and data addresses, and add disassembly around the faulting

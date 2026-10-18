@@ -1,9 +1,10 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
-const { AIContextHarvester } = require("../src/aiContextHarvester");
+const { AIContextHarvester, firmwareArtifactUrls } = require("../src/aiContextHarvester");
 const { CrashDecoder } = require("../src/crashDecoder");
 const { execFileSync } = require("node:child_process");
 const { openDatabase } = require("../src/db");
@@ -295,7 +296,7 @@ test("manual re-analysis uses stored raw crash and original release build after 
   const decoder = Object.create(CrashDecoder.prototype);
   Object.assign(decoder, { storage, db, elfCacheDir: "/cache", elfBaseUrl: "http://example.test" });
   decoder._resolveTargetInfo = async () => { assert.fail("Current controller metadata must not be used"); };
-  decoder._ensureElf = async url => { assert.match(url, /V1\.0\.0-1-develop\/esp8266\/release\/app_0.out$/); };
+  decoder._ensureElf = async urls => { assert.match(urls[0], /V1\.0\.0-1-develop\/esp8266\/release\/app_0\.out$/); };
   decoder._ensureScript = async () => {};
   decoder._getSourceRepos = async () => ({});
   decoder._decodeWithContext = async (cfg, elfPath, lines) => {
@@ -319,7 +320,7 @@ test("decoder rerun uses stored firmware and Sming tags without requiring AI", a
   });
   const decoder = Object.create(CrashDecoder.prototype);
   Object.assign(decoder, { storage, db, _decodeQueue: Promise.resolve(), elfCacheDir: "/cache", elfBaseUrl: "http://example.test" });
-  decoder._ensureElf = async url => { assert.match(url, /V2\.0\.0-3-develop\/esp8266\/release\/app_0.out$/); };
+  decoder._ensureElf = async urls => { assert.match(urls[0], /V2\.0\.0-3-develop\/esp8266\/release\/app_0\.out$/); };
   decoder._ensureScript = async () => {};
   decoder._getSourceRepos = async (firmwareVersion, smingVersion) => {
     assert.equal(firmwareVersion, "V2.0.0-3-develop");
@@ -428,7 +429,7 @@ test("automatic decoding selects metadata for the crash boot, not the controller
     storage, db, aiEnabled: false, elfCacheDir: "/cache", elfBaseUrl: "http://example.test",
     discovery: { controllers: new Map([["192.0.2.1", { gitVersion: "new-firmware", smingVersion: "new-sming", soc: "esp8266" }]]), bootNumbers: new Map([["192.0.2.1", 2]]) },
   });
-  decoder._ensureElf = async url => { assert.match(url, /old-firmware\/esp8266\/debug\/app_0.out$/); };
+  decoder._ensureElf = async urls => { assert.match(urls[0], /old-firmware\/esp8266\/debug\/app_0\.out$/); };
   decoder._ensureScript = async () => {};
   decoder._getSourceRepos = async (gitVersion, smingVersion) => {
     assert.equal(gitVersion, "old-firmware");
@@ -500,6 +501,61 @@ test("map cache isolates firmware, SoC, and build type and selects architecture 
   assert.ok(requests.some(url => url.endsWith("/esp32/debug/app.map")));
   assert.equal(await harvester.fetchMapFile(...builds[0]), symbols[0]);
   assert.equal(requests.length, builds.length);
+});
+
+test("firmware artifact URLs try the current layout before the legacy layout", () => {
+  assert.deepEqual(firmwareArtifactUrls("http://example.test/download", "develop", "V5.0.0-1004-develop", "esp8266", "debug", "app_0.out"), [
+    "http://example.test/download/firmware/develop/V5.0.0-1004-develop/esp8266/debug/app_0.out",
+    "http://example.test/download/develop/V5.0.0-1004-develop/esp8266/debug/app_0.out",
+  ]);
+  assert.deepEqual(firmwareArtifactUrls("http://example.test/download/firmware", "develop", "V5.0.0-980-develop", "esp8266", "debug", "app_0.map"), [
+    "http://example.test/download/firmware/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
+    "http://example.test/download/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
+  ]);
+});
+
+test("map retrieval falls back to legacy artifact paths", async context => {
+  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-map-fallback-"));
+  context.after(() => fs.rm(cacheDir, { recursive: true, force: true }));
+  const harvester = new AIContextHarvester({ cacheDir, elfBaseUrl: "http://example.test/download" });
+  const requests = [];
+  harvester.downloadUrl = async url => {
+    requests.push(url);
+    if (url.includes("/download/firmware/")) throw new Error("HTTP status code 404");
+    return "legacy map symbols";
+  };
+
+  assert.equal(await harvester.fetchMapFile("V5.0.0-980-develop", "esp8266", "debug"), "legacy map symbols");
+  assert.deepEqual(requests, [
+    "http://example.test/download/firmware/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
+    "http://example.test/download/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
+  ]);
+});
+
+test("ELF download falls back to legacy artifact paths", async context => {
+  const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-elf-fallback-"));
+  context.after(() => fs.rm(cacheDir, { recursive: true, force: true }));
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push(request.url);
+    if (request.url.startsWith("/download/firmware/")) {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200).end("legacy elf");
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+
+  const baseUrl = `http://127.0.0.1:${server.address().port}/download`;
+  const urls = firmwareArtifactUrls(baseUrl, "develop", "V5.0.0-980-develop", "esp8266", "debug", "app_0.out");
+  const decoder = Object.create(CrashDecoder.prototype);
+  await decoder._ensureElf(urls, path.join(cacheDir, "app_0.out"));
+  assert.equal(await fs.readFile(path.join(cacheDir, "app_0.out"), "utf8"), "legacy elf");
+  assert.deepEqual(requests, [
+    "/download/firmware/develop/V5.0.0-980-develop/esp8266/debug/app_0.out",
+    "/download/develop/V5.0.0-980-develop/esp8266/debug/app_0.out",
+  ]);
 });
 
 test("matching map is staged beside the ELF and reused by subsequent decodes", async context => {
