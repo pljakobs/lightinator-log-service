@@ -31,6 +31,20 @@ test("API persistence correctly records crash decode metadata fields", async (t)
   assert.strictEqual(mockStorage.lastUpdatedRecord.metadata.buildType, "debug");
 });
 
+test("log viewer serves its dark brand icon", async (context) => {
+  const server = await startServer();
+  context.after(() => server.stop());
+
+  const page = await fetch(`${server.baseUrl}/`);
+  assert.strictEqual(page.status, 200);
+  assert.match(await page.text(), /src="\/brand\/lightinator-log-service-icon-dark\.svg"/);
+
+  const icon = await fetch(`${server.baseUrl}/brand/lightinator-log-service-icon-dark.svg`);
+  assert.strictEqual(icon.status, 200);
+  assert.match(icon.headers.get("content-type"), /image\/svg\+xml/);
+  assert.match(await icon.text(), /<title id="title">Lightinator Log Service - Dark<\/title>/);
+});
+
 test("public service settings expose configured flags but no saved or environment credentials", () => {
   const publicConfig = getPublicServiceConfig({
     LLS_GITHUB_TOKEN: "github-private",
