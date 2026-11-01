@@ -339,35 +339,51 @@ Firmware source checkouts used for crash context are cached in
 
 ## Crash Decoding
 
-1. **Detection.** A crash trigger in the syslog stream (`Fatal exception`,
-   `Guru Meditation Error`, `pc=… sp=… excvaddr=…`, `epc1=…`) starts collection
-   of the following register and stack lines. Logger prefixes are stripped, and
-   truncated stack data is recovered from the stored log when a decode is rerun.
-2. **Build resolution.** The firmware version, Sming version, SoC and build type
-   are taken from the metadata recorded for the boot in which the crash
-   happened. They are stored with the crash record.
-3. **Artifacts.** The ELF and map file are downloaded once into the cache from:
+### Detection
 
-   ```
-  <LLS_ELF_BASE_URL>/firmware/<branch>/<firmware-version>/<soc>/<debug|release>/app_0.out   (current ESP8266)
-  <LLS_ELF_BASE_URL>/firmware/<branch>/<firmware-version>/<soc>/<debug|release>/app.out     (current ESP32, ESP32-C3)
-  <LLS_ELF_BASE_URL>/<branch>/<firmware-version>/<soc>/<debug|release>/app_0.out            (legacy ESP8266 fallback)
-   ```
+A crash trigger in the syslog stream (`Fatal exception`, `Guru Meditation
+Error`, `pc=… sp=… excvaddr=…`, `epc1=…`) starts collection of the following
+register and stack lines. Logger prefixes are stripped, and truncated stack data
+is recovered from the stored log when a decode is rerun.
 
-  `<branch>` is derived from the version string (`V5.0.0-990-experimental` →
-  `experimental`). The `.map` file is fetched from the same directory. The
-  current `/firmware/` layout is tried first, then the legacy layout for older
-  builds. HTTP and HTTPS URLs and redirects are supported.
-4. **Decoding.** The vendored, map-aware decoders in [tools/](tools/)
-   (`decode-esp8266.py`, `decode-esp32.py`) symbolicate PCs and stack words,
-   classify code and data addresses, and add disassembly around the faulting
-   address.
-5. **Source context.** The firmware and Sming repositories are checked out at
-   the crash's version tags, including submodules. Snippets for the decoded
-   frames are attached, and source retrieval cannot leave the repository.
-6. **Analysis and reporting.** Optional AI analysis and optional GitHub issue
-   creation run afterwards. Decode, analysis and storage are serialized per
-   crash, so one failed job does not block the queue.
+### Build resolution
+
+The firmware version, Sming version, SoC and build type are taken from the
+metadata recorded for the boot in which the crash happened. They are stored with
+the crash record.
+
+### Artifacts
+
+The ELF and map file are downloaded once into the cache from one of these paths:
+
+```text
+<LLS_ELF_BASE_URL>/firmware/<branch>/<firmware-version>/<soc>/<debug|release>/app_0.out  (current ESP8266)
+<LLS_ELF_BASE_URL>/firmware/<branch>/<firmware-version>/<soc>/<debug|release>/app.out    (current ESP32, ESP32-C3)
+<LLS_ELF_BASE_URL>/<branch>/<firmware-version>/<soc>/<debug|release>/app_0.out           (legacy ESP8266 fallback)
+```
+
+`<branch>` is derived from the version string (`V5.0.0-990-experimental` →
+`experimental`). The `.map` file is fetched from the same directory. The current
+`/firmware/` layout is tried first, then the legacy layout for older builds.
+HTTP and HTTPS URLs and redirects are supported.
+
+### Decoding
+
+The vendored, map-aware decoders in [tools/](tools/) (`decode-esp8266.py`,
+`decode-esp32.py`) symbolicate PCs and stack words, classify code and data
+addresses, and add disassembly around the faulting address.
+
+### Source context
+
+The firmware and Sming repositories are checked out at the crash's version tags,
+including submodules. Snippets for the decoded frames are attached, and source
+retrieval cannot leave the repository.
+
+### Analysis and reporting
+
+Optional AI analysis and optional GitHub issue creation run afterwards. Decode,
+analysis and storage are serialized per crash, so one failed job does not block
+the queue.
 
 Supported SoCs: ESP8266, ESP32 and ESP32-C3. The Espressif toolchains used for
 decoding are defined in
