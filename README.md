@@ -281,6 +281,12 @@ sources, and the latest crash. The integration device links directly to the
 service frontend. It does not install, start, or supervise the container; use
 the Supervisor add-on for that, or manage an external container separately.
 
+The integration includes local light/dark brand icons, supported by Home
+Assistant 2026.3 and newer. After updating, restart Home Assistant and refresh
+the browser to load the icons. The add-on also includes its own icon. Both use
+the SVG artwork in [images/](images/); regenerate their PNG files with
+`sh scripts/gen-brand-icons.sh` (requires ImageMagick).
+
 The service API does not provide authentication. Keep the service on a trusted
 network and do not expose it directly to the Internet.
 
