@@ -21,6 +21,7 @@ test("Database schema includes all required tables and columns", async (t) => {
     assert.ok(tables.includes("controllers"), "Missing 'controllers' table");
     assert.ok(tables.includes("controller_boot_info"), "Missing per-boot firmware metadata table");
     assert.ok(tables.includes("crash_reports"), "Missing 'crash_reports' table");
+    assert.ok(tables.includes("crash_archive"), "Missing 'crash_archive' table");
 
     // Verify logs columns including metadata fields
     const logColumns = db.pragma("table_info(logs)").map(c => c.name);
@@ -32,6 +33,10 @@ test("Database schema includes all required tables and columns", async (t) => {
 
     for (const col of expectedLogCols) {
       assert.ok(logColumns.includes(col), `Logs table is missing expected column: ${col}`);
+    }
+    const archiveColumns = db.pragma("table_info(crash_archive)").map(c => c.name);
+    for (const col of ["crash_raw", "crash_decode", "context_logs", "issue_url"]) {
+      assert.ok(archiveColumns.includes(col), `Crash archive is missing expected column: ${col}`);
     }
   } finally {
     db.close();
@@ -60,14 +65,26 @@ test("historical SQLite schemas migrate without losing logs or controller state"
     assert.strictEqual(rows[0].message, "old log");
     assert.strictEqual(rows[1].bootNonce, 123);
     assert.strictEqual(rows[1].deviceTime, 456);
+    const crashId = await storage.append("192.0.2.1", {
+      message: "old crash", crashDecode: "legacy decoded", crashRaw: "legacy raw dump", soc: "esp8266",
+    });
+    db.prepare(`INSERT INTO crash_reports (fingerprint, log_id, issue_url, issue_number, created_at)
+      VALUES ('legacy-fingerprint', ?, 'https://example.test/issue/1', 1, '2026-01-01T00:00:00Z')`).run(crashId);
     const discovery = new ControllerDiscovery({ db, seedHosts: [] });
     await discovery._loadState();
     assert.strictEqual(discovery.controllers.get("192.0.2.1").loggingEnabled, false);
     await discovery._saveState();
     db.close();
     db = openDatabase(dbPath);
-    assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM logs").get().count, 2);
+    assert.strictEqual(db.prepare("SELECT COUNT(*) AS count FROM logs").get().count, 3);
     assert.ok(db.pragma("table_info(logs)").some(column => column.name === "crash_raw"));
+    const archived = db.prepare("SELECT crash_decode, crash_raw, fingerprint, issue_url FROM crash_archive WHERE id = ?").get(crashId);
+    assert.deepEqual(archived, {
+      crash_decode: "legacy decoded",
+      crash_raw: "legacy raw dump",
+      fingerprint: "legacy-fingerprint",
+      issue_url: "https://example.test/issue/1",
+    });
   } finally {
     db.close();
   }

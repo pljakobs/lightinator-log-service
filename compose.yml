@@ -13,6 +13,8 @@ services:
       - LLS_DATA_DIR=/app/data/logs
       - LLS_MAX_BYTES_PER_IP=20971520
       - LLS_RETENTION_DAYS=7
+      - LLS_CRASH_LOG_MINUTES=10
+      - LLS_CRASH_RETENTION_DAYS=90
       - LLS_SERVICE_NAME=LightinatorLogService
       - LLS_MDNS_HOST=lightinator-logservice.local
     volumes:

@@ -82,6 +82,8 @@ function getLiveValues() {
     LLS_RETENTION_DAYS: String(config.retentionDays),
     LLS_MAX_ROWS_PER_IP: String(config.maxRowsPerIp),
     LLS_MAX_BYTES_PER_IP: String(config.maxBytesPerIp),
+    LLS_CRASH_LOG_MINUTES: String(config.crashLogMinutes),
+    LLS_CRASH_RETENTION_DAYS: String(config.crashRetentionDays),
     LLS_DISCOVERY_REFRESH_MS: String(config.discoveryRefreshMs),
     LLS_CONTROLLER_STALE_DAYS: String(config.controllerStaleDays),
     LLS_MDNS_HOST: config.mdnsHost,
@@ -111,7 +113,8 @@ async function main() {
   const [initialState] = await Promise.all([
     initializeServiceData({ dbPath: config.dbPath, dataDir: config.dataDir,
       controllerStatePath: config.controllerStatePath, maxRowsPerIp: config.maxRowsPerIp,
-      retentionDays: config.retentionDays, maxBytesPerIp: config.maxBytesPerIp }),
+      retentionDays: config.retentionDays, maxBytesPerIp: config.maxBytesPerIp,
+      crashLogMinutes: config.crashLogMinutes, crashRetentionDays: config.crashRetentionDays }),
     loki.loadConfig(),
   ]);
   const db = openDatabase(config.dbPath);
@@ -122,6 +125,8 @@ async function main() {
     maxRowsPerIp: config.maxRowsPerIp,
     retentionDays: config.retentionDays,
     maxBytesPerIp: config.maxBytesPerIp,
+    crashLogMinutes: config.crashLogMinutes,
+    crashRetentionDays: config.crashRetentionDays,
   });
   const retentionTimer = setInterval(() => {
     try { storage.prune(); } catch (err) { console.warn(`Log pruning failed: ${err.message}`); }
@@ -248,6 +253,8 @@ async function main() {
       storage: {
         maxBytesPerIp: config.maxBytesPerIp,
         retentionDays: config.retentionDays,
+        crashLogMinutes: config.crashLogMinutes,
+        crashRetentionDays: config.crashRetentionDays,
       },
       network: { ipv4: listCollectorIpv4Addresses() },
       request: { localAddress: req.socket.localAddress || null },
@@ -316,6 +323,7 @@ async function main() {
         id,
         crashDecode,
         rawDump: record?.raw || null,
+        contextLogs: record?.contextLogs || [],
         gitVersion: record?.gitVersion || null,
         smingVersion: record?.smingVersion || null,
         soc: record?.soc || null,
@@ -765,13 +773,14 @@ async function main() {
         record.buildType = bootInfo.build_type;
       }
 
-      await storage.append(rinfo.address, record);
+      await storage.append(rinfo.address, record, { deferPrune: true });
       discovery.addSeenIp(rinfo.address);
       discovery.recordLogReceived(rinfo.address);
       if (discovery.isLoggingEnabled(rinfo.address)) {
         loki.forward(record);
       }
       crashDecoder.feed(record);
+      storage.prune({ ip: rinfo.address });
       if (newBoot) {
         discovery.refreshControllerInfo(rinfo.address, record.bootNonce, record.boot).catch((err) => {
           console.debug(`Discovery: reboot info refresh failed for ${rinfo.address}: ${err.message}`);

@@ -56,6 +56,32 @@ function openDatabase(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_logs_ip_id ON logs (ip, id);
 
+    CREATE TABLE IF NOT EXISTS crash_archive (
+      id            INTEGER PRIMARY KEY,
+      log_id        INTEGER NOT NULL UNIQUE,
+      ip            TEXT    NOT NULL,
+      received_at   TEXT    NOT NULL,
+      boot          INTEGER,
+      boot_nonce    INTEGER,
+      device_time   INTEGER,
+      source_ip     TEXT,
+      priority      INTEGER,
+      tag           TEXT,
+      app           TEXT,
+      message       TEXT,
+      crash_raw     TEXT,
+      crash_decode  TEXT    NOT NULL,
+      git_version   TEXT,
+      sming_version TEXT,
+      soc           TEXT,
+      build_type    TEXT,
+      context_logs  TEXT    NOT NULL DEFAULT '[]',
+      fingerprint   TEXT,
+      issue_url     TEXT,
+      issue_number  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_crash_archive_ip_received ON crash_archive (ip, received_at DESC);
+
     CREATE TABLE IF NOT EXISTS controllers (
       ip                TEXT PRIMARY KEY,
       hostname          TEXT,
@@ -121,6 +147,35 @@ function openDatabase(dbPath) {
   if (!cols.includes("build_type")) {
     db.exec("ALTER TABLE logs ADD COLUMN build_type TEXT");
   }
+
+  const crashArchiveCols = db.pragma("table_info(crash_archive)").map(column => column.name);
+  const crashArchiveFields = {
+    boot_nonce: "INTEGER", device_time: "INTEGER", context_logs: "TEXT NOT NULL DEFAULT '[]'",
+    fingerprint: "TEXT", issue_url: "TEXT", issue_number: "INTEGER",
+  };
+  for (const [column, type] of Object.entries(crashArchiveFields)) {
+    if (!crashArchiveCols.includes(column)) db.exec(`ALTER TABLE crash_archive ADD COLUMN ${column} ${type}`);
+  }
+
+  db.exec(`
+    INSERT OR IGNORE INTO crash_archive (
+      id, log_id, ip, received_at, boot, boot_nonce, device_time, source_ip, priority, tag, app, message,
+      crash_raw, crash_decode, git_version, sming_version, soc, build_type, fingerprint, issue_url, issue_number
+    )
+    SELECT l.id, l.id, l.ip, l.received_at, l.boot, l.boot_nonce, l.device_time,
+      l.source_ip, l.priority, l.tag, l.app, l.message, l.crash_raw, l.crash_decode,
+      l.git_version, l.sming_version, l.soc, l.build_type, c.fingerprint, c.issue_url, c.issue_number
+    FROM logs l
+    LEFT JOIN crash_reports c ON c.log_id = l.id
+    WHERE l.crash_decode IS NOT NULL
+  `);
+  db.exec(`
+    UPDATE crash_archive SET
+      fingerprint = COALESCE(fingerprint, (SELECT fingerprint FROM crash_reports WHERE log_id = crash_archive.log_id)),
+      issue_url = COALESCE(issue_url, (SELECT issue_url FROM crash_reports WHERE log_id = crash_archive.log_id)),
+      issue_number = COALESCE(issue_number, (SELECT issue_number FROM crash_reports WHERE log_id = crash_archive.log_id))
+    WHERE EXISTS (SELECT 1 FROM crash_reports WHERE log_id = crash_archive.log_id)
+  `);
 
   const controllerCols = db.pragma("table_info(controllers)").map(column => column.name);
   const controllerFields = {

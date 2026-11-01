@@ -79,8 +79,8 @@ lines around each match.
 - Crash dumps are detected in the incoming syslog stream (ESP8266 exceptions,
   ESP32 Guru Meditation panics and the firmware's crash-dump report). They are
   collected and symbolicated automatically; see [Crash Decoding](#crash-decoding).
-- The **Crashes** tab lists all decoded crashes, with jump-to-log and links to
-  their GitHub issues.
+- The **Crashes** tab lists archived crashes independently of retained log rows,
+  with jump-to-log where those rows remain available and links to GitHub issues.
 - The crash modal shows the decoded stack trace, disassembly around the faulting
   address, source context and the optional AI analysis. You can switch between
   raw and decoded output and copy either to the clipboard. Crash Markdown is
@@ -316,7 +316,8 @@ tabs. Changes apply after a restart.
 | `LLS_DISCOVERY_PORT` | `80` | Controller HTTP port |
 | `LLS_DISCOVERY_REFRESH_MS` | `300000` | Discovery refresh interval |
 | `LLS_CONTROLLER_STALE_DAYS` | `30` | Auto-remove controllers not seen for N days (`0` disables) |
-| `LLS_CRASH_LOG_MINUTES` | `10` | Default log span (minutes) in crash log downloads |
+| `LLS_CRASH_LOG_MINUTES` | `10` | Pre-crash log context to archive and default span in crash downloads |
+| `LLS_CRASH_RETENTION_DAYS` | `90` | Days to retain archived crashes and context (`0` disables expiry) |
 | `LLS_RETENTION_DAYS` | `7` | Delete log rows older than N days (`0` disables) |
 | `LLS_MAX_BYTES_PER_IP` | `20971520` | Stored log/crash text per controller (`0` disables) |
 | `LLS_MAX_ROWS_PER_IP` | `10000` | Row cap per controller |
@@ -512,11 +513,12 @@ analysis.
 
 ## Storage and Decoder Validation
 
-`LLS_RETENTION_DAYS` prunes expired log rows. `LLS_MAX_BYTES_PER_IP` limits stored
-UTF-8 log/crash text per controller, excluding SQLite indexes and page overhead.
-Zero disables either limit. Pruning runs on startup, inserts, crash updates, and
-every five minutes; row-count limits continue to apply. Associated crash-report
-records are deleted through SQLite foreign-key cascades.
+`LLS_RETENTION_DAYS`, `LLS_MAX_BYTES_PER_IP`, and `LLS_MAX_ROWS_PER_IP` prune
+ordinary log rows. Decoded crashes, their raw dump, firmware metadata, GitHub
+issue details, and the preceding `LLS_CRASH_LOG_MINUTES` of log context are copied
+to an independent archive before those limits can remove their source rows.
+`LLS_CRASH_RETENTION_DAYS` controls archive expiry; `0` keeps archived crashes
+indefinitely. Archive pruning runs alongside log pruning every five minutes.
 
 Row and byte usage totals are maintained by SQLite triggers so normal ingestion
 does not rescan retained log text. Startup migrations, imports, initial pruning,
@@ -621,14 +623,14 @@ stripped, boot separators inserted). `scope` selects the rows:
 | `boot` | `ip`, `boot` | One uptime (boot number from `/api/v1/boots`) |
 | `current` / `previous` | `ip` | Newest / second-newest boot |
 | `range` | `ip`, `start` and/or `end` (ISO 8601) | Rows received in the inclusive time span |
-| `crash` | `id` (crash log id), optional `minutes` | `minutes` (default `LLS_CRASH_LOG_MINUTES`) before the last row of the crashed boot up to that row, followed by the decoded crash |
+| `crash` | `id` (crash id), optional `minutes` | Archived context before the crash report, followed by the decoded crash; requests cannot include more context than was archived |
 
 ### Crashes
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/v1/crashes?ip=&limit=` | Decoded crashes |
-| GET | `/api/v1/logs/:id/crash-decode` | Decode, raw dump and build metadata of a crash |
+| GET | `/api/v1/logs/:id/crash-decode` | Decode, raw dump, archived context and build metadata of a crash |
 | POST | `/api/v1/crashes/:id/decode` | Re-run the decoder only |
 | POST | `/api/v1/crashes/:id/analyze` | Run AI analysis |
 

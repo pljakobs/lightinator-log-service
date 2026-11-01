@@ -26,7 +26,8 @@ async function initialize(options) {
   const db = openDatabase(options.dbPath);
   try {
     const storage = new LogStorage({ db, dataDir: options.dataDir, maxRowsPerIp: options.maxRowsPerIp,
-      retentionDays: options.retentionDays, maxBytesPerIp: options.maxBytesPerIp });
+      retentionDays: options.retentionDays, maxBytesPerIp: options.maxBytesPerIp,
+      crashLogMinutes: options.crashLogMinutes, crashRetentionDays: options.crashRetentionDays });
     await storage.init();
     storage.prune();
     const discovery = new ControllerDiscovery({ db, statePath: options.controllerStatePath, seedHosts: [], refreshIntervalMs: 0 });

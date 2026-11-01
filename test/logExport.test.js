@@ -57,7 +57,7 @@ test("range scope is inclusive and accepts open ends", () => {
   assert.deepEqual(messages(render({ ip, scope: "range", start: at(31) })), ["b3 m31", "b3 m32"]);
 });
 
-test("crash scope spans N minutes up to the end of the crashed boot and appends the decode", () => {
+test("crash scope spans N minutes before the report and appends the decode", () => {
   const exp = resolveLogExport(storage, { scope: "crash", id: String(crashId), minutes: "3" });
   assert.equal(exp.ip, ip);
   assert.equal(exp.filename, `10.0.0.1_crash-${crashId}.log`);
@@ -69,6 +69,37 @@ test("crash scope spans N minutes up to the end of the crashed boot and appends 
 
 test("crash scope falls back to the configured default span", () => {
   assert.equal(messages(render({ scope: "crash", id: String(crashId) }, { crashMinutes: 1 })).length, 2);
+});
+
+test("crash export uses archived context after source log rows are trimmed", async context => {
+  const isolated = openDatabase(":memory:");
+  context.after(() => isolated.close());
+  const archivedStorage = new LogStorage({
+    db: isolated,
+    dataDir: tmpDir,
+    maxRowsPerIp: 2,
+    crashLogMinutes: 3,
+  });
+  const crashIp = "192.0.2.90";
+  const now = Date.now();
+  const receivedAt = offset => new Date(now - offset).toISOString();
+  await archivedStorage.append(crashIp, { message: "before crash", receivedAt: receivedAt(60_000), boot: 1 });
+  const id = await archivedStorage.append(crashIp, {
+    message: "Fatal exception 28",
+    receivedAt: receivedAt(0),
+    boot: 2,
+    crashDecode: "Decoded crash trace",
+  });
+  await archivedStorage.append(crashIp, { message: "after reboot 1", boot: 2 });
+  await archivedStorage.append(crashIp, { message: "after reboot 2", boot: 2 });
+  assert.equal((await archivedStorage.getLogs({ ip: crashIp })).items.some(row => row.id === id), false);
+
+  const exp = resolveLogExport(archivedStorage, { scope: "crash", id: String(id) }, { crashMinutes: 3 });
+  const text = [...renderLogExport(archivedStorage, exp)].join("");
+  assert.match(text, /before crash/);
+  assert.match(text, /Fatal exception 28/);
+  assert.match(text, /Decoded crash trace/);
+  assert.doesNotMatch(text, /after reboot/);
 });
 
 test("invalid requests are rejected with a status", () => {

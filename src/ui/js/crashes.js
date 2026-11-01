@@ -66,6 +66,8 @@ function render() {
     const issue = issueUrl
       ? `<a href="${escHtml(issueUrl)}" target="_blank" rel="noopener" title="Open GitHub issue">#${escHtml(c.issueNumber ?? '')}</a>`
       : '';
+    const logLink = c.logAvailable === false ? ''
+      : `<button class="crash-view-log" data-id="${c.id}" data-ip="${escHtml(c.ip)}" title="Show this crash in the log view">View in log</button>`;
     const meta = [c.soc, c.gitVersion, c.smingVersion && `Sming ${c.smingVersion}`].filter(Boolean).map(escHtml).join(' · ');
     parts.push(
       `<div class="crash-row" data-id="${c.id}" data-ip="${escHtml(c.ip)}" title="${escHtml(c.pending ? 'Crash decode in progress…' : 'Click to view decoded stack trace')}${meta ? '\n' + meta : ''}">` +
@@ -73,7 +75,7 @@ function render() {
         `<span class="col-ip">${escHtml(c.ip)}</span>` +
         `<span class="col-boot">${boot}</span>` +
         `<span class="col-summary">${pending}${fp}${text}</span>` +
-        `<span class="col-actions">${issue}<button class="crash-view-log" data-id="${c.id}" data-ip="${escHtml(c.ip)}" title="Show this crash in the log view">View in log</button></span>` +
+        `<span class="col-actions">${issue}${logLink}</span>` +
       `</div>`,
     );
   }

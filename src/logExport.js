@@ -43,8 +43,8 @@ function requireBoot(storage, ip, boot, what) {
  *   scope=boot&boot=N               one uptime (boot session) of `ip`
  *   scope=current | previous        newest / second-newest boot of `ip`
  *   scope=range&start=&end=         rows of `ip` received in [start, end]
- *   scope=crash&id=&minutes=        `minutes` before the last row of the crashed
- *                                   boot up to that row, followed by the decode
+ *   scope=crash&id=&minutes=        `minutes` before the crash report, followed
+ *                                   by the decode
  */
 function resolveLogExport(storage, query, { crashMinutes = 10 } = {}) {
   const scope = String(query.scope || "all");
@@ -57,15 +57,13 @@ function resolveLogExport(storage, query, { crashMinutes = 10 } = {}) {
     const minutes = query.minutes == null || query.minutes === "" ? crashMinutes : Number(query.minutes);
     if (!Number.isFinite(minutes) || minutes <= 0) throw new ExportError(400, "Invalid minutes");
 
-    const range = crash.boot != null ? storage.getBootRange(crash.ip, crash.boot) : null;
-    const lastId = range ? range.lastId : crash.id;
-    const until = range ? range.endedAt : crash.receivedAt;
+    const until = crash.receivedAt;
     const since = new Date(Date.parse(until) - minutes * 60_000).toISOString();
     return {
       ip: crash.ip,
-      label: `crash ${id} (${minutes} min before end of boot ${crash.boot ?? "?"})`,
+      label: `crash ${id} (${minutes} min before report, boot ${crash.boot ?? "?"})`,
       filename: `${safeFilePart(crash.ip)}_crash-${id}.log`,
-      filter: { maxId: lastId, since, until },
+      filter: { maxId: crash.id, since, until },
       crash,
     };
   }
@@ -143,17 +141,29 @@ function* renderLogExport(storage, exp, now = new Date()) {
 
   let lastBoot;
   let rows = 0;
-  for (const r of storage.iterateLogs(exp.ip, exp.filter)) {
+  let crashRowWritten = false;
+  const hasArchivedContext = exp.crash?.contextLogs?.length > 0;
+  const archivedRows = hasArchivedContext
+    ? exp.crash.contextLogs.filter(r => r.receivedAt >= exp.filter.since && r.receivedAt <= exp.filter.until)
+    : null;
+  const logRows = archivedRows || storage.iterateLogs(exp.ip, exp.filter);
+  for (const r of logRows) {
     if (r.boot !== undefined && r.boot !== lastBoot) {
       buffer += `---- boot ${r.boot} ----\n`;
       lastBoot = r.boot;
     }
     buffer += formatRecord(r) + "\n";
+    crashRowWritten ||= r.id === exp.crash?.id;
     rows++;
     if (buffer.length >= CHUNK_BYTES) {
       yield buffer;
       buffer = "";
     }
+  }
+  if (exp.crash && !crashRowWritten) {
+    if (exp.crash.boot !== undefined && exp.crash.boot !== lastBoot) buffer += `---- boot ${exp.crash.boot} ----\n`;
+    buffer += formatRecord(exp.crash) + "\n";
+    rows++;
   }
   if (!rows) buffer += "# (no log entries)\n";
   if (exp.crash) buffer += formatCrash(exp.crash);

@@ -36,10 +36,13 @@ class CrashReporter {
     }
 
     const existingLocal = this.db.prepare(
-      "SELECT issue_url FROM crash_reports WHERE fingerprint = ?"
+      "SELECT issue_url, issue_number FROM crash_reports WHERE fingerprint = ?"
     ).get(fingerprint);
 
-    if (existingLocal) return existingLocal;
+    if (existingLocal) {
+      this._saveArchiveRecord(fingerprint, logId, existingLocal.issue_url, existingLocal.issue_number, record);
+      return existingLocal;
+    }
 
     const existingIssue = await this._searchGitHubIssue(fingerprint);
     if (existingIssue) {
@@ -72,19 +75,30 @@ class CrashReporter {
   }
 
   _saveLocalRecord(fingerprint, logId, issueUrl, issueNumber, record) {
+    if (this.db.prepare("SELECT 1 AS present FROM logs WHERE id = ?").get(logId)) {
+      this.db.prepare(`
+        INSERT OR REPLACE INTO crash_reports
+          (fingerprint, log_id, issue_url, issue_number, soc, git_version, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        fingerprint,
+        logId,
+        issueUrl,
+        issueNumber,
+        record.soc || null,
+        record.gitVersion || null,
+        new Date().toISOString()
+      );
+    }
+    this._saveArchiveRecord(fingerprint, logId, issueUrl, issueNumber, record);
+  }
+
+  _saveArchiveRecord(fingerprint, logId, issueUrl, issueNumber, record) {
     this.db.prepare(`
-      INSERT OR REPLACE INTO crash_reports 
-        (fingerprint, log_id, issue_url, issue_number, soc, git_version, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      fingerprint,
-      logId,
-      issueUrl,
-      issueNumber,
-      record.soc || null,
-      record.gitVersion || null,
-      new Date().toISOString()
-    );
+      UPDATE crash_archive SET fingerprint = ?, issue_url = ?, issue_number = ?,
+        soc = COALESCE(?, soc), git_version = COALESCE(?, git_version)
+      WHERE id = ?
+    `).run(fingerprint, issueUrl, issueNumber, record.soc || null, record.gitVersion || null, logId);
   }
 
   async _searchGitHubIssue(fingerprint) {

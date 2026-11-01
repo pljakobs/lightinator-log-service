@@ -450,7 +450,7 @@ for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 844 });
     const mobile = width <= 900;
     await page.route('**/api/v1/controllers', route => route.fulfill({ json: { items: [{ ip: '192.0.2.25', name: 'Long controller name for a small display', hostname: 'controller-with-a-long-hostname.local', groups: [{ name: 'Long controller group name' }], gitVersion: 'V1.0.0-123-feature-with-a-long-branch-name', reachable: true, loggingEnabled: true }] } }));
-    await page.route('**/api/v1/crashes?*', route => route.fulfill({ json: { total: 1, items: [{ id: 1, ip: '192.0.2.25', boot: 2, receivedAt: new Date().toISOString(), summary: 'A long decoded crash summary containing a firmware source location and exception details' }] } }));
+    await page.route('**/api/v1/crashes?*', route => route.fulfill({ json: { total: 1, items: [{ id: 1, ip: '192.0.2.25', boot: 2, receivedAt: new Date().toISOString(), logAvailable: false, summary: 'A long decoded crash summary containing a firmware source location and exception details' }] } }));
     const menu = page.locator('#sources-toggle');
     if (mobile) {
       await expect(menu).toBeVisible();
@@ -472,6 +472,7 @@ for (const width of [320, 390, 768]) {
     expect(await fits('#controllers-panel, .ctrl-card, .ctrl-actions, .ctrl-log-received')).toBe(true);
     await page.locator('.tab[data-tab="crashes"]').click();
     await expect(page.locator('.crash-row')).toHaveCount(1);
+    await expect(page.locator('.crash-view-log')).toHaveCount(0);
     expect(await fits('.crash-row, .crash-row .col-actions')).toBe(true);
     await page.evaluate(async () => {
       const { openCrashModal } = await import('/js/crash.js');

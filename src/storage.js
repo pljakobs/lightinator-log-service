@@ -38,12 +38,15 @@ class LogStorage {
    * @param {string} opts.dataDir      Legacy NDJSON directory — used only once for migration.
    * @param {number} opts.maxRowsPerIp Max rows kept per IP (oldest trimmed on insert).
    */
-  constructor({ db, dataDir, maxRowsPerIp = 10_000, retentionDays = 0, maxBytesPerIp = 0 }) {
+  constructor({ db, dataDir, maxRowsPerIp = 10_000, retentionDays = 0, maxBytesPerIp = 0,
+    crashLogMinutes = 10, crashRetentionDays = 90 }) {
     this.db = db;
     this.dataDir = dataDir;
     this.maxRowsPerIp = maxRowsPerIp;
     this.retentionDays = retentionDays;
     this.maxBytesPerIp = maxBytesPerIp;
+    this.crashLogMinutes = crashLogMinutes;
+    this.crashRetentionDays = crashRetentionDays;
     this._stmtPruneAge = db.prepare("DELETE FROM logs WHERE received_at < ?");
     this._stmtPruneAgeIp = db.prepare("DELETE FROM logs WHERE ip = ? AND received_at < ?");
     this._stmtUsage = db.prepare("SELECT row_count AS cnt, text_bytes AS bytes FROM log_usage WHERE ip = ?");
@@ -61,6 +64,35 @@ class LogStorage {
         soc = COALESCE(?, soc), build_type = COALESCE(?, build_type), crash_raw = COALESCE(?, crash_raw)
       WHERE id = ?
     `);
+    this._stmtCrashRow = db.prepare("SELECT * FROM logs WHERE id = ?");
+    this._stmtCrashArchiveRow = db.prepare("SELECT * FROM crash_archive WHERE id = ?");
+    this._stmtCrashContext = db.prepare(`
+      SELECT * FROM logs WHERE ip = ? AND id < ? AND received_at >= ? ORDER BY id ASC
+    `);
+    this._stmtUpsertCrashArchive = db.prepare(`
+      INSERT INTO crash_archive (
+        id, log_id, ip, received_at, boot, boot_nonce, device_time, source_ip, priority, tag, app, message,
+        crash_raw, crash_decode, git_version, sming_version, soc, build_type, context_logs
+      ) VALUES (
+        @id, @log_id, @ip, @received_at, @boot, @boot_nonce, @device_time, @source_ip, @priority, @tag, @app, @message,
+        @crash_raw, @crash_decode, @git_version, @sming_version, @soc, @build_type, @context_logs
+      ) ON CONFLICT(id) DO UPDATE SET
+        crash_raw = COALESCE(excluded.crash_raw, crash_archive.crash_raw),
+        crash_decode = excluded.crash_decode,
+        git_version = COALESCE(excluded.git_version, crash_archive.git_version),
+        sming_version = COALESCE(excluded.sming_version, crash_archive.sming_version),
+        soc = COALESCE(excluded.soc, crash_archive.soc),
+        build_type = COALESCE(excluded.build_type, crash_archive.build_type),
+        context_logs = CASE WHEN crash_archive.context_logs = '[]' THEN excluded.context_logs ELSE crash_archive.context_logs END
+    `);
+    this._stmtUpdateArchivedCrash = db.prepare(`
+      UPDATE crash_archive SET crash_decode = ?, crash_raw = COALESCE(?, crash_raw),
+        git_version = COALESCE(?, git_version), sming_version = COALESCE(?, sming_version),
+        soc = COALESCE(?, soc), build_type = COALESCE(?, build_type)
+      WHERE id = ?
+    `);
+    this._stmtPruneCrashArchive = db.prepare("DELETE FROM crash_archive WHERE received_at < ?");
+    this._stmtPruneCrashArchiveIp = db.prepare("DELETE FROM crash_archive WHERE ip = ? AND received_at < ?");
     this._stmtGetCrashDecode = db.prepare(`
       SELECT crash_decode FROM logs WHERE id = ?
     `);
@@ -80,9 +112,11 @@ class LogStorage {
       "SELECT device_time, received_at FROM logs WHERE ip = ? AND boot = ? AND device_time IS NOT NULL ORDER BY id DESC LIMIT 1",
     );
     this._stmtSources = db.prepare(`
-      SELECT ip, MAX(received_at) AS last_seen, COUNT(*) AS entries
-      FROM logs
-      GROUP BY ip
+      SELECT ip, MAX(last_seen) AS last_seen, SUM(entries) AS entries FROM (
+        SELECT ip, MAX(received_at) AS last_seen, COUNT(*) AS entries FROM logs GROUP BY ip
+        UNION ALL
+        SELECT ip, MAX(received_at) AS last_seen, 0 AS entries FROM crash_archive GROUP BY ip
+      ) GROUP BY ip
       ORDER BY last_seen DESC
     `);
     this._stmtLogs = db.prepare(`
@@ -145,19 +179,25 @@ class LogStorage {
       "SELECT * FROM logs WHERE ip = ? AND id BETWEEN ? AND ? ORDER BY id ASC",
     );
     this._stmtCrashes = db.prepare(`
-      SELECT l.id, l.ip, l.received_at, l.boot, l.message, l.crash_decode,
-             c.fingerprint, c.issue_url, c.issue_number,
-             COALESCE(l.soc, c.soc) AS soc, COALESCE(l.git_version, c.git_version) AS git_version,
-             l.sming_version AS sming_version
-      FROM logs l
-      LEFT JOIN crash_reports c ON c.log_id = l.id
-      WHERE l.crash_decode IS NOT NULL AND (? IS NULL OR l.ip = ?)
-      ORDER BY l.id DESC
+      SELECT a.id, a.ip, a.received_at, a.boot, a.message, a.crash_decode,
+             COALESCE(a.fingerprint, c.fingerprint) AS fingerprint,
+             COALESCE(a.issue_url, c.issue_url) AS issue_url,
+             COALESCE(a.issue_number, c.issue_number) AS issue_number,
+             COALESCE(a.soc, c.soc) AS soc,
+             COALESCE(a.git_version, c.git_version) AS git_version,
+             a.sming_version AS sming_version,
+             EXISTS(SELECT 1 FROM logs l WHERE l.id = a.log_id) AS log_available
+      FROM crash_archive a
+      LEFT JOIN crash_reports c ON c.log_id = a.log_id
+      WHERE a.crash_decode IS NOT NULL AND (? IS NULL OR a.ip = ?)
+      ORDER BY a.received_at DESC, a.id DESC
       LIMIT ?
     `);
     this._stmtCrashCount = db.prepare(
-      "SELECT COUNT(*) AS cnt FROM logs WHERE crash_decode IS NOT NULL AND (? IS NULL OR ip = ?)",
+      "SELECT COUNT(*) AS cnt FROM crash_archive WHERE crash_decode IS NOT NULL AND (? IS NULL OR ip = ?)",
     );
+
+    this._backfillCrashArchive();
   }
 
   /**
@@ -220,9 +260,45 @@ class LogStorage {
         console.warn(`Storage: failed to migrate ${file}: ${err.message}`);
       }
     }
+    this._backfillCrashArchive();
   }
 
-  append(ip, record) {
+  _backfillCrashArchive() {
+    const rows = this.db.prepare("SELECT * FROM logs WHERE crash_decode IS NOT NULL ORDER BY id ASC").all();
+    for (const row of rows) this._archiveCrashRow(row, row.crash_decode);
+  }
+
+  _archiveCrashRow(row, decodedText, metadata = {}) {
+    const existing = this._stmtCrashArchiveRow.get(row.id);
+    let contextLogs = existing?.context_logs || "[]";
+    if (contextLogs === "[]") {
+      const cutoff = new Date(Date.parse(row.received_at) - this.crashLogMinutes * 60_000).toISOString();
+      contextLogs = JSON.stringify(this._stmtCrashContext.all(row.ip, row.id, cutoff).map(rowToRecord));
+    }
+    this._stmtUpsertCrashArchive.run({
+      id: row.id,
+      log_id: row.id,
+      ip: row.ip,
+      received_at: row.received_at,
+      boot: row.boot,
+      boot_nonce: row.boot_nonce,
+      device_time: row.device_time,
+      source_ip: row.source_ip,
+      priority: row.priority,
+      tag: row.tag,
+      app: row.app,
+      message: row.message,
+      crash_raw: metadata.rawDump ?? row.crash_raw,
+      crash_decode: decodedText,
+      git_version: metadata.gitVersion ?? row.git_version,
+      sming_version: metadata.smingVersion ?? row.sming_version,
+      soc: metadata.soc ?? row.soc,
+      build_type: metadata.buildType ?? row.build_type,
+      context_logs: contextLogs,
+    });
+  }
+
+  append(ip, record, { deferPrune = false } = {}) {
     const info = this._stmtInsert.run({
       ip,
       received_at:  record.receivedAt  || new Date().toISOString(),
@@ -247,14 +323,17 @@ class LogStorage {
       record.id = info.lastInsertRowid;
     }
 
-    // Trim to maxRowsPerIp — the sub-SELECT finds the id at position
-    // (maxRowsPerIp - 1) from the newest end (0-based OFFSET); all older rows
-    // are deleted, leaving exactly maxRowsPerIp rows.
-    const { cnt } = this._stmtTrimCheck.get(ip);
-    if (cnt > this.maxRowsPerIp) {
-      this._stmtTrim.run(ip, cnt - this.maxRowsPerIp);
+    if (record.crashDecode && record.id) {
+      this.updateCrashDecode(record.id, record.crashDecode, {
+        rawDump: record.crashRaw,
+        gitVersion: record.gitVersion,
+        smingVersion: record.smingVersion,
+        soc: record.soc,
+        buildType: record.buildType,
+      });
     }
-    this.prune({ ip });
+
+    if (!deferPrune) this.prune({ ip });
 
     return Promise.resolve(record.id);
   }
@@ -262,14 +341,25 @@ class LogStorage {
   updateCrashDecode(logId, decodedText, metadata = {}) {
     this._stmtUpdateCrashDecode.run(decodedText, metadata.gitVersion ?? null, metadata.smingVersion ?? null,
       metadata.soc ?? null, metadata.buildType ?? null, metadata.rawDump ?? null, logId);
-    const row = this.db.prepare("SELECT ip FROM logs WHERE id = ?").get(logId);
-    if (row) this.prune({ ip: row.ip });
+    const row = this._stmtCrashRow.get(logId);
+    if (row) {
+      this._archiveCrashRow(row, decodedText, metadata);
+      this.prune({ ip: row.ip });
+    } else {
+      this._stmtUpdateArchivedCrash.run(decodedText, metadata.rawDump ?? null, metadata.gitVersion ?? null,
+        metadata.smingVersion ?? null, metadata.soc ?? null, metadata.buildType ?? null, logId);
+    }
     return Promise.resolve();
   }
 
   getCrashRecord(logId) {
-    const row = this.db.prepare("SELECT * FROM logs WHERE id = ? AND crash_decode IS NOT NULL").get(logId);
-    return row ? { ...rowToRecord(row), ip: row.ip, raw: row.crash_raw || null } : null;
+    const row = this._stmtCrashArchiveRow.get(logId) || this.db.prepare(
+      "SELECT * FROM logs WHERE id = ? AND crash_decode IS NOT NULL",
+    ).get(logId);
+    if (!row) return null;
+    let contextLogs = [];
+    try { contextLogs = JSON.parse(row.context_logs || "[]"); } catch { /* ignore invalid legacy context */ }
+    return { ...rowToRecord(row), ip: row.ip, raw: row.crash_raw || null, contextLogs };
   }
 
   getBootFirmwareInfo(ip, boot, bootNonce) {
@@ -299,6 +389,18 @@ class LogStorage {
         const cutoff = new Date(now - this.retentionDays * 86_400_000).toISOString();
         deleted += ip == null ? this._stmtPruneAge.run(cutoff).changes : this._stmtPruneAgeIp.run(ip, cutoff).changes;
       }
+      const rowIps = ip == null
+        ? this.db.prepare("SELECT ip FROM log_usage WHERE row_count > ?").all(this.maxRowsPerIp).map(row => row.ip)
+        : [ip];
+      for (const source of rowIps) {
+        const { cnt } = this._stmtTrimCheck.get(source);
+        if (cnt > this.maxRowsPerIp) deleted += this._stmtTrim.run(source, cnt - this.maxRowsPerIp).changes;
+      }
+      if (this.crashRetentionDays > 0) {
+        const crashCutoff = new Date(now - this.crashRetentionDays * 86_400_000).toISOString();
+        deleted += ip == null ? this._stmtPruneCrashArchive.run(crashCutoff).changes
+          : this._stmtPruneCrashArchiveIp.run(ip, crashCutoff).changes;
+      }
       if (this.maxBytesPerIp > 0) {
         const sources = ip == null ? this._stmtOverBudget.all(this.maxBytesPerIp).map(source => source.ip) : [ip];
         for (const source of sources) {
@@ -319,7 +421,7 @@ class LogStorage {
   }
 
   getCrashDecode(logId) {
-    const row = this._stmtGetCrashDecode.get(logId);
+    const row = this._stmtCrashArchiveRow.get(logId) || this._stmtGetCrashDecode.get(logId);
     return Promise.resolve(row ? row.crash_decode : null);
   }
 
@@ -452,6 +554,7 @@ class LogStorage {
         soc:         r.soc          || null,
         gitVersion:  r.git_version  || null,
         smingVersion: r.sming_version || null,
+        logAvailable: Boolean(r.log_available),
       };
     });
 

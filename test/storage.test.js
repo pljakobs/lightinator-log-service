@@ -188,6 +188,45 @@ test("crash persistence retains full raw dumps and original firmware metadata", 
   assert.equal(db.prepare("SELECT raw FROM logs WHERE id = ?").get(id).raw, "original syslog record");
 });
 
+test("crash archive preserves pre-crash context after log trimming until archive retention expires", async context => {
+  const isolated = openDatabase(":memory:");
+  context.after(() => isolated.close());
+  const logs = new LogStorage({
+    db: isolated,
+    dataDir: tmpDir,
+    maxRowsPerIp: 3,
+    crashLogMinutes: 5,
+    crashRetentionDays: 30,
+  });
+  const crashIp = "192.0.2.80";
+  const now = Date.now();
+  const receivedAt = offset => new Date(now - offset).toISOString();
+  await logs.append(crashIp, { message: "too old", receivedAt: receivedAt(6 * 60_000) });
+  await logs.append(crashIp, { message: "before 1", receivedAt: receivedAt(2 * 60_000) });
+  await logs.append(crashIp, { message: "before 2", receivedAt: receivedAt(60_000) });
+  const crashId = await logs.append(crashIp, { message: "crash trigger", receivedAt: receivedAt(0) }, { deferPrune: true });
+  await logs.updateCrashDecode(crashId, "decoded stack", {
+    rawDump: "Fatal exception\nStack dump:\n3ffff000: 40201000",
+    gitVersion: "V2.0.0-test",
+    soc: "esp8266",
+  });
+
+  await logs.append(crashIp, { message: "new 1" });
+  await logs.append(crashIp, { message: "new 2" });
+  await logs.append(crashIp, { message: "new 3" });
+
+  assert.equal((await logs.getLogs({ ip: crashIp })).items.some(row => row.id === crashId), false);
+  assert.equal(logs.listCrashes({ ip: crashIp }).total, 1);
+  const archived = logs.getCrashRecord(crashId);
+  assert.equal(archived.crashDecode, "decoded stack");
+  assert.equal(archived.raw, "Fatal exception\nStack dump:\n3ffff000: 40201000");
+  assert.equal(archived.gitVersion, "V2.0.0-test");
+  assert.deepEqual(archived.contextLogs.map(row => row.message), ["before 1", "before 2"]);
+
+  logs.prune({ now: now + 31 * 86_400_000 });
+  assert.equal(logs.listCrashes({ ip: crashIp }).total, 0);
+});
+
 test("NDJSON migration imports legacy crash bindings once", async () => {
   const legacyDir = fs.mkdtempSync(path.join(tmpDir, "legacy-"));
   const filePath = path.join(legacyDir, "192.0.2.51.ndjson");
