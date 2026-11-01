@@ -1,0 +1,10 @@
+{
+  "domain": "lightinator_log_service",
+  "name": "Lightinator Log Service",
+  "codeowners": ["@pljakobs"],
+  "config_flow": true,
+  "documentation": "https://github.com/pljakobs/lightinator-log-service",
+  "integration_type": "service",
+  "iot_class": "local_poll",
+  "version": "0.1.0"
+}

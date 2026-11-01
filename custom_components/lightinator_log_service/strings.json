@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Lightinator Log Service",
+        "description": "Start the service before continuing. For the Home Assistant add-on, enter http://<home-assistant-host>:4821. For an external container, enter http://<container-host>:4821, or its service name if Home Assistant shares its Docker network. Use an address reachable from Home Assistant. The integration connects to the service; it does not start the container. The URL must return status ok at /api/v1/health.",
+        "data": {
+          "url": "Service URL"
+        }
+      }
+    },
+    "error": {
+      "invalid_url": "Enter a valid HTTP or HTTPS base URL without a path.",
+      "cannot_connect": "Could not connect to the service URL.",
+      "invalid_response": "The URL did not return a valid Lightinator Log Service response."
+    },
+    "abort": {
+      "already_configured": "This service URL is already configured."
+    }
+  }
+}

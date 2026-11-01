@@ -1,0 +1,28 @@
+name: Lightinator Log Service
+slug: lightinator_log_service
+description: Run the Lightinator log collector and crash decoder in Home Assistant.
+version: "0.1.0"
+url: https://github.com/pljakobs/lightinator-log-service
+image: ghcr.io/pljakobs/lightinator-log-service:prod
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: auto
+host_network: true
+map:
+  - type: addon_config
+    read_only: false
+environment:
+  LLS_HTTP_HOST: 0.0.0.0
+  LLS_HTTP_PORT: "4821"
+  LLS_UDP_HOST: 0.0.0.0
+  LLS_UDP_PORT: "5514"
+  LLS_DB_PATH: /config/db.sqlite
+  LLS_DATA_DIR: /config/logs
+  LLS_ELF_CACHE_DIR: /config/elfs
+  LLS_SERVICE_ENV: /config/service.env
+  LLS_CONTROLLER_STATE: /config/controllers.json
+  LLS_LOKI_CONFIG: /config/loki.json
+webui: http://[HOST]:4821
+watchdog: http://[HOST]:4821/api/v1/health

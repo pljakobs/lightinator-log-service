@@ -13,6 +13,7 @@ logs to Grafana Loki.
 
 - [Features](#features)
 - [Installation](#installation)
+- [Home Assistant](#home-assistant)
 - [Configuration](#configuration)
 - [Crash Decoding](#crash-decoding)
 - [Credentials and API Security](#credentials-and-api-security)
@@ -211,6 +212,77 @@ make podman-manifest-push IMAGE=ghcr.io/<owner>/lightinator-log-service TAG=late
 - HTTP UI/API: `4821/tcp`
 - Syslog ingest: `5514/udp` (must match `network.rsyslog.port` on the controllers)
 - mDNS: `_lightinator-log._tcp` and `_lightinator-syslog._udp`
+
+## Home Assistant
+
+This repository includes both a Home Assistant add-on and an optional HACS
+integration. They serve different purposes: the Supervisor add-on runs the
+service container; the HACS integration connects to any running instance and
+adds status sensors plus a link to its web frontend. The integration supports
+both the add-on-managed container and a container running on another host.
+
+### Supervisor add-on
+
+This option requires Home Assistant OS or Home Assistant Supervised:
+
+1. In Home Assistant, open **Settings → Add-ons → Add-on Store → ⋮ → Repositories**.
+2. Add `https://github.com/pljakobs/lightinator-log-service` and install
+  **Lightinator Log Service**.
+3. Start the add-on. Its **Open Web UI** button opens the frontend. The add-on
+  stores data in its persistent configuration directory and uses host
+  networking for syslog and mDNS.
+4. Configure controllers to send syslog to the Home Assistant host on UDP port
+  `5514`.
+5. When setting up the HACS integration, enter
+  `http://<home-assistant-host>:4821` (or the same Home Assistant hostname/IP
+  you use to open the add-on's web UI).
+
+The add-on uses fixed ports: HTTP UI/API `4821/tcp` and syslog `5514/udp`. Keep
+the service port settings at their defaults so its frontend link and watchdog
+continue to work.
+
+### External container
+
+The HACS integration does not manage or start containers. For Home Assistant
+Container/Core, or when the service already runs elsewhere, deploy it using the
+container instructions in this README and ensure Home Assistant can reach its
+HTTP API on TCP port `4821`.
+
+Host networking is recommended on Linux because the service also uses UDP
+syslog and mDNS. With a bridge network, publish at least `4821/tcp` and
+`5514/udp`; mDNS discovery may not cross the bridge, so configure controller
+discovery seeds or use the service's other supported discovery options. The
+integration itself only needs HTTP access to port `4821`.
+
+When Home Assistant and the service share a Docker network, use the service DNS
+name, for example `http://lightinator-log-service:4821`. Otherwise, use the
+external host's address, for example `http://192.168.1.20:4821`. Use an address
+reachable from the Home Assistant runtime, not just from your workstation.
+
+### HACS integration
+
+1. First start the service using the Supervisor add-on or an external container
+  as described above.
+2. In HACS → **Integrations → ⋮ → Custom repositories**, add
+  `https://github.com/pljakobs/lightinator-log-service` with category
+  **Integration**.
+3. Install **Lightinator Log Service** from HACS and restart Home Assistant.
+4. Go to **Settings → Devices & Services → Add Integration**, search for
+  **Lightinator Log Service**, and enter the service base URL:
+  - Supervisor add-on: `http://<home-assistant-host>:4821`
+  - External host: `http://<container-host>:4821`
+  - Shared Docker network: `http://<service-name>:4821`
+5. Submit the URL. Home Assistant checks `/api/v1/health`; a successful response
+  contains `"status":"ok"`. The URL must be reachable from Home Assistant and
+  must not include an API path.
+
+The integration creates sensors for service status, known controllers, log
+sources, and the latest crash. The integration device links directly to the
+service frontend. It does not install, start, or supervise the container; use
+the Supervisor add-on for that, or manage an external container separately.
+
+The service API does not provide authentication. Keep the service on a trusted
+network and do not expose it directly to the Internet.
 
 ## Configuration
 
