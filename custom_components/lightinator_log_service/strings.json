@@ -1,6 +1,13 @@
 {
   "config": {
     "step": {
+      "reconfigure": {
+        "title": "Change the service URL",
+        "description": "Enter the new base URL of the running service, reachable from Home Assistant. The connection is checked before saving. Your existing entities are preserved.",
+        "data": {
+          "url": "Service URL"
+        }
+      },
       "user": {
         "title": "Connect to Lightinator Log Service",
         "description": "Start the service before continuing. For the Home Assistant add-on, enter http://<home-assistant-host>:4821. For an external container, enter http://<container-host>:4821, or its service name if Home Assistant shares its Docker network. Use an address reachable from Home Assistant. The integration connects to the service; it does not start the container. The URL must return status ok at /api/v1/health.",

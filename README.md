@@ -281,6 +281,11 @@ sources, and the latest crash. The integration device links directly to the
 service frontend. It does not install, start, or supervise the container; use
 the Supervisor add-on for that, or manage an external container separately.
 
+To change an existing service URL, go to **Settings → Devices & Services**,
+open the Lightinator Log Service entry's menu, and select **Reconfigure**.
+Enter the new base URL and submit. Home Assistant validates the connection and
+reloads the integration while keeping your existing entities.
+
 The integration includes local light/dark brand icons, supported by Home
 Assistant 2026.3 and newer. After updating, restart Home Assistant and refresh
 the browser to load the icons. The add-on also includes its own icon. Both use

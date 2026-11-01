@@ -44,6 +44,19 @@ class LogServiceConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Validate the service URL and create the config entry."""
+        return await self._async_step_url("user", user_input)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change the URL without replacing the existing entry or entities."""
+        return await self._async_step_url("reconfigure", user_input)
+
+    async def _async_step_url(
+        self, step_id: str, user_input: dict[str, Any] | None
+    ) -> ConfigFlowResult:
+        """Validate a URL for initial setup or reconfiguration."""
+        entry = self._get_reconfigure_entry() if step_id == "reconfigure" else None
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -65,6 +78,20 @@ class LogServiceConfigFlow(ConfigFlow, domain=DOMAIN):
                     if not isinstance(health, dict) or health.get("status") != "ok":
                         errors["base"] = "invalid_response"
                     else:
+                        if entry is not None:
+                            if any(
+                                other.entry_id != entry.entry_id
+                                and (other.data.get("url") == base_url or other.unique_id == base_url)
+                                for other in self._async_current_entries()
+                            ):
+                                return self.async_abort(reason="already_configured")
+                            self.hass.config_entries.async_update_entry(
+                                entry, unique_id=base_url, title=urlsplit(base_url).netloc
+                            )
+                            return self.async_update_reload_and_abort(
+                                entry,
+                                data_updates={"url": base_url},
+                            )
                         await self.async_set_unique_id(base_url)
                         self._abort_if_unique_id_configured()
                         return self.async_create_entry(
@@ -73,9 +100,9 @@ class LogServiceConfigFlow(ConfigFlow, domain=DOMAIN):
                         )
 
         return self.async_show_form(
-            step_id="user",
+            step_id=step_id,
             data_schema=vol.Schema(
-                {vol.Required("url", default=DEFAULT_URL): str}
+                {vol.Required("url", default=entry.data["url"] if entry else DEFAULT_URL): str}
             ),
             errors=errors,
         )
