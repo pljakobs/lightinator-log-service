@@ -24,15 +24,36 @@ function firmwareArtifactUrls(baseUrl, branch, gitVersion, soc, buildType, fileN
   } else if (basePath.endsWith("/download")) {
     roots = [`${basePath}/firmware`, basePath];
   }
-  const suffix = [branch, gitVersion, soc, buildType, fileName].map(encodeURIComponent).join("/");
-  return [...new Set(roots)].map(root => {
-    const url = new URL(base);
-    const pathname = `${root}/${suffix}`;
-    url.pathname = pathname.startsWith("/") ? pathname : `/${pathname}`;
-    url.search = "";
-    url.hash = "";
-    return url.toString();
-  });
+  const versionMatch = String(gitVersion || "").match(/^V?(\d+)\.(\d+)(?:\.\d+)?-\d+-(.+)$/i);
+  const rawStage = versionMatch?.[3] || branch || "develop";
+  const stage = ({
+    develop: "develop",
+    devel: "develop",
+    experimental: "develop",
+    testing: "testing",
+    test: "testing",
+    prod: "prod",
+    stable: "prod",
+  })[rawStage.toLowerCase()];
+  const canonicalBranch = stage && versionMatch
+    ? `${Number(versionMatch[1])}.${Number(versionMatch[2])}/${stage}`
+    : "";
+  const branches = [...new Set([canonicalBranch, branch, rawStage].filter(Boolean))];
+  const fileParts = [gitVersion, soc, buildType, fileName].map(encodeURIComponent);
+  const urls = [];
+
+  for (const candidate of branches) {
+    const branchPath = candidate.split("/").map(encodeURIComponent).join("/");
+    for (const root of [...new Set(roots)]) {
+      const url = new URL(base);
+      const pathname = `${root}/${[branchPath, ...fileParts].join("/")}`;
+      url.pathname = pathname.startsWith("/") ? pathname : `/${pathname}`;
+      url.search = "";
+      url.hash = "";
+      urls.push(url.toString());
+    }
+  }
+  return [...new Set(urls)];
 }
 
 class AIContextHarvester {

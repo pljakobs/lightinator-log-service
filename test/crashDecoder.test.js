@@ -503,14 +503,23 @@ test("map cache isolates firmware, SoC, and build type and selects architecture 
   assert.equal(requests.length, builds.length);
 });
 
-test("firmware artifact URLs try the current layout before the legacy layout", () => {
+test("firmware artifact URLs use canonical line/stage paths before legacy aliases", () => {
   assert.deepEqual(firmwareArtifactUrls("http://example.test/download", "develop", "V5.0.0-1004-develop", "esp8266", "debug", "app_0.out"), [
+    "http://example.test/download/firmware/5.0/develop/V5.0.0-1004-develop/esp8266/debug/app_0.out",
+    "http://example.test/download/5.0/develop/V5.0.0-1004-develop/esp8266/debug/app_0.out",
     "http://example.test/download/firmware/develop/V5.0.0-1004-develop/esp8266/debug/app_0.out",
     "http://example.test/download/develop/V5.0.0-1004-develop/esp8266/debug/app_0.out",
   ]);
-  assert.deepEqual(firmwareArtifactUrls("http://example.test/download/firmware", "develop", "V5.0.0-980-develop", "esp8266", "debug", "app_0.map"), [
-    "http://example.test/download/firmware/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
-    "http://example.test/download/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
+  assert.deepEqual(firmwareArtifactUrls("http://example.test/download/firmware", "develop", "V5.1.0-1-develop", "esp32", "release", "app.map"), [
+    "http://example.test/download/firmware/5.1/develop/V5.1.0-1-develop/esp32/release/app.map",
+    "http://example.test/download/5.1/develop/V5.1.0-1-develop/esp32/release/app.map",
+    "http://example.test/download/firmware/develop/V5.1.0-1-develop/esp32/release/app.map",
+    "http://example.test/download/develop/V5.1.0-1-develop/esp32/release/app.map",
+  ]);
+  assert.deepEqual(firmwareArtifactUrls("http://example.test/download", "experimental", "V5.0.0-1014-experimental", "esp8266", "debug", "app_0.out").slice(0, 3), [
+    "http://example.test/download/firmware/5.0/develop/V5.0.0-1014-experimental/esp8266/debug/app_0.out",
+    "http://example.test/download/5.0/develop/V5.0.0-1014-experimental/esp8266/debug/app_0.out",
+    "http://example.test/download/firmware/experimental/V5.0.0-1014-experimental/esp8266/debug/app_0.out",
   ]);
 });
 
@@ -521,12 +530,14 @@ test("map retrieval falls back to legacy artifact paths", async context => {
   const requests = [];
   harvester.downloadUrl = async url => {
     requests.push(url);
-    if (url.includes("/download/firmware/")) throw new Error("HTTP status code 404");
+    if (url.includes("/download/firmware/") || url.includes("/download/5.0/develop/")) throw new Error("HTTP status code 404");
     return "legacy map symbols";
   };
 
   assert.equal(await harvester.fetchMapFile("V5.0.0-980-develop", "esp8266", "debug"), "legacy map symbols");
   assert.deepEqual(requests, [
+    "http://example.test/download/firmware/5.0/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
+    "http://example.test/download/5.0/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
     "http://example.test/download/firmware/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
     "http://example.test/download/develop/V5.0.0-980-develop/esp8266/debug/app_0.map",
   ]);
@@ -538,7 +549,7 @@ test("ELF download falls back to legacy artifact paths", async context => {
   const requests = [];
   const server = http.createServer((request, response) => {
     requests.push(request.url);
-    if (request.url.startsWith("/download/firmware/")) {
+    if (request.url.startsWith("/download/firmware/") || request.url.startsWith("/download/5.0/develop/")) {
       response.writeHead(404).end();
       return;
     }
@@ -553,6 +564,8 @@ test("ELF download falls back to legacy artifact paths", async context => {
   await decoder._ensureElf(urls, path.join(cacheDir, "app_0.out"));
   assert.equal(await fs.readFile(path.join(cacheDir, "app_0.out"), "utf8"), "legacy elf");
   assert.deepEqual(requests, [
+    "/download/firmware/5.0/develop/V5.0.0-980-develop/esp8266/debug/app_0.out",
+    "/download/5.0/develop/V5.0.0-980-develop/esp8266/debug/app_0.out",
     "/download/firmware/develop/V5.0.0-980-develop/esp8266/debug/app_0.out",
     "/download/develop/V5.0.0-980-develop/esp8266/debug/app_0.out",
   ]);
