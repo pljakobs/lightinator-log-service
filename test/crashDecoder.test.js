@@ -523,6 +523,15 @@ test("firmware artifact URLs use canonical line/stage paths before legacy aliase
   ]);
 });
 
+test("firmware artifact URLs normalize qualified legacy suffixes and final releases", () => {
+  assert.equal(firmwareArtifactUrls("http://example.test/download", "5.1-develop", "V5.1.0-2-5.1-develop", "esp32", "debug", "app.out")[0],
+    "http://example.test/download/firmware/5.1/develop/V5.1.0-2-5.1-develop/esp32/debug/app.out");
+  assert.equal(firmwareArtifactUrls("http://example.test/download", "5.1/prod", "V5.1.0", "esp32c3", "release", "app.map")[0],
+    "http://example.test/download/firmware/5.1/prod/V5.1.0/esp32c3/release/app.map");
+  const mismatched = firmwareArtifactUrls("http://example.test/download", "develop", "V5.0.0-2-5.1-develop", "esp32", "debug", "app.out");
+  assert.ok(mismatched.every(url => !url.includes("/firmware/5.0/develop/")));
+});
+
 test("map retrieval falls back to legacy artifact paths", async context => {
   const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-map-fallback-"));
   context.after(() => fs.rm(cacheDir, { recursive: true, force: true }));

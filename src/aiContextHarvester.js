@@ -24,8 +24,10 @@ function firmwareArtifactUrls(baseUrl, branch, gitVersion, soc, buildType, fileN
   } else if (basePath.endsWith("/download")) {
     roots = [`${basePath}/firmware`, basePath];
   }
-  const versionMatch = String(gitVersion || "").match(/^V?(\d+)\.(\d+)(?:\.\d+)?-\d+-(.+)$/i);
+  const versionMatch = String(gitVersion || "").match(/^V?(\d+)\.(\d+)(?:\.\d+)?(?:-\d+-(.+))?$/i);
   const rawStage = versionMatch?.[3] || branch || "develop";
+  const qualifiedStage = rawStage.match(/^(\d+\.\d+)[/-](.+)$/);
+  const releaseLine = versionMatch ? `${Number(versionMatch[1])}.${Number(versionMatch[2])}` : "";
   const stage = ({
     develop: "develop",
     devel: "develop",
@@ -34,9 +36,9 @@ function firmwareArtifactUrls(baseUrl, branch, gitVersion, soc, buildType, fileN
     test: "testing",
     prod: "prod",
     stable: "prod",
-  })[rawStage.toLowerCase()];
-  const canonicalBranch = stage && versionMatch
-    ? `${Number(versionMatch[1])}.${Number(versionMatch[2])}/${stage}`
+  })[(qualifiedStage?.[2] || rawStage).toLowerCase()];
+  const canonicalBranch = stage && releaseLine && (!qualifiedStage || qualifiedStage[1] === releaseLine)
+    ? `${releaseLine}/${stage}`
     : "";
   const branches = [...new Set([canonicalBranch, branch, rawStage].filter(Boolean))];
   const fileParts = [gitVersion, soc, buildType, fileName].map(encodeURIComponent);
