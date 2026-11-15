@@ -366,6 +366,24 @@ Error`, `pc=… sp=… excvaddr=…`, `epc1=…`) starts collection of the follo
 register and stack lines. Logger prefixes are stripped, and truncated stack data
 is recovered from the stored log when a decode is rerun.
 
+Collection ends at the first line that is not crash content, after 5 s without
+a new line, or after 1024 lines. Crash content is any line logged by
+`reportCrashDump` or any line that matches the dump grammar:
+
+- triggers
+- `key=0x…` lists
+- `NAME : 0x…` register rows and `Core N register dump:`
+- `Stack dump:`, `Stack memory:`, `Backtrace:` and `Backtrace (N frames):`
+- `#N pc=0x…` frames, `addr: words` stack rows and `0x…:0x…` backtrace pairs
+- `*** … ***` banners
+- the ESP8266 `Exception (N):`, `>>>stack>>>`, `ctx:`, `sp: … end: … offset:`
+  and `CUT HERE` lines
+- `ELF file SHA256:` and `Rebooting...`
+
+Everything else, such as boot or Wi-Fi logs, ends the dump. If report lines are
+lost over UDP, normal logs are therefore never decoded as part of the crash. A
+new trigger that arrives after the stack section starts a new report.
+
 ### Build resolution
 
 The firmware version, Sming version, SoC and build type are taken from the
