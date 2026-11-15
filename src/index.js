@@ -1,6 +1,10 @@
 const dgram = require("dgram");
 const path = require("path");
 const fs = require("fs/promises");
+const { createWriteStream } = require("fs");
+const crypto = require("crypto");
+const { Transform } = require("stream");
+const { pipeline } = require("stream/promises");
 const express = require("express");
 const cors = require("cors");
 const os = require("os");
@@ -20,6 +24,8 @@ const { CrashReporter } = require("./crashReporter");
 const { FirmwareUpdater } = require("./firmwareUpdater");
 const { version: pkgVersion } = require("../package.json");
 const { AIService } = require("./aiService");
+const { StreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/streamableHttp.js");
+const { createMcpServer } = require("./mcp");
 const version = process.env.APP_VERSION || pkgVersion;
 const { readServiceEnv, writeServiceEnv, loadServiceEnvironment, getServiceCredential, getPublicServiceConfig, getAIBackends } = require("./serviceConfig");
 
@@ -189,6 +195,29 @@ async function main() {
     res.sendFile(path.join(__dirname, "../images/lightinator-log-service-icon-dark.svg"));
   });
   app.use(express.static(path.join(__dirname, "ui")));
+
+  // Stateless MCP over Streamable HTTP. Tools call this service's own HTTP API over loopback;
+  // upload commands are addressed to the URL the MCP client used.
+  const loopbackHost = ["0.0.0.0", "::", ""].includes(config.host) ? "127.0.0.1" : config.host;
+  const mcpBaseUrl = `http://${loopbackHost.includes(":") ? `[${loopbackHost}]` : loopbackHost}:${config.httpPort}/`;
+  app.post("/mcp", async (req, res) => {
+    const server = createMcpServer({ baseUrl: mcpBaseUrl, transport: "http", publicUrl: `${req.protocol}://${req.get("host")}/` });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    res.on("close", () => {
+      transport.close().catch(() => {});
+      server.close().catch(() => {});
+    });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (err) {
+      console.error("MCP request failed:", err);
+      if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null });
+    }
+  });
+  app.all("/mcp", (_req, res) => {
+    res.status(405).set("Allow", "POST").json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
+  });
 
   function removeControllers(ips, purgeLogs) {
     const removed = [];
@@ -407,6 +436,57 @@ async function main() {
       const record = storage.getCrashRecord(id);
       res.json({ id, crashDecode, rawDump: record?.raw || null });
     } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/crashes/:id/artifacts", async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!id || Number.isNaN(id)) return res.status(400).json({ error: "Invalid log id" });
+      if (!crashDecoder) return res.status(503).json({ error: "CrashDecoder instance not available" });
+      res.json(await crashDecoder.artifactStatus(id));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Raw request body (application/octet-stream) is the ELF or map; X-Filename optionally names it.
+  app.put("/api/v1/crashes/:id/artifacts/:kind", async (req, res, next) => {
+    let temporaryPath = null;
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!id || Number.isNaN(id)) return res.status(400).json({ error: "Invalid log id" });
+      if (!["elf", "map"].includes(req.params.kind)) return res.status(400).json({ error: "Artifact kind must be elf or map" });
+      if (!crashDecoder) return res.status(503).json({ error: "CrashDecoder instance not available" });
+      const maxBytes = config.artifactUploadMaxBytes;
+      if (Number(req.headers["content-length"]) > maxBytes) {
+        return res.status(413).json({ error: `Upload exceeds ${Math.round(maxBytes / 1048576)} MiB limit` });
+      }
+
+      const uploadDir = crashDecoder._artifactUploadDir();
+      await fs.mkdir(uploadDir, { recursive: true });
+      temporaryPath = path.join(uploadDir, `${id}-${req.params.kind}-${crypto.randomUUID()}`);
+      let received = 0;
+      const limiter = new Transform({
+        transform(chunk, _encoding, callback) {
+          received += chunk.length;
+          if (received > maxBytes) {
+            const error = new Error(`Upload exceeds ${Math.round(maxBytes / 1048576)} MiB limit`);
+            error.status = 413;
+            callback(error);
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(req, limiter, createWriteStream(temporaryPath));
+      const result = await crashDecoder.storeUploadedArtifact(id, req.params.kind, temporaryPath, req.get("x-filename") || null);
+      temporaryPath = null;
+      res.json(result);
+    } catch (err) {
+      if (temporaryPath) await fs.unlink(temporaryPath).catch(() => {});
+      if (err.status === 413) req.resume();
       next(err);
     }
   });

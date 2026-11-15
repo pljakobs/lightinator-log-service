@@ -92,6 +92,42 @@ test("decoder rerun endpoint validates crash ids", async () => {
   assert.deepEqual(await response.json(), { error: "Invalid log id" });
 });
 
+test("crash artifact endpoints validate kind, id and crash existence", async () => {
+  const put = (url, body = "x") => fetch(`${srv.baseUrl}${url}`, {
+    method: "PUT", body, headers: { "Content-Type": "application/octet-stream", "X-Filename": "app.out" },
+  });
+  let response = await put("/api/v1/crashes/1/artifacts/bin");
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error, /elf or map/);
+  response = await put("/api/v1/crashes/nope/artifacts/elf");
+  assert.equal(response.status, 400);
+  response = await put("/api/v1/crashes/999999/artifacts/elf", Buffer.from("\x7fELF"));
+  assert.equal(response.status, 404);
+  assert.match((await response.json()).error, /not found/);
+  response = await fetch(`${srv.baseUrl}/api/v1/crashes/999999/artifacts`);
+  assert.equal(response.status, 404);
+});
+
+test("service hosts the MCP tools over streamable HTTP", async () => {
+  const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
+  const { StreamableHTTPClientTransport } = require("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const client = new Client({ name: "integration", version: "1.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${srv.baseUrl}/mcp`)));
+  try {
+    const names = (await client.listTools()).tools.map(tool => tool.name);
+    assert.ok(names.includes("prepare_crash_artifact_upload"));
+    assert.ok(names.includes("rerun_crash_decode"));
+    assert.ok(!names.includes("decode_crash_with_artifacts"));
+    const result = await client.callTool({ name: "get_recent_logs", arguments: { ip, limit: 2 } });
+    assert.notEqual(result.isError, true, result.content[0].text);
+    assert.equal(JSON.parse(result.content[0].text).data.items.length, 2);
+  } finally {
+    await client.close();
+  }
+  const get = await fetch(`${srv.baseUrl}/mcp`);
+  assert.equal(get.status, 405);
+});
+
 test("changelog endpoint returns build info and a builds array", async () => {
   const data = await api("/api/v1/changelog");
   assert.ok(data.buildNumber);

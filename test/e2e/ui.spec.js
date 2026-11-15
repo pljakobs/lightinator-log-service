@@ -308,6 +308,48 @@ test("failed decoder rerun displays the error and raw stack in the crash window"
   await expect(page.locator("#crash-modal-body")).toHaveText("pc=0x40201000\nStack dump:\n3ffff000: 40201000");
 });
 
+test("uploading ELF and map from the crash window installs them in order and shows the new decode", async ({ page }) => {
+  const calls = [];
+  await page.route("**/api/v1/crashes/45/artifacts", route => route.fulfill({ json: {
+    id: 45, gitVersion: "V5.1-1-develop-dirty", soc: "esp32", buildType: "debug", elf: { present: false }, map: { present: false },
+  } }));
+  await page.route("**/api/v1/crashes/45/artifacts/*", async route => {
+    const request = route.request();
+    calls.push(`${request.method()} ${new URL(request.url()).pathname.split("/").pop()} ${request.headers()["x-filename"]} ${request.postDataBuffer().length}`);
+    await route.fulfill({ json: { kind: "elf" } });
+  });
+  await page.route("**/api/v1/crashes/45/decode", route => {
+    calls.push("POST decode");
+    return route.fulfill({ json: { id: 45, crashDecode: "PC: Application::crash() at application.cpp:1738", rawDump: "pc=0x400d5ca2" } });
+  });
+  await page.evaluate(async () => {
+    const { openCrashModal } = await import("/js/crash.js");
+    openCrashModal({ id: 45, sourceIp: "192.0.2.45", crashDecode: "[ELF download failed: HTTP 404]" });
+  });
+
+  await expect(page.locator("#crash-upload-btn")).toBeVisible();
+  await page.locator("#crash-upload-btn").hover();
+  await expect(page.locator("#crash-upload-btn")).toHaveAttribute("title", /V5\.1-1-develop-dirty · esp32 · debug\nELF: not cached/);
+  await page.locator("#crash-upload-input").setInputFiles([
+    { name: "app.map", mimeType: "text/plain", buffer: Buffer.from("map") },
+    { name: "app.out", mimeType: "application/octet-stream", buffer: Buffer.from("\x7fELF-image") },
+  ]);
+  await expect(page.locator("#crash-modal-body")).toContainText("application.cpp:1738");
+  expect(calls).toEqual(["PUT elf app.out 10", "PUT map app.map 3", "POST decode"]);
+});
+
+test("Copilot settings offer one-click MCP install for the hosted endpoint", async ({ page }) => {
+  await page.locator("#settings-btn").click();
+  await page.locator('.stab[data-stab="copilot"]').click();
+  const url = `${srv.baseUrl}/mcp`;
+  await expect(page.locator("#mcp-url")).toHaveValue(url);
+  await expect(page.locator("#stab-footer-svc")).toBeHidden();
+  const href = await page.locator("#mcp-install-vscode").getAttribute("href");
+  expect(href.startsWith("vscode:mcp/install?")).toBe(true);
+  expect(JSON.parse(decodeURIComponent(href.slice("vscode:mcp/install?".length)))).toEqual({ name: "lightinator-logs", type: "http", url });
+  expect(JSON.parse(await page.locator("#mcp-config-json").inputValue())).toEqual({ mcpServers: { "lightinator-logs": { type: "http", url } } });
+});
+
 test("credential settings are write-only and support replacement, preservation, and clearing", async ({ page }) => {
   const save = await page.request.post(srv.baseUrl + '/api/v1/service-config', {
     data: { values: { LLS_GITHUB_TOKEN: 'browser-private-token', GEMINI_API_KEY: 'browser-private-key' } },
@@ -418,9 +460,9 @@ test("AI provider settings edit fallback order and preserve write-only backend t
   expect(JSON.stringify(settings)).not.toContain('provider-private-token');
 });
 
-test("settings open populated Service first with Loki second and dedicated AI and GitHub tabs", async ({ page }) => {
+test("settings open populated Service first with Loki second and dedicated AI, GitHub and Copilot tabs", async ({ page }) => {
   await page.locator('#settings-btn').click();
-  await expect(page.locator('.stab')).toHaveText(['Service', 'Loki', 'AI', 'GitHub']);
+  await expect(page.locator('.stab')).toHaveText(['Service', 'Loki', 'AI', 'GitHub', 'Copilot']);
   await expect(page.locator('.stab[data-stab="svc"]')).toHaveClass(/active/);
   await expect(page.locator('#svc-field-LLS_HTTP_PORT')).toBeVisible();
   await expect(page.locator('#svc-fields .field-row')).not.toHaveCount(0);

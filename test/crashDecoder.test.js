@@ -661,3 +661,84 @@ test("source range requests honor ranges, full-file expansion, and UTF-8 budgets
   assert.equal(full[0].stopLine, 4);
   assert.equal((await harvester.getContextFiles([{ file: "sample.cpp", full_file: true }], { app: temp }, { maxBytes: 2 })).length, 0);
 });
+function fakeElf(machine, extra = "") {
+  const header = Buffer.alloc(52);
+  header.writeUInt32BE(0x7f454c46, 0);
+  header[4] = 1;
+  header[5] = 1;
+  header.writeUInt16LE(machine, 18);
+  return Buffer.concat([header, Buffer.alloc(70 * 1024), Buffer.from(extra)]);
+}
+
+async function artifactFixture(context, { gitVersion = "V5.1-12-develop-host-dirty", soc = "esp32" } = {}) {
+  const db = openDatabase(":memory:");
+  context.after(() => db.close());
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lls-artifacts-"));
+  context.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const storage = new LogStorage({ db, dataDir: "/nonexistent" });
+  const id = await storage.append("192.0.2.7", { message: "crash" });
+  await storage.updateCrashDecode(id, "decode failed", { rawDump: "Backtrace: 0x400d1234:0x3ffb0000", gitVersion, soc, buildType: "debug" });
+  const decoder = Object.create(CrashDecoder.prototype);
+  const harvesterDir = path.join(dir, "context");
+  Object.assign(decoder, {
+    storage, db, elfCacheDir: path.join(dir, "elf"), _log: () => {},
+    harvester: { mapCachePath: (git, socKey, type) => path.join(harvesterDir, `${encodeURIComponent(git)}-${socKey}-${type}-app.map`) },
+  });
+  let n = 0;
+  const upload = async content => {
+    const file = path.join(dir, `upload-${n++}`);
+    await fs.writeFile(file, content);
+    return file;
+  };
+  return { decoder, id, dir, upload, gitVersion };
+}
+
+const MAP_TEXT = "Archive member included to satisfy reference by file (symbol)\n\n/lib/libc.a(x.o)  app.o (memcpy)\n";
+
+test("uploaded ELF and map are validated and installed in the per-version cache", async context => {
+  const { decoder, id, dir, upload, gitVersion } = await artifactFixture(context);
+  const elfUpload = await upload(fakeElf(94, `\0${gitVersion}\0`));
+  const elf = await decoder.storeUploadedArtifact(id, "elf", elfUpload, "../../app.out");
+  assert.equal(elf.originalName, "app.out");
+  assert.equal(elf.soc, "esp32");
+  assert.match(elf.sha256, /^[0-9a-f]{64}$/);
+  await assert.rejects(fs.access(elfUpload));
+  const elfPath = path.join(dir, "elf", `${gitVersion}-esp32-debug.elf`);
+  await fs.access(elfPath);
+
+  await decoder.storeUploadedArtifact(id, "map", await upload(MAP_TEXT), "app.map");
+  const harvesterMap = decoder.harvester.mapCachePath(gitVersion, "esp32", "debug");
+  assert.equal(await fs.readFile(harvesterMap, "utf8"), MAP_TEXT);
+  const status = await decoder.artifactStatus(id);
+  assert.equal(status.elf.source, "uploaded");
+  assert.equal(status.map.originalName, "app.map");
+
+  // A newer ELF for the same version discards the map that belonged to the previous build.
+  await decoder.storeUploadedArtifact(id, "elf", await upload(fakeElf(94, `${gitVersion} rebuilt`)), "app.out");
+  assert.equal((await decoder.artifactStatus(id)).map.present, false);
+  await assert.rejects(fs.access(harvesterMap));
+});
+
+test("uploaded artifacts that do not match the crashed build are rejected", async context => {
+  const { decoder, id, upload, gitVersion } = await artifactFixture(context);
+  const cases = [
+    [fakeElf(243, gitVersion), /machine 243 does not match esp32/, 422],
+    [fakeElf(94, "V5.1-other-build"), /does not contain firmware version/, 422],
+    [Buffer.from("not an elf at all"), /not an ELF image/, 400],
+  ];
+  for (const [content, message, status] of cases) {
+    const file = await upload(content);
+    await assert.rejects(decoder.storeUploadedArtifact(id, "elf", file), error => message.test(error.message) && error.status === status);
+    await assert.rejects(fs.access(file));
+  }
+  await assert.rejects(decoder.storeUploadedArtifact(id, "map", await upload(fakeElf(94, gitVersion))), /GNU ld linker map/);
+  await assert.rejects(decoder.storeUploadedArtifact(id, "bin", await upload("x")), /Unknown artifact kind/);
+  await assert.rejects(decoder.storeUploadedArtifact(id + 1000, "elf", await upload("x")), error => error.status === 404);
+  assert.equal((await decoder.artifactStatus(id)).elf.present, false);
+});
+
+test("artifact uploads cannot escape the ELF cache through the recorded firmware version", async context => {
+  const { decoder, id, upload } = await artifactFixture(context, { gitVersion: "../../../etc/evil" });
+  await assert.rejects(decoder.storeUploadedArtifact(id, "elf", await upload(fakeElf(94, "../../../etc/evil"))),
+    error => error.status === 422 && /safe ELF cache path/.test(error.message));
+});

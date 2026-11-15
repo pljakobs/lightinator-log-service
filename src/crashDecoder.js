@@ -12,6 +12,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
+const crypto = require("crypto");
 const http = require("http");
 const https = require("https");
 const { AIContextHarvester, firmwareArtifactUrls } = require("./aiContextHarvester");
@@ -67,11 +68,57 @@ const STACK_HEADER_RE = /(?:[Ss]tack dump:|[Ss]tack memory:|Backtrace:)/i;
 const STACK_LINE_RE = /^[0-9a-f]{8}:\s+(?:0x)?[0-9a-f]{8}/i;
 const BACKTRACE_LINE_RE = /(?:Backtrace:\s*)?(?:0x[0-9a-f]{8}:0x[0-9a-f]{8}\s*)+/i;
 
+const EM_XTENSA = 94;
+const EM_RISCV = 243;
+const ARTIFACT_KINDS = ["elf", "map"];
+const MAP_SIGNATURES = ["Archive member included", "Memory Configuration", "Linker script and memory map", "Discarded input sections"];
+
+class ArtifactError extends Error {
+  constructor(message, status = 400) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function fileContains(filePath, needle) {
+  const pattern = Buffer.from(needle, "utf8");
+  if (!pattern.length) return false;
+  let tail = Buffer.alloc(0);
+  for await (const chunk of fs.createReadStream(filePath, { highWaterMark: 1 << 20 })) {
+    const window = Buffer.concat([tail, chunk]);
+    if (window.includes(pattern)) return true;
+    tail = window.subarray(Math.max(0, window.length - pattern.length + 1));
+  }
+  return false;
+}
+
+async function sha256File(filePath) {
+  const hash = crypto.createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+async function readHead(filePath, length) {
+  const handle = await fsp.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readJsonFile(filePath) {
+  try { return JSON.parse(await fsp.readFile(filePath, "utf8")); } catch { return null; }
+}
+
 const SOC_CONFIG = {
   esp8266: {
     script:          path.join(__dirname, "../tools/decode-esp8266.py"),
     remoteScriptUrl: "https://raw.githubusercontent.com/SmingHub/Sming/develop/Sming/Arch/Esp8266/Tools/decode-stacktrace.py",
     elfFile:         "app_0.out",
+    elfMachine:      EM_XTENSA,
     smingArch:       "Esp8266",
     smingSOC:        "esp8266",
   },
@@ -79,6 +126,7 @@ const SOC_CONFIG = {
     script:          path.join(__dirname, "../tools/decode-esp32.py"),
     remoteScriptUrl: "https://raw.githubusercontent.com/SmingHub/Sming/develop/Sming/Arch/Esp32/Tools/decode-stacktrace.py",
     elfFile:         "app.out",
+    elfMachine:      EM_XTENSA,
     smingArch:       "Esp32",
     smingSOC:        "esp32",
   },
@@ -86,6 +134,7 @@ const SOC_CONFIG = {
     script:          path.join(__dirname, "../tools/decode-esp32.py"),
     remoteScriptUrl: "https://raw.githubusercontent.com/SmingHub/Sming/develop/Sming/Arch/Esp32/Tools/decode-stacktrace.py",
     elfFile:         "app.out",
+    elfMachine:      EM_RISCV,
     smingArch:       "Esp32",
     smingSOC:        "esp32c3",
   },
@@ -293,7 +342,17 @@ class CrashDecoder {
       `Target firmware=${git_version}, Sming=${sming_version || "unknown"}, soc=${socKey}, build=${type}`);
 
     const elfUrls = firmwareArtifactUrls(this.elfBaseUrl, branch, git_version, socKey, type, cfg.elfFile);
-    const elfPath = path.join(this.elfCacheDir, `${git_version}-${socKey}-${type}.elf`);
+    let elfPath;
+    try {
+      elfPath = this._elfCachePath(git_version, socKey, type);
+    } catch (err) {
+      const reason = `[Crash decode skipped: ${err.message}]`;
+      this._log(ip, triggerRecordId, reason, "warn");
+      if (this.storage && triggerRecordId) {
+        await this.storage.updateCrashDecode(triggerRecordId, decodeFailureWithDump(reason, lines.join("\n")));
+      }
+      return;
+    }
 
     try {
       this._log(ip, triggerRecordId, `Preparing ELF ${path.basename(elfPath)}`);
@@ -507,6 +566,120 @@ class CrashDecoder {
     }
   }
 
+  _elfCachePath(gitVersion, socKey, buildType) {
+    const root = path.resolve(this.elfCacheDir);
+    const elfPath = path.resolve(root, `${gitVersion}-${socKey}-${buildType}.elf`);
+    if (!elfPath.startsWith(root + path.sep)) {
+      throw new Error(`firmware version "${gitVersion}" does not map to a safe ELF cache path`);
+    }
+    return elfPath;
+  }
+
+  _artifactUploadDir() {
+    return path.join(path.resolve(this.elfCacheDir), ".uploads");
+  }
+
+  /** Firmware identity and cache locations used to decode a stored crash report. */
+  _artifactTarget(triggerRecordId) {
+    const { rawLog, ip, git_version, soc, build_type } = this._resolveRecordFirmware(triggerRecordId);
+    if (!rawLog) throw new ArtifactError(`Crash report ${triggerRecordId} not found`, 404);
+    if (!git_version || !soc) throw new ArtifactError("Crash report has no recorded firmware version or SoC", 409);
+    const socKey = soc.toLowerCase();
+    const cfg = SOC_CONFIG[socKey];
+    if (!cfg) throw new ArtifactError(`Unsupported SOC "${soc}"`, 422);
+    const buildType = build_type || "debug";
+    let elfPath;
+    try {
+      elfPath = this._elfCachePath(git_version, socKey, buildType);
+    } catch (err) {
+      throw new ArtifactError(err.message, 422);
+    }
+    const mapPath = path.join(path.dirname(elfPath), `${path.basename(elfPath, ".elf")}.map`);
+    const harvesterMapPath = this.harvester?.mapCachePath?.(git_version, socKey, buildType) || null;
+    return { ip, gitVersion: git_version, soc: socKey, buildType, cfg, elfPath, mapPath, harvesterMapPath };
+  }
+
+  async _artifactInfo(filePath) {
+    let stat;
+    try { stat = await fsp.stat(filePath); } catch { return { present: false }; }
+    const upload = await readJsonFile(`${filePath}.upload.json`);
+    return {
+      present: true,
+      size: stat.size,
+      source: upload ? "uploaded" : "downloaded",
+      ...(upload ? { uploadedAt: upload.uploadedAt, originalName: upload.originalName, sha256: upload.sha256 } : {}),
+    };
+  }
+
+  async artifactStatus(triggerRecordId) {
+    const target = this._artifactTarget(triggerRecordId);
+    return {
+      id: triggerRecordId,
+      gitVersion: target.gitVersion,
+      soc: target.soc,
+      buildType: target.buildType,
+      elf: await this._artifactInfo(target.elfPath),
+      map: await this._artifactInfo(target.mapPath),
+    };
+  }
+
+  /**
+   * Validate an uploaded ELF or linker map and install it in the per-firmware-version
+   * cache used by automatic and manual decoding. Consumes `uploadedPath`.
+   */
+  async storeUploadedArtifact(triggerRecordId, kind, uploadedPath, originalName = null) {
+    try {
+      if (!ARTIFACT_KINDS.includes(kind)) throw new ArtifactError(`Unknown artifact kind "${kind}"; expected elf or map`);
+      const target = this._artifactTarget(triggerRecordId);
+      const { size } = await fsp.stat(uploadedPath);
+      if (!size) throw new ArtifactError(`Uploaded ${kind} file is empty`);
+      const head = await readHead(uploadedPath, 64 * 1024);
+
+      if (kind === "elf") {
+        if (head.length < 20 || head.readUInt32BE(0) !== 0x7f454c46) {
+          throw new ArtifactError("Uploaded file is not an ELF image");
+        }
+        if (head[4] !== 1) throw new ArtifactError("Uploaded ELF is not a 32-bit image");
+        const machine = head[5] === 2 ? head.readUInt16BE(18) : head.readUInt16LE(18);
+        if (machine !== target.cfg.elfMachine) {
+          throw new ArtifactError(`Uploaded ELF machine ${machine} does not match ${target.soc} (expected ${target.cfg.elfMachine})`, 422);
+        }
+        if (!await fileContains(uploadedPath, target.gitVersion)) {
+          throw new ArtifactError(`Uploaded ELF does not contain firmware version "${target.gitVersion}"; it is not the build that crashed`, 422);
+        }
+      } else {
+        const text = head.toString("latin1");
+        if (head.includes(0) || !MAP_SIGNATURES.some(signature => text.includes(signature))) {
+          throw new ArtifactError("Uploaded file does not look like a GNU ld linker map");
+        }
+      }
+
+      const sha256 = await sha256File(uploadedPath);
+      const destination = kind === "elf" ? target.elfPath : target.mapPath;
+      const marker = { uploadedAt: new Date().toISOString(), originalName: originalName ? path.basename(String(originalName)) : null, size, sha256 };
+      await fsp.mkdir(path.dirname(destination), { recursive: true });
+      await fsp.writeFile(`${destination}.upload.json`, JSON.stringify(marker));
+      await fsp.rename(uploadedPath, destination);
+
+      if (kind === "elf") {
+        // A new ELF invalidates any map cached for this version; it may belong to an older build.
+        for (const stale of [target.mapPath, `${target.mapPath}.upload.json`, target.harvesterMapPath]) {
+          if (stale) await fsp.unlink(stale).catch(() => {});
+        }
+      } else if (target.harvesterMapPath) {
+        await fsp.mkdir(path.dirname(target.harvesterMapPath), { recursive: true });
+        const temporaryPath = `${target.harvesterMapPath}.tmp`;
+        await fsp.copyFile(destination, temporaryPath);
+        await fsp.rename(temporaryPath, target.harvesterMapPath);
+      }
+      this._log(target.ip || "manual", triggerRecordId,
+        `Installed uploaded ${kind} for ${target.gitVersion}/${target.soc}/${target.buildType} (${size} bytes, sha256 ${sha256.slice(0, 12)})`);
+      return { id: triggerRecordId, kind, gitVersion: target.gitVersion, soc: target.soc, buildType: target.buildType, ...marker };
+    } finally {
+      await fsp.unlink(uploadedPath).catch(() => {});
+    }
+  }
+
   analyzeRecord(triggerRecordId, onProgress = null) {
     return this._enqueueDecode(() => this._analyzeRecord(triggerRecordId, true, onProgress));
   }
@@ -559,8 +732,8 @@ class CrashDecoder {
     return recovered.join("\n");
   }
 
-  async _analyzeRecord(triggerRecordId, analyzeWithAI = true, onProgress = null) {
-    this._log("manual", triggerRecordId, `${analyzeWithAI ? "Starting AI re-analysis" : "Starting decoder rerun"}`);
+  /** Saved raw dump and the firmware build of the boot that produced a stored crash report. */
+  _resolveRecordFirmware(triggerRecordId) {
     let rawLog = null;
     let ip = null;
     let git_version = null;
@@ -613,6 +786,12 @@ class CrashDecoder {
       soc = bootInfo.soc || soc;
       build_type = bootInfo.build_type || build_type;
     }
+    return { rawLog, ip, boot, git_version, sming_version, soc, build_type };
+  }
+
+  async _analyzeRecord(triggerRecordId, analyzeWithAI = true, onProgress = null) {
+    this._log("manual", triggerRecordId, `${analyzeWithAI ? "Starting AI re-analysis" : "Starting decoder rerun"}`);
+    let { rawLog, ip, boot, git_version, sming_version, soc, build_type } = this._resolveRecordFirmware(triggerRecordId);
 
     if (!rawLog) {
       this._log(ip || "manual", triggerRecordId, "Cannot rerun: saved crash dump was not found", "error");
@@ -640,7 +819,7 @@ class CrashDecoder {
     const type = build_type || "debug";
 
     const elfUrls = firmwareArtifactUrls(this.elfBaseUrl, branch, git_version, socKey, type, cfg.elfFile);
-    const elfPath = path.join(this.elfCacheDir, `${git_version}-${socKey}-${type}.elf`);
+    const elfPath = this._elfCachePath(git_version, socKey, type);
 
     await this._ensureElf(elfUrls, elfPath);
     await this._ensureScript(cfg);
@@ -710,6 +889,10 @@ class CrashDecoder {
   async _decodeWithContext(cfg, elfPath, lines, repoPaths) {
     lines = lines.map(normalizeCrashDumpLine);
     let decoded = await this._runDecode(cfg, elfPath, lines, repoPaths);
+    const upload = await readJsonFile(`${elfPath}.upload.json`);
+    if (upload) {
+      decoded = `[Decoded with user-uploaded ELF${upload.originalName ? ` "${upload.originalName}"` : ""}, sha256 ${String(upload.sha256).slice(0, 12)}, uploaded ${upload.uploadedAt}]\n${decoded}`;
+    }
     let codeSnippets = [];
     try {
       codeSnippets = await this.harvester.extractSnippets(decoded, repoPaths);
@@ -780,4 +963,4 @@ class CrashDecoder {
   }
 }
 
-module.exports = { CrashDecoder, stripAnsi, extractCrashFingerprint };
+module.exports = { CrashDecoder, ArtifactError, stripAnsi, extractCrashFingerprint };
