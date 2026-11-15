@@ -615,6 +615,7 @@ class CrashDecoder {
     const target = this._artifactTarget(triggerRecordId);
     return {
       id: triggerRecordId,
+      ip: target.ip || null,
       gitVersion: target.gitVersion,
       soc: target.soc,
       buildType: target.buildType,

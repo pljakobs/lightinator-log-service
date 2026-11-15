@@ -710,6 +710,7 @@ test("uploaded ELF and map are validated and installed in the per-version cache"
   const harvesterMap = decoder.harvester.mapCachePath(gitVersion, "esp32", "debug");
   assert.equal(await fs.readFile(harvesterMap, "utf8"), MAP_TEXT);
   const status = await decoder.artifactStatus(id);
+  assert.equal(status.ip, "192.0.2.7");
   assert.equal(status.elf.source, "uploaded");
   assert.equal(status.map.originalName, "app.map");
 

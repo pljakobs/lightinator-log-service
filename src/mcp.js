@@ -209,9 +209,17 @@ class LogServiceClient {
     return data;
   }
 
+  // Uses the crash archive, which outlives log retention, rather than the crash's log row.
   async _assertCrashOfController(ip, id) {
-    const page = await this.logs({ ip, from: id, limit: 1 });
-    if (!page.items.some(item => item.id === id)) throw new Error(`Crash report ${id} is not available for ${ip}`);
+    let status;
+    try {
+      status = await this.send("GET", `crashes/${id}/artifacts`);
+    } catch (error) {
+      if (/\bnot found\b|HTTP 404/.test(error.message)) throw new Error(`Crash report ${id} is not available for ${ip}`);
+      throw error;
+    }
+    if (status.ip !== ip) throw new Error(`Crash report ${id} is not available for ${ip}`);
+    return status;
   }
 
   async _uploadArtifact(id, kind, filePath) {
@@ -257,8 +265,7 @@ class LogServiceClient {
 
   /** Shell commands for the caller to upload its local build artifacts to `publicUrl`. */
   async artifactUploadPlan({ ip, id, elfPath, mapPath }, publicUrl) {
-    await this._assertCrashOfController(ip, id);
-    const status = await this.request(`crashes/${id}/artifacts`);
+    const status = await this._assertCrashOfController(ip, id);
     const upload = (kind, filePath) => {
       const name = String(filePath).split(/[\\/]/).pop();
       const url = new URL(`api/v1/crashes/${id}/artifacts/${kind}`, publicUrl).href;
