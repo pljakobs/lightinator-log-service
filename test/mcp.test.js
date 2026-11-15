@@ -41,6 +41,9 @@ async function fixture(t, override = () => undefined, stdio = false, serverOptio
         case "/api/v1/controllers": data = { items: [{ ip, name: "test controller" }] }; break;
         case "/api/v1/boots": data = { items: boots }; break;
         case "/api/v1/crashes": data = { items: [{ id: 31, ip, boot: 3, receivedAt: rows[4].receivedAt }], total: 1 }; break;
+        case "/api/v1/crashes/31/artifacts":
+          data = { id: 31, ip, gitVersion: "V2", soc: "esp32", buildType: "debug", elf: { present: false }, map: { present: false } };
+          break;
         case "/api/v1/logs/31/crash-decode":
           data = { id: 31, crashDecode: "PC: firmware.cpp:42", rawDump: "raw crash", gitVersion: "V2", smingVersion: "S1", soc: "esp32", buildType: "debug" };
           break;
@@ -511,7 +514,7 @@ test("decode_crash_with_artifacts streams local ELF then map and returns the rer
 test("hosted MCP returns quoted curl upload commands for the client's service URL", async t => {
   const { data, client } = await fixture(t, url => {
     if (url.pathname === "/api/v1/crashes/31/artifacts") {
-      return { id: 31, gitVersion: "V5.1-1-develop-dirty", soc: "esp32", buildType: "debug", elf: { present: false }, map: { present: false } };
+      return { id: 31, ip, gitVersion: "V5.1-1-develop-dirty", soc: "esp32", buildType: "debug", elf: { present: false }, map: { present: false } };
     }
     return undefined;
   }, false, { transport: "http", publicUrl: "http://logs.example:4821/" });
@@ -536,4 +539,19 @@ test("rerun_crash_decode checks the controller and returns the new decode", asyn
   const result = await data("rerun_crash_decode", { ip, id: 31 });
   assert.equal(result.crashDecode, "PC: app.cpp:7");
   assert.ok(requests.some(r => r.method === "POST" && r.path === "/api/v1/crashes/31/decode"));
+});
+
+test("rerun_crash_decode accepts archived crashes whose log row has expired", async t => {
+  const { data, call, requests } = await fixture(t, url => {
+    if (url.pathname === "/api/v1/logs") return { items: [], total: 0, nextBefore: null, nextAfter: null };
+    if (url.pathname === "/api/v1/crashes/31/decode") return { id: 31, crashDecode: "PC: app.cpp:7", rawDump: "raw" };
+    return undefined;
+  });
+  const result = await data("rerun_crash_decode", { ip, id: 31 });
+  assert.equal(result.crashDecode, "PC: app.cpp:7");
+
+  const unknown = await call("rerun_crash_decode", { ip, id: 32 });
+  assert.equal(unknown.isError, true);
+  assert.match(unknown.content[0].text, /Crash report 32 is not available for/);
+  assert.equal(requests.filter(r => r.method === "POST").length, 1);
 });

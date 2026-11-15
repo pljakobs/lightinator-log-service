@@ -856,7 +856,7 @@ stripped, boot separators inserted). `scope` selects the rows:
 | GET | `/api/v1/crashes?ip=&limit=` | Decoded crashes |
 | GET | `/api/v1/logs/:id/crash-decode` | Decode, raw dump, archived context and build metadata of a crash |
 | POST | `/api/v1/crashes/:id/decode` | Re-run the decoder only |
-| GET | `/api/v1/crashes/:id/artifacts` | Cached ELF/map status for the crash's build |
+| GET | `/api/v1/crashes/:id/artifacts` | Controller IP and cached ELF/map status for the crash's build |
 | PUT | `/api/v1/crashes/:id/artifacts/:kind` | Upload the `elf` or `map` as the raw body (`X-Filename` optional) |
 | POST | `/api/v1/crashes/:id/analyze` | Run AI analysis |
 
