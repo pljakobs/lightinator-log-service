@@ -63,12 +63,17 @@ function openCrashModal(record) {
   const buildTags = [record.soc, record.gitVersion && `Firmware ${record.gitVersion}`, record.smingVersion && `Sming ${record.smingVersion}`].filter(Boolean);
   meta.textContent = [record.sourceIp, timeStr, ...buildTags].filter(Boolean).join(' · ');
 
+  const uploadBtn = document.getElementById('crash-upload-btn');
   if (_currentCrashId) {
     analyzeBtn.style.display = 'inline-block';
     rerunBtn.style.display = 'inline-block';
+    uploadBtn.style.display = 'inline-block';
+    uploadBtn.title = UPLOAD_BTN_TITLE;
+    _artifactStatusFor = null;
   } else {
     analyzeBtn.style.display = 'none';
     rerunBtn.style.display = 'none';
+    uploadBtn.style.display = 'none';
   }
   document.getElementById('crash-download-group').style.display = _currentCrashId ? 'inline-flex' : 'none';
 
@@ -304,6 +309,89 @@ document.getElementById('crash-rerun-btn').addEventListener('click', async () =>
     setTimeout(() => {
       rerunBtn.textContent = originalText;
       rerunBtn.disabled = false;
+    }, 1200);
+  }
+});
+
+const UPLOAD_BTN_TITLE = 'Upload the ELF (app.out / app_0.out) and optionally the .map of the build that crashed, then rerun the decoder';
+
+function describeArtifact(label, info) {
+  if (!info?.present) return `${label}: not cached`;
+  if (info.source !== 'uploaded') return `${label}: downloaded`;
+  return `${label}: uploaded${info.originalName ? ` ${info.originalName}` : ''} ${info.uploadedAt ? new Date(info.uploadedAt).toLocaleString() : ''}`.trim();
+}
+
+let _artifactStatusFor = null;
+
+async function refreshArtifactStatus(id) {
+  const uploadBtn = document.getElementById('crash-upload-btn');
+  _artifactStatusFor = id;
+  try {
+    const status = await fetchJson(`${BASE}/api/v1/crashes/${id}/artifacts`);
+    if (_currentCrashId !== id) return;
+    uploadBtn.title = `${UPLOAD_BTN_TITLE}\n\nFirmware ${status.gitVersion} · ${status.soc} · ${status.buildType}\n${describeArtifact('ELF', status.elf)}\n${describeArtifact('Map', status.map)}`;
+  } catch {
+    // Status is informational; the upload itself reports errors.
+  }
+}
+
+function classifyArtifactFiles(files) {
+  const byKind = { elf: [], map: [] };
+  for (const file of files) byKind[/\.map$/i.test(file.name) ? 'map' : 'elf'].push(file);
+  if (byKind.elf.length > 1 || byKind.map.length > 1) throw new Error('Select at most one ELF and one map file.');
+  return { elf: byKind.elf[0] || null, map: byKind.map[0] || null };
+}
+
+// Cached artifact status is loaded on demand for the button tooltip.
+for (const event of ['mouseenter', 'focus']) {
+  document.getElementById('crash-upload-btn').addEventListener(event, () => {
+    if (_currentCrashId && _artifactStatusFor !== _currentCrashId) refreshArtifactStatus(_currentCrashId);
+  });
+}
+
+document.getElementById('crash-upload-btn').addEventListener('click', () => {
+  if (!_currentCrashId) return;
+  const input = document.getElementById('crash-upload-input');
+  input.value = '';
+  input.click();
+});
+
+document.getElementById('crash-upload-input').addEventListener('change', async (e) => {
+  const files = [...(e.target.files || [])];
+  if (!_currentCrashId || !files.length) return;
+  const id = _currentCrashId;
+  const uploadBtn = document.getElementById('crash-upload-btn');
+  const originalText = uploadBtn.textContent;
+  uploadBtn.disabled = true;
+
+  try {
+    const { elf, map } = classifyArtifactFiles(files);
+    // ELF first: installing a new ELF discards any map cached for that firmware version.
+    for (const [kind, file] of [['elf', elf], ['map', map]]) {
+      if (!file) continue;
+      uploadBtn.textContent = `Uploading ${kind.toUpperCase()}…`;
+      await fetchJson(`${BASE}/api/v1/crashes/${id}/artifacts/${kind}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name },
+        body: file,
+      });
+    }
+    uploadBtn.textContent = 'Decoding…';
+    const result = await fetchJson(`${BASE}/api/v1/crashes/${id}/decode`, { method: 'POST' });
+    if (_currentCrashId === id && result?.crashDecode) {
+      _currentCrashDecode = result.crashDecode;
+      if (result.rawDump) _currentCrashRaw = result.rawDump;
+      document.getElementById('crash-raw-tab').disabled = !_currentCrashRaw;
+      renderModalContent();
+      uploadBtn.textContent = '✓ Decoded';
+      refreshArtifactStatus(id);
+    }
+  } catch (err) {
+    alert('Artifact upload failed: ' + err.message);
+  } finally {
+    setTimeout(() => {
+      uploadBtn.textContent = originalText;
+      uploadBtn.disabled = false;
     }, 1200);
   }
 });

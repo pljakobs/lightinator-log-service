@@ -102,6 +102,11 @@ main { display: flex; flex: 1; overflow: hidden; }
 .stab { background: none; border: none; border-bottom: 2px solid transparent; color: #888; font-size: 12px; padding: 4px 14px 6px; cursor: pointer; margin-bottom: -1px; }
 .stab.active { color: #ccc; border-bottom-color: #4ec9b0; }
 .field-row { display: flex; flex-direction: column; gap: 4px; }
+.mcp-copy-row { display: flex; gap: 6px; }
+.mcp-copy-row input { flex: 1; min-width: 0; }
+.mcp-snippet { background: #1e1e1e; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-family: monospace; font-size: 12px; width: 100%; resize: vertical; }
+.mcp-install { display: inline-block; background: #0e639c; color: #fff; border-radius: 4px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
+.mcp-install:hover { background: #1177bb; }
 .field-row label { font-size: 11px; color: #888; }
 .field-row input, .field-row select { background: #3c3c3c; color: #d4d4d4; border: 1px solid #555; border-radius: 4px; padding: 5px 8px; font-family: inherit; font-size: 13px; width: 100%; }
 .section-title { font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: 0.08em; border-bottom: 1px solid #3c3c3c; padding-bottom: 6px; margin-top: 8px; margin-bottom: 4px; }

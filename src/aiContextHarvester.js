@@ -113,11 +113,17 @@ class AIContextHarvester {
   /**
    * Downloads the .map file corresponding to a firmware build.
    */
-  async fetchMapFile(gitVersion, soc, buildType = "debug") {
+  mapCachePath(gitVersion, soc, buildType = "debug") {
     const socKey = soc.toLowerCase();
     const mapFileName = socKey === "esp8266" ? "app_0.map" : "app.map";
     const cacheKey = [gitVersion, socKey, buildType].map(value => encodeURIComponent(value)).join("-");
-    const localPath = path.join(this.cacheDir, `${cacheKey}-${mapFileName}`);
+    return path.join(this.cacheDir, `${cacheKey}-${mapFileName}`);
+  }
+
+  async fetchMapFile(gitVersion, soc, buildType = "debug") {
+    const socKey = soc.toLowerCase();
+    const mapFileName = socKey === "esp8266" ? "app_0.map" : "app.map";
+    const localPath = this.mapCachePath(gitVersion, socKey, buildType);
     
     try {
       return await fs.readFile(localPath, "utf8");

@@ -31,18 +31,47 @@ settingsOverlay.addEventListener('click', (e) => { if (e.target === settingsOver
 
 function activateSettingsTab(name) {
   document.querySelectorAll('.stab').forEach(b => b.classList.toggle('active', b.dataset.stab === name));
-  for (const tab of ['svc', 'loki', 'ai', 'github']) {
+  for (const tab of ['svc', 'loki', 'ai', 'github', 'copilot']) {
     document.getElementById(`stab-${tab}`).style.display = tab === name ? '' : 'none';
   }
   document.getElementById('stab-footer-loki').style.display = name === 'loki' ? 'flex' : 'none';
-  document.getElementById('stab-footer-svc').style.display  = name !== 'loki' ? 'flex' : 'none';
+  document.getElementById('stab-footer-svc').style.display  = !['loki', 'copilot'].includes(name) ? 'flex' : 'none';
+  if (name === 'copilot') renderMcpInstall();
 }
+
+const MCP_SERVER_NAME = 'lightinator-logs';
+
+function renderMcpInstall() {
+  const url = new URL('mcp', new URL(BASE + '/', location.href)).href;
+  const server = { type: 'http', url };
+  const install = encodeURIComponent(JSON.stringify({ name: MCP_SERVER_NAME, ...server }));
+  document.getElementById('mcp-url').value = url;
+  document.getElementById('mcp-install-vscode').href = `vscode:mcp/install?${install}`;
+  document.getElementById('mcp-install-insiders').href = `vscode-insiders:mcp/install?${install}`;
+  document.getElementById('mcp-config-json').value = JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: server } }, null, 2);
+  document.getElementById('mcp-add-command').value = `code --add-mcp '${JSON.stringify({ name: MCP_SERVER_NAME, ...server })}'`;
+}
+
+document.querySelectorAll('.mcp-copy').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const field = document.getElementById(btn.dataset.copy);
+    try {
+      await navigator.clipboard.writeText(field.value);
+      btn.textContent = 'Copied';
+    } catch {
+      // Clipboard API needs a secure context; plain-HTTP LAN pages fall back to selecting the text.
+      field.select();
+      btn.textContent = 'Press Ctrl+C';
+    }
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
+});
 
 document.querySelectorAll('.stab').forEach(btn => {
   btn.addEventListener('click', async () => {
     activateSettingsTab(btn.dataset.stab);
     if (btn.dataset.stab === 'loki') await loadLokiConfig();
-    if (btn.dataset.stab !== 'loki' && !_svcLoaded) await loadSvcSettings();
+    if (!['loki', 'copilot'].includes(btn.dataset.stab) && !_svcLoaded) await loadSvcSettings();
   });
 });
 

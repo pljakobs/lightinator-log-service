@@ -33,6 +33,7 @@ function loadConfig() {
   syslogAdvertiseHost: process.env.LLS_SYSLOG_ADVERTISE_HOST || "",
   elfCacheDir: process.env.LLS_ELF_CACHE_DIR || path.join(process.cwd(), "data", "elfs"),
   elfBaseUrl: process.env.LLS_ELF_BASE_URL || "http://lightinator.de/download",
+  artifactUploadMaxBytes: envInt("LLS_ARTIFACT_UPLOAD_MAX_MB", 256) * 1024 * 1024,
   githubToken: process.env.LLS_GITHUB_TOKEN || "",
   githubRepo:  process.env.LLS_GITHUB_REPO || "",
   autoCreateIssues: process.env.LLS_AUTO_CREATE_ISSUES === "true",
