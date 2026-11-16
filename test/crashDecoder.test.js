@@ -65,6 +65,95 @@ test("crash collection passes every row from a full ESP8266 dump to the decoder"
   assert.deepEqual(decodedLines, messages);
 });
 
+function collectingDecoder() {
+  const decoder = Object.create(CrashDecoder.prototype);
+  decoder._collecting = new Map();
+  decoder.discovery = null;
+  decoder._log = () => {};
+  decoder.decoded = [];
+  decoder._decode = async (_ip, id, _record, lines) => { decoder.decoded.push({ id, lines }); };
+  return decoder;
+}
+
+async function feedAll(decoder, ip, messages) {
+  const accepted = messages.map((message, id) => decoder.feed({ id, sourceIp: ip, message }));
+  await new Promise(resolve => setImmediate(resolve));
+  for (const state of decoder._collecting.values()) clearTimeout(state.timer);
+  return accepted;
+}
+
+test("crash collection stops at the first non-crash line when the report trailer was lost", async () => {
+  const decoder = collectingDecoder();
+  const dump = [
+    "pc=0x400811b6 sp=0x3ffbcb20 excvaddr=0x00000000",
+    "epc2=0x00000000 epc3=0x00000000 exccause=0 reason=4",
+    "Backtrace (14 frames):",
+    ...["400811b6", "40088451", "4008ee09", "4011826a"].map((pc, i) => `  #${i} pc=0x${pc}`),
+  ];
+  const boot = [
+    "APPLedCtrl::start: APPLedCtrl::start",
+    "_timerInterval",
+    "starting NTP",
+    "[CFGDB] open 'app-config/_root.json' failed",
+    "I (3009) main_task: Returned from app_main()",
+    "E (3009) wifi:sta is connecting, return error",
+    "event WIFI_EVENT|40",
+  ];
+  const accepted = await feedAll(decoder, "192.168.29.224",
+    [...dump.map(line => `Application::reportCrashDump: ${line}`), ...boot]);
+
+  assert.deepEqual(decoder.decoded, [{ id: 0, lines: dump.map(line => line.trim()) }]);
+  assert.deepEqual(accepted, [...dump.map(() => true), ...boot.map(() => false)]);
+  assert.equal(decoder._collecting.size, 0);
+});
+
+test("crash collection keeps a complete ESP32 core dump report and its trailer", async () => {
+  const decoder = collectingDecoder();
+  const dump = [
+    "pc=0x400d5ca2 sp=0x3ffbcdc0 excvaddr=0x00000000 exccause=29 reason=4",
+    "Core  0 register dump:",
+    "PC      : 0x400d5ca5  PS      : 0x00060830  A0      : 0x8019a4a8  A1      : 0x3ffbcdc0",
+    "EXCVADDR: 0x00000000  LBEG    : 0x4000c2e0  LEND    : 0x4000c2f6  LCOUNT  : 0xffffffff",
+    "Backtrace: 0x400d5ca2:0x3ffbcdc0 0x4019a4a5:0x3ffbcde0 |<-CORRUPTED",
+    "Stack memory:",
+    "3ffbcdc0: 0x41207525 0x696c7070 0x69746163 0x3a3a6e6f 0x73617263 0x64203a68 0x62696c65 0x74617265",
+    "*** END OF CORE DUMP ***",
+  ];
+  await feedAll(decoder, "192.168.29.224", [
+    ...dump.map(line => `Application::reportCrashDump: ${line}`),
+    "I (5309) wifi:new:<6,0>, old:<1,0>, ap:<255,255>, sta:<6,0>, prof:1",
+  ]);
+  assert.deepEqual(decoder.decoded, [{ id: 0, lines: dump }]);
+});
+
+test("crash collection recognises unprefixed console dumps without absorbing later logs", async () => {
+  const decoder = collectingDecoder();
+  const esp8266 = [
+    "Fatal exception 28(LoadProhibitedCause):",
+    "epc1=0x4024afed, epc2=0x00000000, epc3=0x00000000, excvaddr=0x00000000, depc=0x00000000",
+    "Exception (28):",
+    "epc1=0x4024afed epc2=0x00000000 epc3=0x00000000 excvaddr=0x00000000 depc=0x00000000",
+    ">>>stack>>>",
+    "ctx: cont",
+    "sp: 3ffffdc0 end: 3fffffc0 offset: 01a0",
+    "3ffffdc0:  40001f46 00000007 3ffffd00 400005e1",
+    "<<<stack<<<",
+  ];
+  const guru = [
+    "Guru Meditation Error: Core  0 panic'ed (StoreProhibited). Exception was unhandled.",
+    "Core  0 register dump:",
+    "PC      : 0x400d5ca5  PS      : 0x00060830  A0      : 0x8019a4a8  A1      : 0x3ffbcdc0",
+    "Backtrace: 0x400d5ca2:0x3ffbcdc0 0x4019a4a5:0x3ffbcde0",
+    "ELF file SHA256: 9b8728d31563",
+    "Rebooting...",
+  ];
+  await feedAll(decoder, "192.168.29.101", [...esp8266, "SDK ver: 2.2.2-dev(38a443e) compiled @ ...", ...guru, "ets Jun  8 2016 00:22:57"]);
+  assert.deepEqual(decoder.decoded, [
+    { id: 0, lines: esp8266 },
+    { id: esp8266.length + 1, lines: guru },
+  ]);
+});
+
 test("source context resolves build-machine paths and ANSI-colored assembly locations", async (context) => {
   const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "crash-context-"));
   context.after(() => fs.rm(cacheDir, { recursive: true, force: true }));

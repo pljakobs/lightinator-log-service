@@ -67,6 +67,35 @@ const CRASH_TRIGGER_RE = /(?:Fatal exception|Guru Meditation Error|pc=0x[0-9a-f]
 const STACK_HEADER_RE = /(?:[Ss]tack dump:|[Ss]tack memory:|Backtrace:)/i;
 const STACK_LINE_RE = /^[0-9a-f]{8}:\s+(?:0x)?[0-9a-f]{8}/i;
 const BACKTRACE_LINE_RE = /(?:Backtrace:\s*)?(?:0x[0-9a-f]{8}:0x[0-9a-f]{8}\s*)+/i;
+const CRASH_REPORTER_RE = /(?:^|::)reportCrashDump:/;
+// Grammar of lines that may appear inside a crash dump (after logger-prefix normalization).
+// Anything else ends collection, so lost UDP lines cannot make the dump absorb normal logs.
+const CRASH_DUMP_LINE_RES = [
+  CRASH_TRIGGER_RE,
+  STACK_HEADER_RE,
+  STACK_LINE_RE,
+  /^(?:Backtrace:\s*)?(?:0x[0-9a-f]{8}:0x[0-9a-f]{8}\s*)+(?:\|<-CORRUPTED)?\s*$/i,
+  /^(?:[a-z]\w*=(?:0x)?[0-9a-f]+\s*)+$/i,                     // epc2=0x.. exccause=4 reason=3
+  /^(?:[A-Z][A-Z0-9]*\s*:\s*0x[0-9a-f]{8}\s*)+$/,             // PC      : 0x400d5ca5  PS      : ...
+  /^Core\s+\d+\s+register dump:\s*$/i,
+  /^Backtrace\s*\(\d+ frames?\):\s*$/i,
+  /^#\d+\s+pc=0x[0-9a-f]+\s*$/i,
+  /^\*{3}.*\*{3}/,                                             // *** CORE DUMP FOUND *** ...
+  /^Corrupted SP:/i,
+  /^Stack dump skipped\b/i,
+  /^Exception \(\d+\):\s*$/i,                                  // ESP8266 core
+  /^ctx:\s*\w+\s*$/i,
+  /^sp:\s*[0-9a-f]+\s+end:\s*[0-9a-f]+\s+offset:\s*[0-9a-f]+\s*$/i,
+  /^(?:>>>stack>>>|<<<stack<<<)\s*$/,
+  /^-+\s*CUT HERE\b.*-+\s*$/i,
+  /^ELF file SHA256:/i,
+  /^Rebooting\.\.\.\s*$/i,
+];
+const MAX_CRASH_DUMP_LINES = 1024;
+
+function isCrashDumpLine(rawMsg, cleanMsg) {
+  return CRASH_REPORTER_RE.test(stripAnsi(rawMsg)) || CRASH_DUMP_LINE_RES.some(re => re.test(cleanMsg));
+}
 
 const EM_XTENSA = 94;
 const EM_RISCV = 243;
@@ -165,61 +194,59 @@ class CrashDecoder {
 
     if (!cleanMsg || !ip) return false;
 
-    if (CRASH_TRIGGER_RE.test(cleanMsg)) {
-      const existing = this._collecting.get(ip);
-      if (!existing || !existing.inStack) {
-        if (existing?.timer) clearTimeout(existing.timer);
+    let state = this._collecting.get(ip);
+    const isTrigger = CRASH_TRIGGER_RE.test(cleanMsg);
 
-        const isStackHeader = STACK_HEADER_RE.test(cleanMsg);
-        const triggerRecordId = record.id;
-        const known = this.discovery?.controllers.get(ip);
-        this._log(ip, triggerRecordId, `Crash detected; collecting dump${isStackHeader ? " (stack header present)" : ""}`);
-
-        this._collecting.set(ip, {
-          triggerRecordId,
-          triggerRecord: {
-            ...record,
-            gitVersion: record.gitVersion || known?.gitVersion,
-            smingVersion: record.smingVersion || known?.smingVersion,
-            soc: record.soc || known?.soc,
-            buildType: record.buildType || known?.buildType,
-          },
-          lines: [cleanMsg],
-          inStack: isStackHeader,
-          timer: setTimeout(() => this._finalize(ip), 5000),
-        });
-
-        if (this.storage && triggerRecordId) {
-          this.storage.updateCrashDecode(triggerRecordId, "[Crash dump detected, decoding in progress...]").catch(() => {});
-        }
-
-        return true;
-      }
+    // A trigger once the stack section has been seen belongs to a new report.
+    if (state && isTrigger && state.inStack) {
+      this._finalize(ip);
+      state = null;
     }
 
-    const state = this._collecting.get(ip);
-    if (!state) return false;
+    if (!state) {
+      if (!isTrigger) return false;
 
-    clearTimeout(state.timer);
-    state.timer = setTimeout(() => this._finalize(ip), 5000);
+      const isStackHeader = STACK_HEADER_RE.test(cleanMsg);
+      const triggerRecordId = record.id;
+      const known = this.discovery?.controllers.get(ip);
+      this._log(ip, triggerRecordId, `Crash detected; collecting dump${isStackHeader ? " (stack header present)" : ""}`);
 
-    if (STACK_HEADER_RE.test(cleanMsg)) {
-      state.lines.push(cleanMsg);
-      state.inStack = true;
+      this._collecting.set(ip, {
+        triggerRecordId,
+        triggerRecord: {
+          ...record,
+          gitVersion: record.gitVersion || known?.gitVersion,
+          smingVersion: record.smingVersion || known?.smingVersion,
+          soc: record.soc || known?.soc,
+          buildType: record.buildType || known?.buildType,
+        },
+        lines: [cleanMsg],
+        inStack: isStackHeader,
+        timer: setTimeout(() => this._finalize(ip), 5000),
+      });
+
+      if (this.storage && triggerRecordId) {
+        this.storage.updateCrashDecode(triggerRecordId, "[Crash dump detected, decoding in progress...]").catch(() => {});
+      }
+
       return true;
     }
 
-    if (state.inStack) {
-      if (STACK_LINE_RE.test(cleanMsg) || BACKTRACE_LINE_RE.test(cleanMsg)) {
-        state.lines.push(cleanMsg);
-        return true;
-      }
-
+    if (!isCrashDumpLine(rawMsg, cleanMsg)) {
       this._finalize(ip);
       return false;
     }
 
+    clearTimeout(state.timer);
     state.lines.push(cleanMsg);
+    if (STACK_HEADER_RE.test(cleanMsg)) state.inStack = true;
+
+    if (state.lines.length >= MAX_CRASH_DUMP_LINES) {
+      this._log(ip, state.triggerRecordId, `Dump reached ${MAX_CRASH_DUMP_LINES} lines; finishing collection`, "warn");
+      this._finalize(ip);
+    } else {
+      state.timer = setTimeout(() => this._finalize(ip), 5000);
+    }
     return true;
   }
 
@@ -715,6 +742,7 @@ class CrashDecoder {
     for (const row of rows) {
       const line = normalizeCrashDumpLine(row.message);
       if (!inStack) {
+        if (recovered.length && !isCrashDumpLine(row.message, line)) break;
         recovered.push(line);
         if (STACK_HEADER_RE.test(line)) inStack = true;
         continue;
